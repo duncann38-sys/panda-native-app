@@ -346,10 +346,16 @@ export default function DiscoverScreen() {
         initialMode={plannerMode}
         initialPlanIds={typeof plannerIds === 'string' ? plannerIds : undefined}
         initialPrice={plannerPrice}
-        onOpenMap={(plan, mode: PlannerMode) =>
+        onOpenMap={(plan, mode: PlannerMode, context) =>
           router.push({
             pathname: '/map',
-            params: { plannerIds: plan.map((venue) => venue.id).join(','), plannerMode: mode },
+            params: {
+              plannerIds: plan.map((venue) => venue.id).join(','),
+              plannerMode: mode,
+              plannerVenues: JSON.stringify(plan),
+              plannerLocation: context.location,
+              plannerPrice: context.price,
+            },
           })
         }
         onOpenDirections={(venue, context) =>
@@ -358,6 +364,7 @@ export default function DiscoverScreen() {
             params: {
               directionsVenueId: venue.id,
               plannerIds: context.plan.map((item) => item.id).join(','),
+              plannerVenues: JSON.stringify(context.plan),
               plannerMode: context.mode,
               plannerPrice: context.price,
               plannerLocation: context.location,
@@ -371,6 +378,7 @@ export default function DiscoverScreen() {
               id: venue.id,
               fromPlanner: '1',
               plannerIds: context.plan.map((item) => item.id).join(','),
+              plannerVenues: JSON.stringify(context.plan),
               plannerMode: context.mode,
               plannerPrice: context.price,
               plannerLocation: context.location,

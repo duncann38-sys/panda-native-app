@@ -4,7 +4,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -52,9 +52,33 @@ type TransitStation = {
   source: 'google_places';
 };
 
+type TransitWalk = {
+  distanceMeters: number;
+  durationMinutes: number;
+  source: 'google_routes';
+};
+
+type TransitStep = {
+  mode: 'WALK' | 'TRANSIT';
+  instruction: string;
+  durationMinutes: number;
+  distanceMeters: number;
+  lineName: string | null;
+  headsign: string | null;
+  departureStop: string | null;
+  arrivalStop: string | null;
+};
+
 type TransitContext = {
   originStation: TransitStation;
   destinationStation: TransitStation;
+  originWalk: TransitWalk | null;
+  transitRoute: {
+    durationMinutes: number;
+    distanceMeters: number;
+    steps: TransitStep[];
+    source: 'google_routes';
+  } | null;
   venueWalk: {
     distanceMeters: number;
     durationMinutes: number;
@@ -84,19 +108,44 @@ const GOOGLE_HIGHLIGHT_ICONS: Record<string, PandaIconName> = {
   'dine-in': 'award',
 };
 
+function parsePlannerVenueData(value: string): Venue[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((venue): venue is Venue => (
+      Boolean(venue)
+      && typeof venue === 'object'
+      && 'id' in venue
+      && typeof venue.id === 'string'
+      && 'name' in venue
+      && typeof venue.name === 'string'
+      && 'fullAddress' in venue
+      && typeof venue.fullAddress === 'string'
+    ));
+  } catch {
+    return [];
+  }
+}
+
 export default function VenueDetailScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id, fromPlanner, plannerIds, plannerMode, plannerLocation, plannerPrice } = useLocalSearchParams<{
+  const { id, fromPlanner, plannerIds, plannerVenues: plannerVenueData, plannerMode, plannerLocation, plannerPrice } = useLocalSearchParams<{
     id: string;
     fromPlanner?: string;
     plannerIds?: string;
+    plannerVenues?: string;
     plannerMode?: string;
     plannerLocation?: string;
     plannerPrice?: string;
   }>();
-  const venue = getVenue(id ?? '');
+  const dynamicPlannerVenues = useMemo(
+    () => parsePlannerVenueData(String(plannerVenueData || '')),
+    [plannerVenueData],
+  );
+  const venue = getVenue(id ?? '') ?? dynamicPlannerVenues.find((item) => item.id === id);
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
   // Up to 5 photos as requested
@@ -226,11 +275,19 @@ export default function VenueDetailScreen() {
         directionsVenueId: venue.id,
         transitOriginName: transitContext.originStation.name,
         transitDestinationName: transitContext.destinationStation.name,
+        transitOriginWalkMinutes: transitContext.originWalk?.durationMinutes.toString() ?? '',
+        transitOriginWalkDistance: transitContext.originWalk?.distanceMeters.toString() ?? '',
+        transitDurationMinutes: transitContext.transitRoute?.durationMinutes.toString() ?? '',
+        transitDistanceMeters: transitContext.transitRoute?.distanceMeters.toString() ?? '',
+        transitSteps: transitContext.transitRoute?.steps.length
+          ? JSON.stringify(transitContext.transitRoute.steps)
+          : '',
         transitWalkMinutes: transitContext.venueWalk?.durationMinutes.toString() ?? '',
         transitWalkDistance: transitContext.venueWalk?.distanceMeters.toString() ?? '',
         ...(plannerOpen
           ? {
               plannerIds: plannerIds || '',
+               plannerVenues: String(plannerVenueData || ''),
               plannerMode: plannerMode || 'night',
               plannerPrice: plannerPrice || '££',
               plannerLocation: plannerLocation || 'Current location',
@@ -268,6 +325,7 @@ export default function VenueDetailScreen() {
       params: {
         openPlanner: plannerMode || 'night',
         plannerIds: plannerIds || '',
+        plannerVenues: String(plannerVenueData || ''),
         plannerLocation: plannerLocation || 'Current location',
         plannerPrice: plannerPrice || '££',
       },
@@ -275,10 +333,12 @@ export default function VenueDetailScreen() {
   };
 
   if (plannerOpen) {
-    const plannerBackgroundVenues = String(plannerIds || '')
-      .split(',')
-      .map((plannerId) => getVenue(plannerId))
-      .filter((plannerVenue): plannerVenue is Venue => Boolean(plannerVenue));
+    const plannerBackgroundVenues = dynamicPlannerVenues.length
+      ? dynamicPlannerVenues
+      : String(plannerIds || '')
+        .split(',')
+        .map((plannerId) => getVenue(plannerId))
+        .filter((plannerVenue): plannerVenue is Venue => Boolean(plannerVenue));
 
     return (
       <PlannerVenuePreview
@@ -857,6 +917,9 @@ function ConciergeTransitCard({
           : `${(context.venueWalk.distanceMeters / 1000).toFixed(1)} km`
       }`
     : 'Nearest rail or Underground station';
+  const liveRouteLabel = context?.transitRoute
+    ? `${context.transitRoute.durationMinutes} min by public transport · ${context.transitRoute.steps.length} live steps`
+    : null;
 
   const actionable = Boolean(context) || status === 'permission-denied' || status === 'unavailable';
   const actionLabel = context
@@ -924,6 +987,12 @@ function ConciergeTransitCard({
               <Text style={[styles.transitWalk, { color: colors.green700 }]}>{venueWalkLabel}</Text>
             </View>
           </View>
+           {liveRouteLabel ? (
+             <View style={[styles.transitRouteSummary, { backgroundColor: colors.card, borderColor: colors.border }]}>
+               <PandaIcon name="navigate" size={14} color={colors.green700} />
+               <Text style={[styles.transitRouteSummaryText, { color: colors.foreground }]}>{liveRouteLabel}</Text>
+             </View>
+           ) : null}
         </>
       ) : (
         <>
@@ -1619,6 +1688,22 @@ const styles = StyleSheet.create({
     marginLeft: 13,
     marginVertical: 2,
     width: 2,
+  },
+  transitRouteSummary: {
+    alignItems: 'center',
+    borderRadius: 11,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    marginTop: 10,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  transitRouteSummaryText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 9,
+    lineHeight: 13,
   },
   plannerReturnButton: {
     alignSelf: 'center',

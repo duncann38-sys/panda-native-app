@@ -2,6 +2,7 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
+  Keyboard,
   Modal,
   Pressable,
   ScrollView,
@@ -39,6 +40,13 @@ type GooglePlannerProfile = {
   todayHours: string | null;
   googleMapsUrl: string;
   source: 'google_places';
+};
+
+type PlannerSearchResult = {
+  id: string;
+  name: string;
+  address: string;
+  category: string;
 };
 
 const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: PlannerStop[]; greetings: string[] }> = {
@@ -84,6 +92,23 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
 };
 
 const PRICE_OPTIONS = ['££', '£££', '££££'] as const;
+const AREA_SUGGESTIONS = [
+  'Chelsea',
+  'Soho',
+  'Covent Garden',
+  'Battersea',
+  'Shoreditch',
+  'Camden',
+  'Clapham',
+  'Brixton',
+  'Islington',
+  'Greenwich',
+] as const;
+const REMOTE_SEARCH_TERMS: Record<PlannerMode, string> = {
+  morning: 'coffee breakfast brunch',
+  lunch: 'lunch restaurants cafes',
+  night: 'dinner restaurants bars pubs',
+};
 
 function defaultMode(): PlannerMode {
   return getPandaTimeMode();
@@ -93,21 +118,95 @@ function venueScore(venue: Venue) {
   return Number(venue.rating || 0) * Math.log(venue.ratingCount + 10);
 }
 
+function plannerLocationQuery(location: string) {
+  const normalized = location.trim().toLowerCase();
+  if (!normalized || normalized === 'current location') return '';
+
+  return normalized
+    .replace(/\b(current location|plan|my|morning|lunch|night|breakfast|dinner|today|tonight)\b/g, ' ')
+    .replace(/\b(in|near|around|at|within|for)\b/g, ' ')
+    .replace(/[,.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function plannerCategory(category: string): Venue['category'] {
+  const normalized = category.toLowerCase();
+  if (normalized.includes('coffee') || normalized.includes('cafe') || normalized.includes('bakery')) return 'Coffee';
+  if (normalized.includes('pub')) return 'Pub';
+  if (normalized.includes('bar') || normalized.includes('cocktail')) return 'Bar';
+  return 'Restaurant';
+}
+
+function venueFromSearchResult(
+  result: { id: string; name: string; address: string; category: string },
+  location: string,
+): Venue {
+  const category = plannerCategory(result.category);
+  return {
+    id: result.id,
+    name: result.name,
+    neighborhood: location,
+    category,
+    type: result.category,
+    distance: 'Live route',
+    walkingTime: 'Directions available',
+    rating: '',
+    ratingCount: 0,
+    price: '££',
+    distanceMeters: 0,
+    description: `${result.category} in ${location}.`,
+    hours: 'Loading live details',
+    feature: result.category,
+    fullAddress: result.address,
+    openNow: false,
+    website: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`,
+    mapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`,
+    phone: '',
+    premium: false,
+    banging: false,
+    promoted: false,
+    photoAttributions: [],
+  };
+}
+
+function buildRemotePlan(
+  mode: PlannerMode,
+  location: string,
+  results: Array<{ id: string; name: string; address: string; category: string }>,
+) {
+  const available = results.map((result) => venueFromSearchResult(result, location));
+  const used = new Set<string>();
+
+  return PLAN_MODES[mode].stops.flatMap((stop) => {
+    const match = available.find((venue) => {
+      if (used.has(venue.id)) return false;
+      const searchable = `${venue.category} ${venue.type} ${venue.feature} ${venue.name}`.toLowerCase();
+      return Boolean(stop.terms?.some((term) => searchable.includes(term)) || stop.categories.includes(venue.category));
+    }) ?? available.find((venue) => !used.has(venue.id));
+    if (!match) return [];
+    used.add(match.id);
+    return [match];
+  });
+}
+
 function getPlan(mode: PlannerMode, price: string, location: string, offset: number) {
   const used = new Set<string>();
-  const locationQuery = location.trim().toLowerCase();
-  const googleVenues = venues.filter((venue) => venue.id.startsWith('ChI'));
-  const nearby = googleVenues.filter((venue) => {
+  const locationQuery = plannerLocationQuery(location);
+  const nearby = venues.filter((venue) => {
     const withinPrice = Math.max(1, venue.price.length || 2) <= price.length;
     const withinArea =
       !locationQuery ||
-      locationQuery === 'current location' ||
       [venue.neighborhood, venue.fullAddress].join(' ').toLowerCase().includes(locationQuery);
     return withinPrice && withinArea;
   });
-  const source = nearby.length >= 3
+  if (locationQuery && !nearby.length) return [];
+
+  const source = locationQuery
     ? nearby
-    : googleVenues.filter((venue) => Math.max(1, venue.price.length || 2) <= price.length);
+    : nearby.filter((venue) => venue.id.startsWith('ChI')).length >= 3
+      ? nearby
+      : venues.filter((venue) => venue.id.startsWith('ChI') && Math.max(1, venue.price.length || 2) <= price.length);
 
   return PLAN_MODES[mode].stops.map((stop, stopIndex) => {
     const candidates = source
@@ -120,7 +219,9 @@ function getPlan(mode: PlannerMode, price: string, location: string, offset: num
       .sort((a, b) => venueScore(b) - venueScore(a) || a.distanceMeters - b.distanceMeters);
     const fallback = source.filter((venue) => !used.has(venue.id)).sort((a, b) => venueScore(b) - venueScore(a));
     const pool = candidates.length ? candidates : fallback;
-    const venue = pool[(offset + stopIndex) % Math.max(1, Math.min(pool.length, 8))] ?? googleVenues[stopIndex];
+    const venue = pool[(offset + stopIndex) % Math.max(1, Math.min(pool.length, 8))]
+      ?? source[(offset + stopIndex) % Math.max(1, source.length)]
+      ?? venues[stopIndex];
     used.add(venue.id);
     return venue;
   });
@@ -145,7 +246,11 @@ export function PandaPlannerSheet({
   initialMode?: PlannerMode;
   initialPlanIds?: string;
   initialPrice?: string;
-  onOpenMap: (plan: Venue[], mode: PlannerMode) => void;
+  onOpenMap: (
+    plan: Venue[],
+    mode: PlannerMode,
+    context: { price: string; location: string },
+  ) => void;
   onOpenDirections: (
     venue: Venue,
     context: { plan: Venue[]; mode: PlannerMode; price: string; location: string },
@@ -164,19 +269,72 @@ export function PandaPlannerSheet({
     initialPrice === '££' || initialPrice === '£££' || initialPrice === '££££' ? initialPrice : '££',
   );
   const [location, setLocation] = useState(initialLocation || 'Current location');
+  const [locationFocused, setLocationFocused] = useState(false);
   const [shuffle, setShuffle] = useState(0);
   const [googleProfiles, setGoogleProfiles] = useState<Record<string, GooglePlannerProfile | null>>({});
+  const [remotePlan, setRemotePlan] = useState<Venue[] | null>(null);
+  const [remoteLocation, setRemoteLocation] = useState('');
+  const [remoteSearchState, setRemoteSearchState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const restoredPlan = useMemo(() => {
     const ids = String(initialPlanIds || '').split(',').filter(Boolean);
     if (ids.length !== 3) return null;
     const restored = ids.map((id) => venues.find((venue) => venue.id === id));
     return restored.every(Boolean) ? (restored as Venue[]) : null;
   }, [initialPlanIds]);
-  const plan = useMemo(
-    () => restoredPlan ?? getPlan(mode, price, location, shuffle),
-    [location, mode, price, restoredPlan, shuffle],
-  );
   const config = PLAN_MODES[mode];
+  const locationQuery = plannerLocationQuery(location);
+  const localPlan = useMemo(
+    () => locationQuery ? getPlan(mode, price, locationQuery, shuffle) : restoredPlan ?? getPlan(mode, price, location, shuffle),
+    [location, locationQuery, mode, price, restoredPlan, shuffle],
+  );
+  const plan = remotePlan && remoteLocation === locationQuery ? remotePlan : localPlan;
+  const displayedLocation = locationQuery
+    ? locationQuery.replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : 'Current location';
+  const locationSuggestions = AREA_SUGGESTIONS.filter((area) =>
+    !locationQuery || area.toLowerCase().includes(locationQuery),
+  );
+
+  useEffect(() => {
+    if (!locationQuery) {
+      setRemotePlan(null);
+      setRemoteLocation('');
+      setRemoteSearchState('idle');
+      return undefined;
+    }
+
+    let active = true;
+    setRemoteSearchState('loading');
+    const timer = setTimeout(() => {
+      void fetch(
+        `${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(
+          `${REMOTE_SEARCH_TERMS[mode]} in ${locationQuery}, United Kingdom`,
+        )}`,
+        { headers: { Accept: 'application/json' } },
+      )
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Planner venue search failed');
+          return (await response.json()) as { results?: PlannerSearchResult[] };
+        })
+        .then((payload) => {
+          if (!active) return;
+          setRemotePlan(buildRemotePlan(mode, locationQuery, payload.results ?? []));
+          setRemoteLocation(locationQuery);
+          setRemoteSearchState('ready');
+        })
+        .catch(() => {
+          if (!active) return;
+          setRemotePlan(null);
+          setRemoteLocation('');
+          setRemoteSearchState('error');
+        });
+    }, 650);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [locationQuery, mode]);
 
   useEffect(() => {
     let active = true;
@@ -304,12 +462,30 @@ export function PandaPlannerSheet({
                 <TextInput
                   accessibilityLabel="Planner location"
                   onChangeText={setLocation}
+                  onFocus={() => {
+                    setLocationFocused(true);
+                    if (location === 'Current location') setLocation('');
+                  }}
+                  onSubmitEditing={() => {
+                    Keyboard.dismiss();
+                    setLocationFocused(false);
+                  }}
                   placeholder="Current location or search area"
                   placeholderTextColor={colors.mutedForeground}
                   returnKeyType="search"
                   style={[styles.locationInput, { color: colors.foreground }]}
                   value={location}
                 />
+                {location.trim() && location !== 'Current location' ? (
+                  <Pressable
+                    accessibilityLabel="Clear planner location"
+                    accessibilityRole="button"
+                    onPress={() => setLocation('')}
+                    style={styles.clearLocationButton}
+                  >
+                    <Ionicons name="close-circle" size={16} color={colors.mutedForeground} />
+                  </Pressable>
+                ) : null}
                 <Pressable
                   accessibilityLabel="Use current location"
                   accessibilityRole="button"
@@ -341,8 +517,46 @@ export function PandaPlannerSheet({
               </View>
             </View>
 
+            {locationFocused && location.trim() && location !== 'Current location' ? (
+              <View style={[styles.locationSuggestions, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                <Text style={[styles.locationSuggestionsLabel, { color: colors.mutedForeground }]}>
+                  SEARCH A CITY OR AREA
+                </Text>
+                <ScrollView
+                  horizontal
+                  keyboardShouldPersistTaps="handled"
+                  showsHorizontalScrollIndicator={false}
+                  style={styles.locationSuggestionRail}
+                >
+                  {locationSuggestions.length ? locationSuggestions.map((area) => (
+                    <Pressable
+                      key={area}
+                      accessibilityLabel={`Use ${area} as planner location`}
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setLocation(area);
+                        setLocationFocused(false);
+                        Keyboard.dismiss();
+                      }}
+                      style={[styles.locationSuggestion, { backgroundColor: colors.card, borderColor: colors.border }]}
+                    >
+                      <Ionicons name="location-outline" size={13} color={colors.green700} />
+                      <Text style={[styles.locationSuggestionText, { color: colors.foreground }]}>{area}</Text>
+                    </Pressable>
+                  )) : (
+                    <Text style={[styles.noLocationSuggestion, { color: colors.mutedForeground }]}>
+                      Type a city or area, then press search
+                    </Text>
+                  )}
+                </ScrollView>
+              </View>
+            ) : null}
+
             <Text style={[styles.filterStatus, { color: colors.mutedForeground }]}>
-              {location.trim() || 'Current location'} · Up to {price}
+              {displayedLocation} · Up to {price}
+              {remoteSearchState === 'loading' ? ' · Finding live places…' : ''}
+              {remoteSearchState === 'ready' ? ' · Live places' : ''}
+              {remoteSearchState === 'error' ? ' · Live search unavailable' : ''}
             </Text>
 
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -353,7 +567,7 @@ export function PandaPlannerSheet({
                 </Text>
               </View>
 
-              {plan.map((venue, index) => {
+              {plan.length ? plan.map((venue, index) => {
                 const google = googleProfiles[venue.id];
                 const displayName = google?.name ?? venue.name;
                 const displayAddress = google?.address ?? venue.fullAddress;
@@ -425,7 +639,17 @@ export function PandaPlannerSheet({
                   ) : null}
                 </View>
                 );
-              })}
+              }) : (
+                <View style={[styles.emptyLocation, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                  <Ionicons name="search-outline" size={24} color={colors.green700} />
+                  <Text style={[styles.emptyLocationTitle, { color: colors.foreground }]}>
+                    {remoteSearchState === 'loading' ? 'Finding places in this location…' : `No Panda places found in “${locationQuery}”`}
+                  </Text>
+                  <Text style={[styles.emptyLocationBody, { color: colors.mutedForeground }]}>
+                    Try a city or area such as Chelsea, Soho or Covent Garden.
+                  </Text>
+                </View>
+              )}
 
             </ScrollView>
 
@@ -442,11 +666,12 @@ export function PandaPlannerSheet({
               <Pressable
                 accessibilityLabel="View planner route on map"
                 accessibilityRole="button"
+                disabled={!plan.length}
                 onPress={() => {
                   setOpen(false);
-                  onOpenMap(plan, mode);
+                  onOpenMap(plan, mode, { price, location });
                 }}
-                style={[styles.mapButton, { backgroundColor: colors.green800 }]}
+                style={[styles.mapButton, { backgroundColor: colors.green800 }, !plan.length && styles.disabledButton]}
               >
                 <Ionicons name="map-outline" size={18} color={colors.primaryForeground} />
                 <Text style={[styles.mapText, { color: colors.primaryForeground }]}>View route</Text>
@@ -502,14 +727,24 @@ const styles = StyleSheet.create({
   filters: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 11 },
   locationField: { alignItems: 'center', borderRadius: 13, borderWidth: 1, flex: 1, flexDirection: 'row', height: 43, paddingLeft: 10 },
   locationInput: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 0 },
+  clearLocationButton: { alignItems: 'center', height: 36, justifyContent: 'center', width: 25 },
   locateButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 34 },
   priceRow: { flexDirection: 'row', gap: 4 },
   priceButton: { alignItems: 'center', borderRadius: 10, borderWidth: 1, height: 39, justifyContent: 'center', width: 32 },
   priceText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
   filterStatus: { fontFamily: 'Inter_500Medium', fontSize: 10, marginBottom: 7, marginTop: 5 },
+  locationSuggestions: { borderRadius: 13, borderWidth: 1, marginTop: 7, padding: 9 },
+  locationSuggestionsLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 0.8, marginBottom: 7 },
+  locationSuggestionRail: { flexGrow: 0 },
+  locationSuggestion: { alignItems: 'center', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 4, marginRight: 6, paddingHorizontal: 10, paddingVertical: 7 },
+  locationSuggestionText: { fontFamily: 'Inter_600SemiBold', fontSize: 10 },
+  noLocationSuggestion: { fontFamily: 'Inter_500Medium', fontSize: 10, paddingVertical: 6 },
   scrollContent: { paddingBottom: 12 },
   greeting: { alignItems: 'center', borderLeftWidth: 3, borderRadius: 15, flexDirection: 'row', gap: 10, marginBottom: 13, padding: 11 },
   greetingText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 17 },
+  emptyLocation: { alignItems: 'center', borderRadius: 16, borderWidth: 1, marginTop: 4, paddingHorizontal: 18, paddingVertical: 24 },
+  emptyLocationTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, marginTop: 8, textAlign: 'center' },
+  emptyLocationBody: { fontFamily: 'Inter_500Medium', fontSize: 11, lineHeight: 16, marginTop: 6, textAlign: 'center' },
   stopBadge: { alignSelf: 'flex-start', marginBottom: 5, marginLeft: 5, paddingVertical: 2 },
   stopBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 15 },
   venueCard: {
@@ -537,5 +772,6 @@ const styles = StyleSheet.create({
   shuffleText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   mapButton: { alignItems: 'center', borderRadius: 14, flex: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 48 },
   mapText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
+  disabledButton: { opacity: 0.45 },
   pressed: { opacity: 0.8, transform: [{ scale: 0.96 }] },
 });

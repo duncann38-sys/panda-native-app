@@ -59,11 +59,33 @@ type AiTransitStation = {
   address: string;
 };
 
+type AiRouteWalk = {
+  distanceMeters: number;
+  durationMinutes: number;
+};
+
+type AiTransitStep = {
+  mode: 'WALK' | 'TRANSIT';
+  instruction: string;
+  durationMinutes: number;
+  distanceMeters: number;
+  lineName: string | null;
+  headsign: string | null;
+  departureStop: string | null;
+  arrivalStop: string | null;
+};
+
 type AiTransitContext = {
   venueId?: string;
   venueName?: string;
   originStation: AiTransitStation;
   destinationStation?: AiTransitStation;
+  originWalk?: AiRouteWalk | null;
+  transitRoute?: {
+    durationMinutes: number;
+    distanceMeters: number;
+    steps: AiTransitStep[];
+  } | null;
   venueWalk?: {
     distanceMeters: number;
     durationMinutes: number;
@@ -297,6 +319,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               const liveTransit = (await transitResponse.json()) as {
                 originStation: AiTransitStation;
                 destinationStation: AiTransitStation;
+                originWalk: AiRouteWalk | null;
+                transitRoute: AiTransitContext['transitRoute'];
                 venueWalk: { distanceMeters: number; durationMinutes: number } | null;
               };
               transit = {
@@ -304,12 +328,17 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 venueName: venue.name,
                 originStation: liveTransit.originStation,
                 destinationStation: liveTransit.destinationStation,
+                originWalk: liveTransit.originWalk,
+                transitRoute: liveTransit.transitRoute,
                 venueWalk: liveTransit.venueWalk,
               };
               const walkText = liveTransit.venueWalk
                 ? `It’s a ${liveTransit.venueWalk.durationMinutes}-minute walk from there to the venue.`
                 : 'I’ll keep the final walk visible in the route panel.';
-              transitNote = `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${walkText}`;
+              const transitText = liveTransit.transitRoute
+                ? `The live station-to-station journey is about ${liveTransit.transitRoute.durationMinutes} minutes.`
+                : 'I’ll show the verified station context while live route details are unavailable.';
+              transitNote = `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`;
             } else {
               transitNote = 'I couldn’t load live station information for that venue right now.';
             }
@@ -441,6 +470,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         directionsVenueId: transit.venueId,
         transitOriginName: transit.originStation.name,
         transitDestinationName: transit.destinationStation.name,
+        transitOriginWalkMinutes: transit.originWalk?.durationMinutes.toString() ?? '',
+        transitOriginWalkDistance: transit.originWalk?.distanceMeters.toString() ?? '',
+        transitDurationMinutes: transit.transitRoute?.durationMinutes.toString() ?? '',
+        transitDistanceMeters: transit.transitRoute?.distanceMeters.toString() ?? '',
+        transitSteps: transit.transitRoute?.steps?.length
+          ? JSON.stringify(transit.transitRoute.steps)
+          : '',
         transitWalkMinutes: transit.venueWalk?.durationMinutes.toString() ?? '',
         transitWalkDistance: transit.venueWalk?.distanceMeters.toString() ?? '',
       },
@@ -726,6 +762,9 @@ function AiTransitCard({
           : `${(context.venueWalk.distanceMeters / 1000).toFixed(1)} km`
       }`
     : null;
+  const routeLabel = context.transitRoute
+    ? `${context.transitRoute.durationMinutes} min by public transport · ${context.transitRoute.steps.length} live steps`
+    : null;
 
   return (
     <View style={[styles.aiTransitCard, { backgroundColor: colors.card, borderColor: colors.goldLine }]}>
@@ -763,6 +802,13 @@ function AiTransitCard({
             </View>
           </View>
         </>
+      ) : null}
+
+      {routeLabel ? (
+        <View style={[styles.aiTransitSummary, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+          <PandaIcon name="navigate" size={14} color={colors.green700} />
+          <Text style={[styles.aiTransitSummaryText, { color: colors.foreground }]}>{routeLabel}</Text>
+        </View>
       ) : null}
 
       {hasRoute ? (
@@ -913,6 +959,22 @@ const styles = StyleSheet.create({
     marginLeft: 9,
     marginVertical: 2,
     width: 2,
+  },
+  aiTransitSummary: {
+    alignItems: 'center',
+    borderRadius: 11,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 7,
+    marginTop: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  aiTransitSummaryText: {
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+    lineHeight: 14,
   },
   aiTransitAction: {
     alignItems: 'center',

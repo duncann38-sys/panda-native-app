@@ -22,6 +22,29 @@ import { useColors } from '@/hooks/useColors';
 
 type Percentage = `${number}%`;
 
+type TransitStep = {
+  mode: 'WALK' | 'TRANSIT';
+  instruction: string;
+  durationMinutes: number;
+  distanceMeters: number;
+  lineName: string | null;
+  headsign: string | null;
+  departureStop: string | null;
+  arrivalStop: string | null;
+};
+
+type TransitRouteContext = {
+  originName: string;
+  destinationName: string;
+  originWalkMinutes: string;
+  originWalkDistance: string;
+  durationMinutes: string;
+  distanceMeters: string;
+  steps: TransitStep[];
+  walkMinutes: string;
+  walkDistance: string;
+};
+
 const GOOGLE_MAP_CENTER = '51.49,-0.14';
 const CARD_WIDTH = 292;
 const RAIL_GAP = 12;
@@ -41,55 +64,147 @@ const markerLayout: Array<{ left: Percentage; top: Percentage; price: string }> 
   { left: '91%', top: '65%', price: '£££' },
 ];
 
+function parseTransitSteps(value: string): TransitStep[] {
+  if (!value) return [];
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.slice(0, 16).flatMap((step) => {
+      if (
+        !step
+        || typeof step !== 'object'
+        || !('mode' in step)
+        || !('instruction' in step)
+        || !('durationMinutes' in step)
+        || !('distanceMeters' in step)
+        || (step.mode !== 'WALK' && step.mode !== 'TRANSIT')
+        || typeof step.instruction !== 'string'
+        || typeof step.durationMinutes !== 'number'
+        || typeof step.distanceMeters !== 'number'
+      ) {
+        return [];
+      }
+
+      return [{
+        mode: step.mode,
+        instruction: step.instruction,
+        durationMinutes: step.durationMinutes,
+        distanceMeters: step.distanceMeters,
+        lineName: 'lineName' in step && typeof step.lineName === 'string' ? step.lineName : null,
+        headsign: 'headsign' in step && typeof step.headsign === 'string' ? step.headsign : null,
+        departureStop:
+          'departureStop' in step && typeof step.departureStop === 'string' ? step.departureStop : null,
+        arrivalStop: 'arrivalStop' in step && typeof step.arrivalStop === 'string' ? step.arrivalStop : null,
+      }];
+    });
+  } catch {
+    return [];
+  }
+}
+
+function parsePlannerVenueData(value: string): Venue[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((venue): venue is Venue => (
+      Boolean(venue)
+      && typeof venue === 'object'
+      && 'id' in venue
+      && typeof venue.id === 'string'
+      && 'name' in venue
+      && typeof venue.name === 'string'
+      && 'fullAddress' in venue
+      && typeof venue.fullAddress === 'string'
+    ));
+  } catch {
+    return [];
+  }
+}
+
+function formatRouteDistance(value: string | number) {
+  const metres = Number(value);
+  if (!Number.isFinite(metres) || metres < 0) return null;
+  return metres < 1000 ? `${Math.round(metres)} m` : `${(metres / 1000).toFixed(1)} km`;
+}
+
 export default function MapScreen() {
   const colors = useColors();
   const router = useRouter();
   const {
     directionsVenueId,
     plannerIds,
+    plannerVenues: plannerVenueData,
     plannerLocation,
     plannerMode,
     plannerPrice,
     transitOriginName,
     transitDestinationName,
+    transitOriginWalkMinutes,
+    transitOriginWalkDistance,
+    transitDurationMinutes,
+    transitDistanceMeters,
+    transitSteps,
     transitWalkMinutes,
     transitWalkDistance,
   } = useLocalSearchParams<{
     directionsVenueId?: string;
     plannerIds?: string;
+    plannerVenues?: string;
     plannerLocation?: string;
     plannerMode?: string;
     plannerPrice?: string;
     transitOriginName?: string;
     transitDestinationName?: string;
+    transitOriginWalkMinutes?: string;
+    transitOriginWalkDistance?: string;
+    transitDurationMinutes?: string;
+    transitDistanceMeters?: string;
+    transitSteps?: string;
     transitWalkMinutes?: string;
     transitWalkDistance?: string;
   }>();
   const insets = useSafeAreaInsets();
   const railRef = useRef<ScrollView>(null);
+  const dynamicPlannerVenues = useMemo(
+    () => parsePlannerVenueData(String(plannerVenueData || '')),
+    [plannerVenueData],
+  );
   const plannerVenues = useMemo(() => {
+    if (dynamicPlannerVenues.length) return dynamicPlannerVenues;
     const ids = String(plannerIds || '')
       .split(',')
       .filter(Boolean);
     return ids.map((id) => venues.find((venue) => venue.id === id)).filter((venue): venue is Venue => Boolean(venue));
-  }, [plannerIds]);
+  }, [dynamicPlannerVenues, plannerIds]);
   const plannerActive = plannerVenues.length > 0;
+  const mapVenues = plannerActive ? plannerVenues : venues;
   const [selectedIndex, setSelectedIndex] = useState(() => {
     const firstId = String(plannerIds || '').split(',')[0];
     const requestedVenueId = String(directionsVenueId || firstId);
-    return Math.max(0, venues.findIndex((venue) => venue.id === requestedVenueId));
+    return Math.max(0, mapVenues.findIndex((venue) => venue.id === requestedVenueId));
   });
   const [searchQuery, setSearchQuery] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [directionsVenue, setDirectionsVenue] = useState<Venue | null>(() =>
-    venues.find((venue) => venue.id === String(directionsVenueId || '')) ?? null,
+    mapVenues.find((venue) => venue.id === String(directionsVenueId || '')) ?? null,
   );
-  const selectedVenue = venues[selectedIndex % venues.length];
-  const transitRoute =
+  const selectedVenue = mapVenues[selectedIndex % mapVenues.length];
+  const parsedTransitSteps = useMemo(
+    () => parseTransitSteps(String(transitSteps || '')),
+    [transitSteps],
+  );
+  const transitRoute: TransitRouteContext | null =
     transitOriginName && transitDestinationName
       ? {
           originName: String(transitOriginName),
           destinationName: String(transitDestinationName),
+          originWalkMinutes: String(transitOriginWalkMinutes || ''),
+          originWalkDistance: String(transitOriginWalkDistance || ''),
+          durationMinutes: String(transitDurationMinutes || ''),
+          distanceMeters: String(transitDistanceMeters || ''),
+          steps: parsedTransitSteps,
           walkMinutes: String(transitWalkMinutes || ''),
           walkDistance: String(transitWalkDistance || ''),
         }
@@ -97,7 +212,7 @@ export default function MapScreen() {
   const filteredVenues = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
     if (!query) return plannerActive ? plannerVenues : venues.slice(0, 12);
-    return venues
+    return mapVenues
       .filter((venue) =>
         [venue.name, venue.type, venue.category, venue.neighborhood, venue.fullAddress]
           .join(' ')
@@ -105,17 +220,17 @@ export default function MapScreen() {
           .includes(query),
       )
       .slice(0, 12);
-  }, [plannerActive, plannerVenues, searchQuery]);
+  }, [mapVenues, plannerActive, plannerVenues, searchQuery]);
 
   const selectVenue = (venue: Venue, clearSearch = false) => {
-    const nextIndex = venues.findIndex((item) => item.id === venue.id);
+    const nextIndex = mapVenues.findIndex((item) => item.id === venue.id);
     if (nextIndex < 0) return;
     setSelectedIndex(nextIndex);
     setDirectionsVenue(null);
     setSearchFocused(false);
     if (clearSearch) setSearchQuery('');
     Keyboard.dismiss();
-    const railSource = clearSearch ? venues.slice(0, 12) : filteredVenues;
+    const railSource = clearSearch ? mapVenues.slice(0, 12) : filteredVenues;
     const railIndex = railSource.findIndex((item) => item.id === venue.id);
     if (railIndex >= 0) {
       const scrollToVenue = () =>
@@ -133,7 +248,7 @@ export default function MapScreen() {
   };
 
   const openDirections = (venue: Venue) => {
-    setSelectedIndex(venues.findIndex((item) => item.id === venue.id));
+    setSelectedIndex(Math.max(0, mapVenues.findIndex((item) => item.id === venue.id)));
     setDirectionsVenue(venue);
     setSearchFocused(false);
     Keyboard.dismiss();
@@ -271,6 +386,7 @@ export default function MapScreen() {
                 params: {
                   openPlanner: String(plannerMode || 'night'),
                   plannerIds: String(plannerIds || ''),
+                   plannerVenues: String(plannerVenueData || ''),
                   plannerLocation: String(plannerLocation || 'Current location'),
                   plannerPrice: String(plannerPrice || '££'),
                 },
@@ -316,7 +432,7 @@ export default function MapScreen() {
             const railIndex = Math.round(nativeEvent.contentOffset.x / (CARD_WIDTH + RAIL_GAP));
             const visibleVenue = filteredVenues[railIndex];
             if (!visibleVenue) return;
-            const venueIndex = venues.findIndex((item) => item.id === visibleVenue.id);
+            const venueIndex = mapVenues.findIndex((item) => item.id === visibleVenue.id);
             if (venueIndex >= 0 && venueIndex !== selectedIndex) setSelectedIndex(venueIndex);
           }}
           scrollEventThrottle={16}
@@ -329,7 +445,7 @@ export default function MapScreen() {
           }}
         >
           {filteredVenues.map((venue) => {
-            const venueIndex = venues.findIndex((item) => item.id === venue.id);
+            const venueIndex = mapVenues.findIndex((item) => item.id === venue.id);
             const selected = venueIndex === selectedIndex;
             return (
               <View
@@ -362,7 +478,24 @@ export default function MapScreen() {
                     <Pressable
                       accessibilityLabel={`Open ${venue.name}`}
                       accessibilityRole="button"
-                      onPress={() => router.push(`/venue/${venue.id}`)}
+                      onPress={() =>
+                        router.push({
+                          pathname: '/venue/[id]',
+                          params: {
+                            id: venue.id,
+                            ...(plannerActive
+                              ? {
+                                  fromPlanner: '1',
+                                  plannerIds: String(plannerIds || ''),
+                                  plannerVenues: String(plannerVenueData || ''),
+                                  plannerMode: String(plannerMode || 'night'),
+                                  plannerLocation: String(plannerLocation || 'Current location'),
+                                  plannerPrice: String(plannerPrice || '££'),
+                                }
+                              : {}),
+                          },
+                        })
+                      }
                       style={[styles.cardOpenButton, { backgroundColor: colors.green800 }]}
                     >
                       <Feather name="chevron-right" size={18} color={colors.primaryForeground} />
@@ -457,6 +590,11 @@ function DirectionsPanel({
   transitRoute: {
     originName: string;
     destinationName: string;
+    originWalkMinutes: string;
+    originWalkDistance: string;
+    durationMinutes: string;
+    distanceMeters: string;
+    steps: TransitStep[];
     walkMinutes: string;
     walkDistance: string;
   } | null;
@@ -510,6 +648,70 @@ function DirectionsPanel({
               </View>
             </View>
           </View>
+          {transitRoute.durationMinutes ? (
+            <View style={[styles.transitOverview, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+              <Ionicons name="train-outline" size={17} color={colors.green700} />
+              <View style={styles.transitOverviewCopy}>
+                <Text style={[styles.transitOverviewLabel, { color: colors.mutedForeground }]}>
+                  LIVE PUBLIC TRANSPORT
+                </Text>
+                <Text style={[styles.transitOverviewValue, { color: colors.foreground }]}>
+                  {transitRoute.durationMinutes} min between stations
+                  {formatRouteDistance(transitRoute.distanceMeters)
+                    ? ` · ${formatRouteDistance(transitRoute.distanceMeters)}`
+                    : ''}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+          {transitRoute.originWalkMinutes ? (
+            <View style={[styles.routeSummary, { borderTopColor: colors.border }]}>
+              <Ionicons name="walk-outline" size={17} color={colors.green700} />
+              <Text style={[styles.routeSummaryText, { color: colors.foreground }]}>
+                Walk {transitRoute.originWalkMinutes} min to {transitRoute.originName}
+                {formatRouteDistance(transitRoute.originWalkDistance)
+                  ? ` · ${formatRouteDistance(transitRoute.originWalkDistance)}`
+                  : ''}
+              </Text>
+            </View>
+          ) : null}
+          {transitRoute.steps.length ? (
+            <>
+              <Text style={[styles.transitStepsTitle, { color: colors.green700 }]}>STEP-BY-STEP</Text>
+              <ScrollView
+                nestedScrollEnabled
+                showsVerticalScrollIndicator
+                style={styles.transitSteps}
+              >
+                {transitRoute.steps.map((step, index) => (
+                  <View
+                    key={`${step.mode}-${step.instruction}-${index}`}
+                    style={[styles.transitStep, { borderColor: colors.border }]}
+                  >
+                    <View style={[styles.transitStepNumber, { backgroundColor: colors.green700 }]}>
+                      <Text style={[styles.transitStepNumberText, { color: colors.primaryForeground }]}>
+                        {index + 1}
+                      </Text>
+                    </View>
+                    <View style={styles.transitStepCopy}>
+                      <Text style={[styles.transitStepMode, { color: colors.green700 }]}>
+                        {step.mode === 'TRANSIT' ? step.lineName || 'PUBLIC TRANSPORT' : 'WALK'}
+                      </Text>
+                      <Text style={[styles.transitStepInstruction, { color: colors.foreground }]}>
+                        {step.instruction}
+                      </Text>
+                      <Text style={[styles.transitStepMeta, { color: colors.mutedForeground }]}>
+                        {step.durationMinutes} min
+                        {formatRouteDistance(step.distanceMeters)
+                          ? ` · ${formatRouteDistance(step.distanceMeters)}`
+                          : ''}
+                      </Text>
+                    </View>
+                  </View>
+                ))}
+              </ScrollView>
+            </>
+          ) : null}
           <View style={[styles.routeSummary, { borderTopColor: colors.border }]}>
             <Ionicons name="walk-outline" size={17} color={colors.goldDeep} />
             <Text style={[styles.routeSummaryText, { color: colors.foreground }]}>
@@ -533,7 +735,9 @@ function DirectionsPanel({
       )}
       <Text style={[styles.routeHint, { color: colors.mutedForeground }]}>
         {transitRoute
-          ? 'Your live station context is shown above while the Google map stays visible.'
+          ? transitRoute.steps.length
+            ? 'Live route details come from Google Routes and stay inside Panda.'
+            : 'Live station context is shown while detailed Google transit steps are unavailable.'
           : 'Google Maps stays visible while you check this route.'}
       </Text>
     </View>
@@ -636,6 +840,7 @@ const styles = StyleSheet.create({
     borderRadius: 20,
     elevation: 8,
     left: 16,
+    maxHeight: '68%',
     padding: 13,
     position: 'absolute',
     right: 16,
@@ -654,6 +859,41 @@ const styles = StyleSheet.create({
   routeSummary: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', gap: 8, marginTop: 12, paddingTop: 10 },
   routeSummaryText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   routeHint: { fontFamily: 'Inter_500Medium', fontSize: 11, marginLeft: 25, marginTop: 4 },
+  transitOverview: {
+    alignItems: 'center',
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
+    marginTop: 11,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+  },
+  transitOverviewCopy: { flex: 1 },
+  transitOverviewLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 0.7 },
+  transitOverviewValue: { fontFamily: 'Inter_700Bold', fontSize: 11, marginTop: 2 },
+  transitStepsTitle: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 1, marginTop: 12 },
+  transitSteps: { marginTop: 7, maxHeight: 190 },
+  transitStep: {
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
+    paddingBottom: 9,
+    paddingTop: 2,
+  },
+  transitStepNumber: {
+    alignItems: 'center',
+    borderRadius: 999,
+    height: 22,
+    justifyContent: 'center',
+    marginTop: 1,
+    width: 22,
+  },
+  transitStepNumberText: { fontFamily: 'Inter_700Bold', fontSize: 9 },
+  transitStepCopy: { flex: 1 },
+  transitStepMode: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 0.6 },
+  transitStepInstruction: { fontFamily: 'Inter_600SemiBold', fontSize: 11, lineHeight: 15, marginTop: 2 },
+  transitStepMeta: { fontFamily: 'Inter_500Medium', fontSize: 9, marginTop: 3 },
   transitRoutePoints: { borderTopWidth: 1, marginTop: 12, paddingTop: 10 },
   transitRoutePoint: { alignItems: 'center', flexDirection: 'row', gap: 9 },
   transitRouteDot: { borderRadius: 999, height: 10, width: 10 },
