@@ -21,6 +21,12 @@ the Panda Industry website. Those are separate products.
 
 ## Where the app lives
 
+The official GitHub repository is:
+
+```text
+https://github.com/duncann38-sys/panda-native-app
+```
+
 The working Native App is here:
 
 ```text
@@ -35,6 +41,11 @@ The live supporting API is here:
 ```text
 artifacts/api-server
 ```
+
+The live venue/profile/photo/transit API now runs on the external Panda service.
+The production Native App does not need the Replit API. This workspace may
+still use its local API during development and preview, but that is not a
+production dependency.
 
 The detailed technical handover is here:
 

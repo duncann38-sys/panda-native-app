@@ -1,36 +1,35 @@
 # PANDA NATIVE APP — Current Status
 
-## What is in this repository
+## GitHub project
 
-This repository contains the Native App source and its project documentation. It is the clear home for future Native App development.
+This repository is the clear home for PANDA NATIVE APP source and documentation.
 
-## What is working
+## Backend independence
 
-- Expo Native App screens and navigation.
-- Panda visual style, cards, venue imagery and attribution.
-- Panda AI request flow through the external Panda AI service.
-- Named destination resolution for questions such as “How do I get to Fatt Pundit?”.
-- In-app route panel that can display live origin station, destination station and final walking leg.
-- Venue profile, photo and transit integrations in the current development environment.
+PANDA NATIVE APP no longer needs the Replit API in production. Its service configuration points only to the external Panda service at https://panda-ai-proxy.vercel.app.
 
-## What is not finished
+The following production routes have been tested successfully:
 
-The current external service at https://panda-ai-proxy.vercel.app supports the Panda AI endpoint, but the live venue, profile and transit routes currently return 404. Those routes still exist in the Replit API Server used for preview.
+- [x] Panda AI.
+- [x] External venue search.
+- [x] External venue profile.
+- [x] External venue photos with attribution.
+- [x] External nearest-station lookup.
+- [x] External venue transit lookup.
+- [x] Google walking distance and duration.
+- [x] No Replit URL in the standalone production service configuration.
 
-The next backend task is to move or deploy these routes to the external Panda service, then point this repository only at the external API. This must be completed before claiming that Panda Native has no Replit runtime dependency.
+## Verified example
 
-## Do not confuse these states
+For a test journey to Fatt Pundit, the external service returned Westminster as the customer station, Covent Garden as the venue station, and a 398 metre, five-minute final walk.
 
-- GitHub source: ready and separated as duncann38-sys/panda-native-app.
-- Replit preview: useful for development and currently supplies the unfinished live venue routes.
-- Production independence: not finished until the external venue, profile and transit routes respond successfully.
+## Remaining product verification
 
-## Completion check for the API migration
+Backend independence is complete. A final device-level journey check should still be run on Android, iOS and web preview whenever those build targets are prepared. That is a user-interface verification task, not a Replit API dependency.
 
-- [ ] External venue search works.
-- [ ] External venue profile works.
-- [ ] External venue photos work.
-- [ ] External nearest-station lookup works.
-- [ ] External venue transit lookup works.
-- [ ] Native App production configuration contains no Replit API URL.
-- [ ] AI, venue details, station lookup and in-app directions are tested from the GitHub project build.
+## Do not change
+
+- Do not add a Replit preview URL to production configuration.
+- Do not move production API ownership to Replit.
+- Keep venue photo attribution.
+- Never invent station, route, opening or venue facts when live data is unavailable.

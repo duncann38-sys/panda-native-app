@@ -53,6 +53,8 @@ This is intentional:
 - A production build must use the established external service rather than a
   Replit preview domain.
 - Panda AI itself always posts to the external `/api/panda-ai` endpoint.
+- Venue search, profile, photo, nearest-station and venue-transit routes are now
+  deployed on the same external service for production use.
 
 ## 3. What was completed
 
@@ -354,7 +356,7 @@ markers depend on it.
 - Verify the AI destination card opens the correct map route on native Android,
   iOS and web preview.
 - Verify denied permission, unavailable GPS, Google 404 and Google 502 states.
-- Verify production builds do not contain a preview API domain.
+- Keep verifying that production builds do not contain a preview API domain.
 
 ## 8. Development and validation
 

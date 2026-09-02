@@ -1,7 +1,4 @@
 export const PANDA_PRODUCTION_API = 'https://panda-ai-proxy.vercel.app';
 
-const previewDomain = process.env.EXPO_PUBLIC_DOMAIN?.trim();
-
-export const PANDA_RUNTIME_API = previewDomain
-  ? `https://${previewDomain.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`
-  : PANDA_PRODUCTION_API;
+// Panda Native always uses the external Panda service. Replit is development tooling only.
+export const PANDA_RUNTIME_API = PANDA_PRODUCTION_API;

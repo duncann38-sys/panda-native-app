@@ -21,6 +21,9 @@ The app should:
 
 **Purpose:** Let customers trust the information on a venue page.
 
+**Status:** External venue, profile, photo and transit routes are live. Continue
+checking the customer-facing screens whenever these routes change.
+
 The app should:
 
 - load current Google venue facts through the API Server;
