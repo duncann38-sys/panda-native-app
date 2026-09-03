@@ -17,7 +17,12 @@
       "supportsTablet": false
     },
     "android": {
-      "package": "com.panda.pandamobile"
+      "package": "com.panda.pandamobile",
+      "versionCode": 16,
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -36,6 +41,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "be103a26-59eb-440c-a726-fd063cdf3ec2"
+      }
+    },
+    "owner": "native-panda"
   }
 }
