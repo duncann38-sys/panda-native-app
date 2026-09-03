@@ -4,7 +4,7 @@
       "distribution": "internal",
       "android": {
         "buildType": "apk",
-        "image": "latest"
+        "image": "ubuntu-24.04-jdk-17-ndk-r27b"
       }
     },
     "production": {
