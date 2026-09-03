@@ -440,7 +440,57 @@ export default function DiscoverScreen() {
         lat: location.coordinates.latitude,
         lng: location.coordinates.longitude,
       };
-      const resultBatches = await Promise.all(
+      const origin = {
+        latitude: location.coordinates.latitude,
+        longitude: location.coordinates.longitude,
+      };
+      const uniqueResults = new Map<string, LiveVenueResult>();
+      const mergeResults = (results: LiveVenueResult[]) => {
+        results.forEach((result) => {
+          if (!result.id) return;
+          const existing = uniqueResults.get(result.id);
+          if (!existing) {
+            uniqueResults.set(result.id, result);
+            return;
+          }
+          uniqueResults.set(result.id, {
+            ...existing,
+            sourceQueries: [...new Set([...(existing.sourceQueries ?? []), ...(result.sourceQueries ?? [])])],
+            categories: [...new Set([...(existing.categories ?? []), ...(result.categories ?? [])])],
+          });
+        });
+      };
+      const visibleVenues = () => {
+        const eligibleResults = [...uniqueResults.values()].flatMap((result) => {
+          if (
+            !result.id
+            || !result.name
+            || !Number.isFinite(result.lat)
+            || !Number.isFinite(result.lng)
+          ) {
+            return [];
+          }
+          const venue = liveVenueFromResult(result, origin, area);
+          return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS ? [{ result, venue }] : [];
+        }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
+        const hospitalityResults = eligibleResults
+          .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
+          .slice(0, LIVE_DISCOVERY_LIMIT);
+        const supportingResults = eligibleResults
+          .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
+          .slice(0, 120);
+        return [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
+      };
+      const publishVisibleVenues = () => {
+        const nextVenues = visibleVenues();
+        if (!nextVenues.length) return false;
+        setLiveArea(area);
+        setLiveVenues(nextVenues);
+        setLiveDiscoveryState('ready');
+        return true;
+      };
+
+      await Promise.all(
         LIVE_DISCOVERY_QUERIES.map(async (query) => {
           const results: LiveVenueResult[] = [];
           let pageToken: string | undefined;
@@ -453,48 +503,14 @@ export default function DiscoverScreen() {
               if (!pageToken) break;
             }
           } catch {
-            return results;
+            return;
           }
-          return results;
+          mergeResults(results);
+          publishVisibleVenues();
         }),
       );
-      const origin = {
-        latitude: location.coordinates.latitude,
-        longitude: location.coordinates.longitude,
-      };
-      const uniqueResults = new Map<string, LiveVenueResult>();
-      resultBatches.flat().forEach((result) => {
-        if (!result.id) return;
-        const existing = uniqueResults.get(result.id);
-        if (!existing) {
-          uniqueResults.set(result.id, result);
-          return;
-        }
-        uniqueResults.set(result.id, {
-          ...existing,
-          sourceQueries: [...new Set([...(existing.sourceQueries ?? []), ...(result.sourceQueries ?? [])])],
-          categories: [...new Set([...(existing.categories ?? []), ...(result.categories ?? [])])],
-        });
-      });
-      const eligibleResults = [...uniqueResults.values()].flatMap((result) => {
-        if (
-          !result.id
-          || !result.name
-          || !Number.isFinite(result.lat)
-          || !Number.isFinite(result.lng)
-        ) {
-          return [];
-        }
-        const venue = liveVenueFromResult(result, origin, area);
-        return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS ? [{ result, venue }] : [];
-      }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
-      const hospitalityResults = eligibleResults
-        .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
-        .slice(0, LIVE_DISCOVERY_LIMIT);
-      const supportingResults = eligibleResults
-        .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
-        .slice(0, 120);
-      const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
+
+      const nextVenues = visibleVenues();
       if (!nextVenues.length) throw new Error('No live venues returned');
       setLiveArea(area);
       setLiveVenues(nextVenues);
