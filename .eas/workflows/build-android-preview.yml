@@ -1,7 +1,7 @@
 name: Build Panda Android Preview APK
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: {}
 
 jobs:
   build_android_preview:
