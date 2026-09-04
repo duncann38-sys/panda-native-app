@@ -21,7 +21,6 @@ export type ErrorFallbackProps = {
 export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const diagnosticMessage = `${error.name || 'Error'}: ${error.message || 'Unknown error'}`.slice(0, 240);
 
   const [isModalVisible, setIsModalVisible] = useState(false);
 
@@ -75,20 +74,6 @@ export function ErrorFallback({ error, resetError }: ErrorFallbackProps) {
 
         <Text style={[styles.message, { color: colors.mutedForeground }]}>
           Please reload the app to continue.
-        </Text>
-
-        <Text
-          selectable
-          style={[
-            styles.diagnosticMessage,
-            {
-              color: colors.foreground,
-              backgroundColor: colors.card,
-              fontFamily: monoFont,
-            },
-          ]}
-        >
-          {diagnosticMessage}
         </Text>
 
         <Pressable
@@ -208,14 +193,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     textAlign: 'center',
     lineHeight: 24,
-  },
-  diagnosticMessage: {
-    width: '100%',
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'left',
   },
   topButton: {
     position: 'absolute',
