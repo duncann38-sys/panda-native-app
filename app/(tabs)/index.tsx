@@ -756,8 +756,10 @@ export default function DiscoverScreen() {
     if (locationStatus === 'ready') {
       void loadLiveVenues(false);
     } else if (locationStatus === 'permission-denied') {
+      setLiveDiscoveryFailure('LOCATION-DENIED');
       setLiveDiscoveryState('permission-denied');
     } else if (locationStatus === 'unavailable') {
+      setLiveDiscoveryFailure('LOCATION-UNAVAILABLE');
       setLiveDiscoveryState('error');
     }
   }, [loadLiveVenues, locationStatus]);
@@ -1030,11 +1032,9 @@ export default function DiscoverScreen() {
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
                   Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
                 </Text>
-                {liveDiscoveryFailure ? (
-                  <Text style={[styles.emptyDiagnostic, { color: colors.mutedForeground }]}>
-                    Diagnostic: {liveDiscoveryFailure}
-                  </Text>
-                ) : null}
+                <Text style={[styles.emptyDiagnostic, { color: colors.mutedForeground }]}>
+                  Diagnostic: {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
+                </Text>
                 <Pressable
                   accessibilityLabel="Retry live nearby places"
                   accessibilityRole="button"
