@@ -59,15 +59,21 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
 
         let position: Location.LocationObject | null = null;
         try {
-          position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          // Match the location path compiled into the phone-proven Build 15.
+          position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
         } catch {
-          position = await Location.getLastKnownPositionAsync({
-            maxAge: 15 * 60_000,
-            requiredAccuracy: 2_000,
-          });
+          try {
+            position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+          } catch {
+            position = null;
+          }
         }
         if (!position) {
-          position = await Location.getLastKnownPositionAsync();
+          try {
+            position = await Location.getLastKnownPositionAsync();
+          } catch {
+            position = null;
+          }
         }
         if (!position) throw new Error('Device location unavailable');
         nextCoordinates = {
