@@ -468,6 +468,7 @@ export default function DiscoverScreen() {
   const loadLiveVenues = useCallback(async (requestPermission: boolean) => {
     setLiveDiscoveryState('loading');
     loadedCategories.current.clear();
+    let hasPublishedVenues = false;
     try {
       const location = requestPermission || !coordinates
         ? await refreshLocation(requestPermission)
@@ -559,28 +560,47 @@ export default function DiscoverScreen() {
         setLiveArea(area);
         setLiveVenues(nextVenues);
         setLiveDiscoveryState('ready');
+        hasPublishedVenues = true;
         return true;
       };
 
-      await Promise.all(
-        LIVE_DISCOVERY_QUERIES.map(async (query) => {
-          const results: LiveVenueResult[] = [];
-          let pageToken: string | undefined;
-          try {
-            const pageLimit = SINGLE_PAGE_DISCOVERY_QUERIES.has(query) ? 1 : LIVE_DISCOVERY_PAGES_PER_QUERY;
-            for (let page = 0; page < pageLimit; page += 1) {
-              const payload = await fetchDiscoveryPage(query, locationPayload, pageToken);
-              results.push(...payload.venues);
-              pageToken = payload.nextPageToken;
-              if (!pageToken) break;
-            }
-          } catch {
-            return;
+      const firstPage = await fetchDiscoveryPage('restaurants', locationPayload);
+      mergeResults(firstPage.venues);
+      publishVisibleVenues();
+
+      const remainingQueries = LIVE_DISCOVERY_QUERIES.filter((query) => query !== 'restaurants');
+      const queryTasks: Array<() => Promise<void>> = [
+        async () => {
+          let pageToken = firstPage.nextPageToken;
+          for (let page = 1; page < LIVE_DISCOVERY_PAGES_PER_QUERY && pageToken; page += 1) {
+            const payload = await fetchDiscoveryPage('restaurants', locationPayload, pageToken);
+            mergeResults(payload.venues);
+            publishVisibleVenues();
+            pageToken = payload.nextPageToken;
           }
-          mergeResults(results);
-          publishVisibleVenues();
+        },
+        ...remainingQueries.map((query) => async () => {
+          let pageToken: string | undefined;
+          const pageLimit = SINGLE_PAGE_DISCOVERY_QUERIES.has(query) ? 1 : LIVE_DISCOVERY_PAGES_PER_QUERY;
+          for (let page = 0; page < pageLimit; page += 1) {
+            const payload = await fetchDiscoveryPage(query, locationPayload, pageToken);
+            mergeResults(payload.venues);
+            publishVisibleVenues();
+            pageToken = payload.nextPageToken;
+            if (!pageToken) break;
+          }
         }),
-      );
+      ];
+
+      for (let offset = 0; offset < queryTasks.length; offset += 3) {
+        await Promise.all(queryTasks.slice(offset, offset + 3).map(async (task) => {
+          try {
+            await task();
+          } catch {
+            // One failed query must not discard successful venue batches.
+          }
+        }));
+      }
 
       const nextVenues = visibleVenues();
       if (!nextVenues.length) throw new Error('No live venues returned');
@@ -589,8 +609,10 @@ export default function DiscoverScreen() {
       setLiveDiscoveryState('ready');
       void writeDiscoveryCache(location.coordinates, 'All', nextVenues);
     } catch {
-      setLiveVenues([]);
-      setLiveDiscoveryState('error');
+      if (!hasPublishedVenues) {
+        setLiveVenues([]);
+        setLiveDiscoveryState('error');
+      }
     }
   }, [coordinates, refreshLocation, setLiveArea, setLiveVenues]);
 
