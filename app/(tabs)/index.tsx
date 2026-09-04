@@ -189,6 +189,7 @@ const LIVE_DISCOVERY_PAGES_PER_QUERY = 3;
 const LIVE_DISCOVERY_LIMIT = 300;
 const CATEGORY_MINIMUM = 100;
 const CATEGORY_DISCOVERY_LIMIT = 300;
+const MAX_WALK_DISTANCE_METERS = 4_000;
 const MAX_DISCOVERY_DISTANCE_METERS = 20_000;
 const MAX_CATEGORY_DISTANCE_METERS = 20_000;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
@@ -322,16 +323,15 @@ async function fetchDiscoveryPage(
       );
       if (response.ok) {
         const payload = (await response.json()) as {
-          venues?: unknown;
+          venues?: LiveVenueResult[];
           nextPageToken?: string;
         };
         return {
-          venues: (Array.isArray(payload.venues) ? payload.venues : [])
-            .flatMap((venue) => {
-              const normalized = normalizeLiveVenueResult(venue, query);
-              return normalized ? [normalized] : [];
-            }),
-          nextPageToken: stringValue(payload.nextPageToken) || undefined,
+          venues: (payload.venues ?? []).map((venue) => ({
+            ...venue,
+            sourceQueries: [...(venue.sourceQueries ?? []), query],
+          })),
+          nextPageToken: payload.nextPageToken,
         };
       }
       if (response.status !== 429 && response.status < 500) break;
@@ -468,7 +468,6 @@ export default function DiscoverScreen() {
   const loadLiveVenues = useCallback(async (requestPermission: boolean) => {
     setLiveDiscoveryState('loading');
     loadedCategories.current.clear();
-    let hasPublishedVenues = false;
     try {
       const location = requestPermission || !coordinates
         ? await refreshLocation(requestPermission)
@@ -479,140 +478,87 @@ export default function DiscoverScreen() {
         return;
       }
 
-      let area = 'Nearby';
-      try {
-        const addresses = await Location.reverseGeocodeAsync({
-          latitude: location.coordinates.latitude,
-          longitude: location.coordinates.longitude,
-        });
-        const address = addresses[0];
-        const broadArea = address?.district || address?.subregion || address?.city || address?.region;
-        const postcodeArea = address?.postalCode?.split(/\s+/)[0];
-        area =
-          broadArea && !/^(greater london|london)$/i.test(broadArea)
-            ? broadArea
-            : postcodeArea || broadArea || area;
-      } catch {
-        // Coordinates are enough for discovery; Android geocoding can be temporarily unavailable.
-      }
-
-      if (!requestPermission) {
-        const cached = await readDiscoveryCache(location.coordinates, 'All');
-        if (cached?.length) {
-          setLiveArea(area);
-          setLiveVenues(cached);
-          setLiveDiscoveryState('ready');
-          return;
-        }
-      }
+      const addresses = await Location.reverseGeocodeAsync({
+        latitude: location.coordinates.latitude,
+        longitude: location.coordinates.longitude,
+      });
+      const address = addresses[0];
+      const broadArea = address?.district || address?.subregion || address?.city || address?.region;
+      const postcodeArea = address?.postalCode?.split(/\s+/)[0];
+      const area =
+        broadArea && !/^(greater london|london)$/i.test(broadArea)
+          ? broadArea
+          : postcodeArea || broadArea;
+      if (!area) throw new Error('Current area unavailable');
 
       const locationPayload = {
         lat: location.coordinates.latitude,
         lng: location.coordinates.longitude,
       };
+      const resultBatches = await Promise.all(
+        LIVE_DISCOVERY_QUERIES.map(async (query) => {
+          const results: LiveVenueResult[] = [];
+          let pageToken: string | undefined;
+          try {
+            const pageLimit = SINGLE_PAGE_DISCOVERY_QUERIES.has(query) ? 1 : LIVE_DISCOVERY_PAGES_PER_QUERY;
+            for (let page = 0; page < pageLimit; page += 1) {
+              const payload = await fetchDiscoveryPage(query, locationPayload, pageToken);
+              results.push(...payload.venues);
+              pageToken = payload.nextPageToken;
+              if (!pageToken) break;
+            }
+          } catch {
+            return results;
+          }
+          return results;
+        }),
+      );
       const origin = {
         latitude: location.coordinates.latitude,
         longitude: location.coordinates.longitude,
       };
       const uniqueResults = new Map<string, LiveVenueResult>();
-      const mergeResults = (results: LiveVenueResult[]) => {
-        results.forEach((result) => {
-          if (!result.id) return;
-          const existing = uniqueResults.get(result.id);
-          if (!existing) {
-            uniqueResults.set(result.id, result);
-            return;
-          }
-          uniqueResults.set(result.id, {
-            ...existing,
-            sourceQueries: [...new Set([...stringArray(existing.sourceQueries), ...stringArray(result.sourceQueries)])],
-            categories: [...new Set([
-              ...stringArray(existing.categories),
-              ...stringArray(result.categories),
-            ])] as DiscoveryCategory[],
-          });
+      resultBatches.flat().forEach((result) => {
+        if (!result.id) return;
+        const existing = uniqueResults.get(result.id);
+        if (!existing) {
+          uniqueResults.set(result.id, result);
+          return;
+        }
+        uniqueResults.set(result.id, {
+          ...existing,
+          sourceQueries: [...new Set([...(existing.sourceQueries ?? []), ...(result.sourceQueries ?? [])])],
+          categories: [...new Set([...(existing.categories ?? []), ...(result.categories ?? [])])],
         });
-      };
-      const visibleVenues = () => {
-        const eligibleResults = [...uniqueResults.values()].flatMap((result) => {
-          if (
-            !result.id
-            || !result.name
-            || !Number.isFinite(result.lat)
-            || !Number.isFinite(result.lng)
-          ) {
-            return [];
-          }
-          const venue = liveVenueFromResult(result, origin, area);
-          return venue.distanceMeters <= MAX_DISCOVERY_DISTANCE_METERS ? [{ result, venue }] : [];
-        }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
-        const hospitalityResults = eligibleResults
-          .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
-          .slice(0, LIVE_DISCOVERY_LIMIT);
-        const supportingResults = eligibleResults
-          .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
-          .slice(0, 120);
-        return [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
-      };
-      const publishVisibleVenues = () => {
-        const nextVenues = visibleVenues();
-        if (!nextVenues.length) return false;
-        setLiveArea(area);
-        setLiveVenues(nextVenues);
-        setLiveDiscoveryState('ready');
-        hasPublishedVenues = true;
-        return true;
-      };
-
-      const firstPage = await fetchDiscoveryPage('restaurants', locationPayload);
-      mergeResults(firstPage.venues);
-      publishVisibleVenues();
-
-      const remainingQueries = LIVE_DISCOVERY_QUERIES.filter((query) => query !== 'restaurants');
-      const queryTasks: Array<() => Promise<void>> = [
-        async () => {
-          let pageToken = firstPage.nextPageToken;
-          for (let page = 1; page < LIVE_DISCOVERY_PAGES_PER_QUERY && pageToken; page += 1) {
-            const payload = await fetchDiscoveryPage('restaurants', locationPayload, pageToken);
-            mergeResults(payload.venues);
-            publishVisibleVenues();
-            pageToken = payload.nextPageToken;
-          }
-        },
-        ...remainingQueries.map((query) => async () => {
-          let pageToken: string | undefined;
-          const pageLimit = SINGLE_PAGE_DISCOVERY_QUERIES.has(query) ? 1 : LIVE_DISCOVERY_PAGES_PER_QUERY;
-          for (let page = 0; page < pageLimit; page += 1) {
-            const payload = await fetchDiscoveryPage(query, locationPayload, pageToken);
-            mergeResults(payload.venues);
-            publishVisibleVenues();
-            pageToken = payload.nextPageToken;
-            if (!pageToken) break;
-          }
-        }),
-      ];
-
-      for (let offset = 0; offset < queryTasks.length; offset += 3) {
-        await Promise.all(queryTasks.slice(offset, offset + 3).map(async (task) => {
-          try {
-            await task();
-          } catch {
-            // One failed query must not discard successful venue batches.
-          }
-        }));
-      }
-
-      const nextVenues = visibleVenues();
+      });
+      const eligibleResults = [...uniqueResults.values()].flatMap((result) => {
+        if (
+          !result.id
+          || !result.name
+          || !result.photoName
+          || (result.photoCount ?? 0) < 5
+          || !Number.isFinite(result.lat)
+          || !Number.isFinite(result.lng)
+        ) {
+          return [];
+        }
+        const venue = liveVenueFromResult(result, origin, area);
+        return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS ? [{ result, venue }] : [];
+      }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
+      const hospitalityResults = eligibleResults
+        .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
+        .slice(0, LIVE_DISCOVERY_LIMIT);
+      const supportingResults = eligibleResults
+        .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
+        .slice(0, 120);
+      const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
       if (!nextVenues.length) throw new Error('No live venues returned');
       setLiveArea(area);
       setLiveVenues(nextVenues);
       setLiveDiscoveryState('ready');
-      void writeDiscoveryCache(location.coordinates, 'All', nextVenues);
     } catch {
-      if (!hasPublishedVenues) {
-        setLiveVenues([]);
-        setLiveDiscoveryState('error');
-      }
+      setLiveVenues([]);
+      setLiveDiscoveryState('error');
     }
   }, [coordinates, refreshLocation, setLiveArea, setLiveVenues]);
 
