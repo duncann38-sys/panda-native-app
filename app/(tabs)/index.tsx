@@ -169,6 +169,27 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
 }
 
 type LiveDiscoveryState = 'loading' | 'ready' | 'permission-denied' | 'error';
+type LiveDiscoveryFailureCode =
+  | 'LOCATION-DENIED'
+  | 'LOCATION-UNAVAILABLE'
+  | 'API-RATE-LIMIT'
+  | 'API-FORBIDDEN'
+  | 'API-NETWORK'
+  | 'API-RESPONSE'
+  | 'API-EMPTY'
+  | 'FILTER-EMPTY';
+type DiscoveryPageFailure = {
+  code: Exclude<
+    LiveDiscoveryFailureCode,
+    'LOCATION-DENIED' | 'LOCATION-UNAVAILABLE' | 'API-EMPTY' | 'FILTER-EMPTY'
+  >;
+  status?: number;
+};
+type DiscoveryPage = {
+  venues: LiveVenueResult[];
+  nextPageToken?: string;
+  failure?: DiscoveryPageFailure;
+};
 const LIVE_DISCOVERY_QUERIES = [
   'restaurants',
   'bars and pubs',
@@ -185,7 +206,9 @@ const LIVE_DISCOVERY_QUERIES = [
   'shops off licences and food stores',
   'museums parks landmarks and tourist attractions',
 ] as const;
-const LIVE_DISCOVERY_PAGES_PER_QUERY = 3;
+const STARTUP_DISCOVERY_CONCURRENCY = 4;
+const DISCOVERY_REQUEST_WINDOW_MS = 60_000;
+const DISCOVERY_REQUESTS_PER_WINDOW = 24;
 const LIVE_DISCOVERY_LIMIT = 300;
 const CATEGORY_MINIMUM = 100;
 const CATEGORY_DISCOVERY_LIMIT = 300;
@@ -195,15 +218,6 @@ const MAX_CATEGORY_DISTANCE_METERS = 20_000;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
 const DISCOVERY_CACHE_PREFIX = 'panda-live-discovery-v2';
-const SINGLE_PAGE_DISCOVERY_QUERIES = new Set<string>([
-  'bottomless brunch',
-  'meat steak and grill restaurants',
-  'sports bars showing live football',
-  'live music venues bars',
-  'shops off licences and food stores',
-  'museums parks landmarks and tourist attractions',
-]);
-
 const CATEGORY_SEARCH_QUERIES: Partial<Record<DiscoveryCategory, string>> = {
   Indian: 'indian restaurants',
   Italian: 'italian restaurants',
@@ -303,44 +317,72 @@ async function fetchDiscoveryPage(
   location: { lat: number; lng: number },
   pageToken?: string,
   expansionRingKm?: number,
-) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    try {
-      const response = await fetchWithTimeout(
-        `${PANDA_DISCOVERY_API}/api/panda-ai`,
-        20_000,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            venuesOnly: true,
-            query,
-            location,
-            ...(pageToken ? { pageToken } : {}),
-            ...(expansionRingKm ? { expansionRingKm } : {}),
-          }),
-        },
-      );
-      if (response.ok) {
-        const payload = (await response.json()) as {
-          venues?: LiveVenueResult[];
-          nextPageToken?: string;
-        };
-        return {
-          venues: (payload.venues ?? []).map((venue) => ({
-            ...venue,
-            sourceQueries: [...(venue.sourceQueries ?? []), query],
-          })),
-          nextPageToken: payload.nextPageToken,
-        };
-      }
-      if (response.status !== 429 && response.status < 500) break;
-    } catch {
-      if (attempt === 2) break;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+  reserveRequest?: () => boolean,
+): Promise<DiscoveryPage> {
+  if (reserveRequest && !reserveRequest()) {
+    return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
   }
-  return { venues: [] as LiveVenueResult[], nextPageToken: undefined };
+  try {
+    const response = await fetchWithTimeout(
+      `${PANDA_DISCOVERY_API}/api/panda-ai`,
+      20_000,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venuesOnly: true,
+          query,
+          location,
+          ...(pageToken ? { pageToken } : {}),
+          ...(expansionRingKm ? { expansionRingKm } : {}),
+        }),
+      },
+    );
+    if (response.ok) {
+      const payload = await response.json() as {
+        venues?: unknown;
+        nextPageToken?: unknown;
+      };
+      if (!Array.isArray(payload.venues)) {
+        return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
+      }
+      return {
+        venues: payload.venues.flatMap((venue) => {
+          const normalized = normalizeLiveVenueResult(venue, query);
+          return normalized ? [normalized] : [];
+        }),
+        nextPageToken: typeof payload.nextPageToken === 'string' ? payload.nextPageToken : undefined,
+      };
+    }
+    if (response.status === 429) {
+      return { venues: [], failure: { code: 'API-RATE-LIMIT', status: response.status } };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
+    }
+    return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
+  } catch {
+    return { venues: [], failure: { code: 'API-NETWORK' } };
+  }
+}
+
+async function mapWithConcurrency<Input, Output>(
+  values: readonly Input[],
+  concurrency: number,
+  callback: (value: Input) => Promise<Output>,
+): Promise<Output[]> {
+  const output = new Array<Output>(values.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+      while (nextIndex < values.length) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+        output[currentIndex] = await callback(values[currentIndex]);
+      }
+    }),
+  );
+  return output;
 }
 
 function distanceInMeters(
@@ -463,56 +505,73 @@ export default function DiscoverScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
+  const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
+  const liveLoadInFlight = useRef(false);
+  const categoryLoadInFlight = useRef(false);
+  const discoveryGeneration = useRef(0);
+  const discoveryRequestTimes = useRef<number[]>([]);
+  const reserveDiscoveryRequest = useCallback(() => {
+    const now = Date.now();
+    discoveryRequestTimes.current = discoveryRequestTimes.current
+      .filter((timestamp) => now - timestamp < DISCOVERY_REQUEST_WINDOW_MS);
+    if (discoveryRequestTimes.current.length >= DISCOVERY_REQUESTS_PER_WINDOW) return false;
+    discoveryRequestTimes.current.push(now);
+    return true;
+  }, []);
   const loadLiveVenues = useCallback(async (requestPermission: boolean) => {
+    if (liveLoadInFlight.current) return;
+    liveLoadInFlight.current = true;
+    const generation = discoveryGeneration.current + 1;
+    discoveryGeneration.current = generation;
     setLiveDiscoveryState('loading');
+    setLiveDiscoveryFailure(null);
+    setLiveArea('');
+    setLiveVenues([]);
     loadedCategories.current.clear();
     try {
       const location = requestPermission || !coordinates
         ? await refreshLocation(requestPermission)
         : { status: 'ready' as const, coordinates };
       if (location.status !== 'ready') {
-        setLiveVenues([]);
-        setLiveDiscoveryState(location.status === 'permission-denied' ? 'permission-denied' : 'error');
+        const denied = location.status === 'permission-denied';
+        setLiveDiscoveryFailure(denied ? 'LOCATION-DENIED' : 'LOCATION-UNAVAILABLE');
+        setLiveDiscoveryState(denied ? 'permission-denied' : 'error');
         return;
       }
 
-      const addresses = await Location.reverseGeocodeAsync({
-        latitude: location.coordinates.latitude,
-        longitude: location.coordinates.longitude,
-      });
-      const address = addresses[0];
-      const broadArea = address?.district || address?.subregion || address?.city || address?.region;
-      const postcodeArea = address?.postalCode?.split(/\s+/)[0];
-      const area =
-        broadArea && !/^(greater london|london)$/i.test(broadArea)
-          ? broadArea
-          : postcodeArea || broadArea;
-      if (!area) throw new Error('Current area unavailable');
+      let area = 'your location';
+      try {
+        const addresses = await Location.reverseGeocodeAsync({
+          latitude: location.coordinates.latitude,
+          longitude: location.coordinates.longitude,
+        });
+        const address = addresses[0];
+        const broadArea = address?.district || address?.subregion || address?.city || address?.region;
+        const postcodeArea = address?.postalCode?.split(/\s+/)[0];
+        area =
+          broadArea && !/^(greater london|london)$/i.test(broadArea)
+            ? broadArea
+            : postcodeArea || broadArea || area;
+      } catch {
+        // A device geocoder failure must not block coordinate-based venue discovery.
+      }
 
       const locationPayload = {
         lat: location.coordinates.latitude,
         lng: location.coordinates.longitude,
       };
-      const resultBatches = await Promise.all(
-        LIVE_DISCOVERY_QUERIES.map(async (query) => {
-          const results: LiveVenueResult[] = [];
-          let pageToken: string | undefined;
-          try {
-            const pageLimit = SINGLE_PAGE_DISCOVERY_QUERIES.has(query) ? 1 : LIVE_DISCOVERY_PAGES_PER_QUERY;
-            for (let page = 0; page < pageLimit; page += 1) {
-              const payload = await fetchDiscoveryPage(query, locationPayload, pageToken);
-              results.push(...payload.venues);
-              pageToken = payload.nextPageToken;
-              if (!pageToken) break;
-            }
-          } catch {
-            return results;
-          }
-          return results;
-        }),
+      // One page per query keeps a cold start safely below the production
+      // proxy's 30 requests/IP/minute limit. Category expansion is separate.
+      const discoveryPages = await mapWithConcurrency(
+        LIVE_DISCOVERY_QUERIES,
+        STARTUP_DISCOVERY_CONCURRENCY,
+        (query) => fetchDiscoveryPage(query, locationPayload, undefined, undefined, reserveDiscoveryRequest),
       );
+      if (discoveryGeneration.current !== generation) return;
+      const resultBatches = discoveryPages.map((page) => page.venues);
+      const requestFailures = discoveryPages.flatMap((page) => page.failure ? [page.failure] : []);
       const origin = {
         latitude: location.coordinates.latitude,
         longitude: location.coordinates.longitude,
@@ -536,7 +595,6 @@ export default function DiscoverScreen() {
           !result.id
           || !result.name
           || !result.photoName
-          || (result.photoCount ?? 0) < 5
           || !Number.isFinite(result.lat)
           || !Number.isFinite(result.lng)
         ) {
@@ -552,15 +610,26 @@ export default function DiscoverScreen() {
         .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
         .slice(0, 120);
       const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
-      if (!nextVenues.length) throw new Error('No live venues returned');
+      if (!nextVenues.length) {
+        const failureCode = requestFailures.find(({ code }) => code === 'API-FORBIDDEN')?.code
+          || requestFailures.find(({ code }) => code === 'API-RATE-LIMIT')?.code
+          || requestFailures.find(({ code }) => code === 'API-NETWORK')?.code
+          || requestFailures[0]?.code
+          || (uniqueResults.size ? 'FILTER-EMPTY' : 'API-EMPTY');
+        setLiveDiscoveryFailure(failureCode);
+        setLiveDiscoveryState('error');
+        return;
+      }
       setLiveArea(area);
       setLiveVenues(nextVenues);
       setLiveDiscoveryState('ready');
     } catch {
-      setLiveVenues([]);
+      setLiveDiscoveryFailure('API-RESPONSE');
       setLiveDiscoveryState('error');
+    } finally {
+      liveLoadInFlight.current = false;
     }
-  }, [coordinates, refreshLocation, setLiveArea, setLiveVenues]);
+  }, [coordinates, refreshLocation, reserveDiscoveryRequest, setLiveArea, setLiveVenues]);
 
   const loadExpandedCategory = useCallback(async (selectedCategory: DiscoveryCategory) => {
     if (
@@ -568,84 +637,88 @@ export default function DiscoverScreen() {
       || !liveArea
       || loadedCategories.current.has(selectedCategory)
       || categoryLoading === selectedCategory
+      || categoryLoadInFlight.current
+      || liveLoadInFlight.current
     ) {
       return;
     }
     const query = CATEGORY_SEARCH_QUERIES[selectedCategory];
     if (!query) return;
 
+    categoryLoadInFlight.current = true;
+    const generation = discoveryGeneration.current;
     setCategoryLoading(selectedCategory);
-    const origin = coordinates;
-    const cached = await readDiscoveryCache(origin, selectedCategory);
-    if (cached?.length) {
-      setLiveVenues((current) => {
-        const merged = new Map(current.map((venue) => [venue.id, venue]));
-        cached.forEach((venue) => merged.set(venue.id, venue));
-        return [...merged.values()];
-      });
-      loadedCategories.current.add(selectedCategory);
-      setCategoryLoading(null);
-      return;
-    }
-    const collected = new Map<string, LiveVenueResult>();
-    const mergeResults = (results: LiveVenueResult[]) => {
-      results.forEach((result) => {
-        if (!result.id) return;
-        const existing = collected.get(result.id);
-        collected.set(result.id, existing
-          ? {
-              ...existing,
-              ...result,
-              sourceQueries: [...new Set([
-                ...stringArray(existing.sourceQueries),
-                ...stringArray(result.sourceQueries),
-              ])],
-              categories: [...new Set([
-                ...stringArray(existing.categories),
-                ...stringArray(result.categories),
-              ])] as DiscoveryCategory[],
-            }
-          : result);
-      });
-    };
-    const eligibleVenues = () => [...collected.values()].flatMap((result) => {
-      if (
-        !Number.isFinite(result.lat)
-        || !Number.isFinite(result.lng)
-      ) {
-        return [];
-      }
-      const venue = liveVenueFromResult(result, origin, liveArea);
-      return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
-        && venue.discoveryCategories?.includes(selectedCategory)
-        ? [venue]
-        : [];
-    });
-
     try {
-      let pageToken: string | undefined;
-      for (let page = 0; page < LIVE_DISCOVERY_PAGES_PER_QUERY; page += 1) {
-        const payload = await fetchDiscoveryPage(
-          query,
-          { lat: origin.latitude, lng: origin.longitude },
-          pageToken,
-        );
-        mergeResults(payload.venues);
-        pageToken = payload.nextPageToken;
-        if (!pageToken) break;
+      const origin = coordinates;
+      const cached = await readDiscoveryCache(origin, selectedCategory);
+      if (discoveryGeneration.current !== generation) return;
+      if (cached?.length) {
+        setLiveVenues((current) => {
+          const merged = new Map(current.map((venue) => [venue.id, venue]));
+          cached.forEach((venue) => merged.set(venue.id, venue));
+          return [...merged.values()];
+        });
+        loadedCategories.current.add(selectedCategory);
+        return;
       }
+      const collected = new Map<string, LiveVenueResult>();
+      const mergeResults = (results: LiveVenueResult[]) => {
+        results.forEach((result) => {
+          if (!result.id) return;
+          const existing = collected.get(result.id);
+          collected.set(result.id, existing
+            ? {
+                ...existing,
+                ...result,
+                sourceQueries: [...new Set([
+                  ...stringArray(existing.sourceQueries),
+                  ...stringArray(result.sourceQueries),
+                ])],
+                categories: [...new Set([
+                  ...stringArray(existing.categories),
+                  ...stringArray(result.categories),
+                ])] as DiscoveryCategory[],
+              }
+            : result);
+        });
+      };
+      const eligibleVenues = () => [...collected.values()].flatMap((result) => {
+        if (
+          !Number.isFinite(result.lat)
+          || !Number.isFinite(result.lng)
+        ) {
+          return [];
+        }
+        const venue = liveVenueFromResult(result, origin, liveArea);
+        return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
+          && venue.discoveryCategories?.includes(selectedCategory)
+          ? [venue]
+          : [];
+      });
+
+      const firstPage = await fetchDiscoveryPage(
+        query,
+        { lat: origin.latitude, lng: origin.longitude },
+        undefined,
+        undefined,
+        reserveDiscoveryRequest,
+      );
+      mergeResults(firstPage.venues);
 
       for (const radiusKm of EXPANSION_RING_KM) {
+        if (discoveryGeneration.current !== generation) return;
         if (eligibleVenues().length >= CATEGORY_MINIMUM) break;
         const batch = await fetchDiscoveryPage(
           query,
           { lat: origin.latitude, lng: origin.longitude },
           undefined,
           radiusKm,
+          reserveDiscoveryRequest,
         );
         mergeResults(batch.venues);
       }
 
+      if (discoveryGeneration.current !== generation) return;
       const expanded = eligibleVenues()
         .sort((a, b) => a.distanceMeters - b.distanceMeters)
         .slice(0, CATEGORY_DISCOVERY_LIMIT);
@@ -669,9 +742,10 @@ export default function DiscoverScreen() {
       });
       loadedCategories.current.add(selectedCategory);
     } finally {
+      categoryLoadInFlight.current = false;
       setCategoryLoading(null);
     }
-  }, [categoryLoading, coordinates, liveArea, setLiveVenues]);
+  }, [categoryLoading, coordinates, liveArea, reserveDiscoveryRequest, setLiveVenues]);
 
   const selectCategory = useCallback((nextCategory: TopCategory) => {
     setCategory(nextCategory);
@@ -956,6 +1030,11 @@ export default function DiscoverScreen() {
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
                   Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
                 </Text>
+                {liveDiscoveryFailure ? (
+                  <Text style={[styles.emptyDiagnostic, { color: colors.mutedForeground }]}>
+                    Diagnostic: {liveDiscoveryFailure}
+                  </Text>
+                ) : null}
                 <Pressable
                   accessibilityLabel="Retry live nearby places"
                   accessibilityRole="button"
@@ -1255,6 +1334,12 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_400Regular',
     fontSize: 13,
     marginTop: 6,
+    textAlign: 'center',
+  },
+  emptyDiagnostic: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    marginTop: 8,
     textAlign: 'center',
   },
   emptyRetryButton: {

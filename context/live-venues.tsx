@@ -59,9 +59,15 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
 
         let position: Location.LocationObject | null = null;
         try {
-          position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
         } catch {
-          position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+          position = await Location.getLastKnownPositionAsync({
+            maxAge: 15 * 60_000,
+            requiredAccuracy: 2_000,
+          });
+        }
+        if (!position) {
+          position = await Location.getLastKnownPositionAsync();
         }
         if (!position) throw new Error('Device location unavailable');
         nextCoordinates = {
