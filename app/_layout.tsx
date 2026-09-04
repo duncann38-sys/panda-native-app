@@ -14,6 +14,7 @@ import {
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
+import { LiveVenuesProvider } from '@/context/live-venues';
 import { SavedVenuesProvider } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
 
@@ -66,10 +67,12 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
-              <SavedVenuesProvider>
-                <StatusBar style="light" backgroundColor={colors.green800} />
-                <RootLayoutNav />
-              </SavedVenuesProvider>
+              <LiveVenuesProvider>
+                <SavedVenuesProvider>
+                  <StatusBar style="light" backgroundColor={colors.green800} />
+                  <RootLayoutNav />
+                </SavedVenuesProvider>
+              </LiveVenuesProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </QueryClientProvider>
