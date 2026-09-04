@@ -107,6 +107,67 @@ type LiveVenueResult = {
   categories?: DiscoveryCategory[];
 };
 
+function stringValue(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+    : [];
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  const numeric = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const record = raw as Record<string, unknown>;
+  const id = stringValue(record.id);
+  const name = stringValue(record.name);
+  const lat = finiteNumber(record.lat);
+  const lng = finiteNumber(record.lng);
+  if (!id || !name || lat === undefined || lng === undefined) return null;
+
+  const rating = finiteNumber(record.rating);
+  const ratingCount = finiteNumber(record.ratingCount);
+  const photoCount = finiteNumber(record.photoCount);
+  const openingHours = Array.isArray(record.openingHours)
+    ? record.openingHours.map((value) => stringValue(value))
+    : undefined;
+
+  return {
+    id,
+    name,
+    address: stringValue(record.address),
+    fullAddress: stringValue(record.fullAddress) || undefined,
+    type: stringValue(record.type) || 'Venue',
+    primaryType: stringValue(record.primaryType) || undefined,
+    rating,
+    ratingCount,
+    price: stringValue(record.price) || undefined,
+    openNow: record.openNow === true,
+    openingHours,
+    lat,
+    lng,
+    phone: stringValue(record.phone) || undefined,
+    website: stringValue(record.website) || undefined,
+    menuLink: stringValue(record.menuLink) || undefined,
+    mapsUri: stringValue(record.mapsUri) || undefined,
+    directionsLink: stringValue(record.directionsLink) || undefined,
+    photoAttribution: stringValue(record.photoAttribution) || undefined,
+    photoName: stringValue(record.photoName) || undefined,
+    photoCount,
+    distanceMeters: finiteNumber(record.distanceMeters),
+    types: stringArray(record.types),
+    hasMusic: record.hasMusic === true,
+    sourceQueries: [...new Set([...stringArray(record.sourceQueries), query])],
+    categories: stringArray(record.categories) as DiscoveryCategory[],
+  };
+}
+
 type LiveDiscoveryState = 'loading' | 'ready' | 'permission-denied' | 'error';
 const LIVE_DISCOVERY_QUERIES = [
   'restaurants',
@@ -261,15 +322,16 @@ async function fetchDiscoveryPage(
       );
       if (response.ok) {
         const payload = (await response.json()) as {
-          venues?: LiveVenueResult[];
+          venues?: unknown;
           nextPageToken?: string;
         };
         return {
-          venues: (payload.venues ?? []).map((venue) => ({
-            ...venue,
-            sourceQueries: [...(venue.sourceQueries ?? []), query],
-          })),
-          nextPageToken: payload.nextPageToken,
+          venues: (Array.isArray(payload.venues) ? payload.venues : [])
+            .flatMap((venue) => {
+              const normalized = normalizeLiveVenueResult(venue, query);
+              return normalized ? [normalized] : [];
+            }),
+          nextPageToken: stringValue(payload.nextPageToken) || undefined,
         };
       }
       if (response.status !== 429 && response.status < 500) break;
@@ -321,7 +383,10 @@ function liveVenueFromResult(
   const distance =
     distanceMeters >= 1000 ? `${(distanceMeters / 1000).toFixed(1)} km` : `${Math.max(distanceMeters, 1)} m`;
   const todayIndex = (new Date().getDay() + 6) % 7;
-  const todayHours = result.openingHours?.[todayIndex]?.replace(/^[^:]+:\s*/, '');
+  const todayHoursValue = result.openingHours?.[todayIndex];
+  const todayHours = typeof todayHoursValue === 'string'
+    ? todayHoursValue.replace(/^[^:]+:\s*/, '')
+    : undefined;
   const mapsUri =
     result.directionsLink
     || result.mapsUri
@@ -343,8 +408,8 @@ function liveVenueFromResult(
     type: result.type,
     distance,
     walkingTime: distanceMeters ? `≈ ${Math.max(1, Math.round(distanceMeters / 80))} min walk` : 'Directions available',
-    rating: result.rating?.toFixed(1) ?? '',
-    ratingCount: result.ratingCount ?? 0,
+    rating: Number.isFinite(result.rating) ? result.rating!.toFixed(1) : '',
+    ratingCount: Number.isFinite(result.ratingCount) ? result.ratingCount! : 0,
     price: poundPrice(result.price),
     distanceMeters,
     description: `${result.type} near ${area}.`,
@@ -360,10 +425,10 @@ function liveVenueFromResult(
     promoted: false,
     photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
     photoName: result.photoName,
-    photoCount: result.photoCount ?? 0,
+    photoCount: Number.isFinite(result.photoCount) ? result.photoCount! : 0,
     discoveryCategories: [...new Set([
       ...classification.categories,
-      ...(result.categories ?? []),
+      ...stringArray(result.categories) as DiscoveryCategory[],
     ])],
   };
 }
@@ -455,8 +520,11 @@ export default function DiscoverScreen() {
           }
           uniqueResults.set(result.id, {
             ...existing,
-            sourceQueries: [...new Set([...(existing.sourceQueries ?? []), ...(result.sourceQueries ?? [])])],
-            categories: [...new Set([...(existing.categories ?? []), ...(result.categories ?? [])])],
+            sourceQueries: [...new Set([...stringArray(existing.sourceQueries), ...stringArray(result.sourceQueries)])],
+            categories: [...new Set([
+              ...stringArray(existing.categories),
+              ...stringArray(result.categories),
+            ])] as DiscoveryCategory[],
           });
         });
       };
@@ -556,8 +624,14 @@ export default function DiscoverScreen() {
           ? {
               ...existing,
               ...result,
-              sourceQueries: [...new Set([...(existing.sourceQueries ?? []), ...(result.sourceQueries ?? [])])],
-              categories: [...new Set([...(existing.categories ?? []), ...(result.categories ?? [])])],
+              sourceQueries: [...new Set([
+                ...stringArray(existing.sourceQueries),
+                ...stringArray(result.sourceQueries),
+              ])],
+              categories: [...new Set([
+                ...stringArray(existing.categories),
+                ...stringArray(result.categories),
+              ])] as DiscoveryCategory[],
             }
           : result);
       });
