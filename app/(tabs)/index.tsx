@@ -189,7 +189,7 @@ const LIVE_DISCOVERY_PAGES_PER_QUERY = 3;
 const LIVE_DISCOVERY_LIMIT = 300;
 const CATEGORY_MINIMUM = 100;
 const CATEGORY_DISCOVERY_LIMIT = 300;
-const MAX_WALK_DISTANCE_METERS = 4_000;
+const MAX_DISCOVERY_DISTANCE_METERS = 20_000;
 const MAX_CATEGORY_DISTANCE_METERS = 20_000;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
@@ -478,18 +478,22 @@ export default function DiscoverScreen() {
         return;
       }
 
-      const addresses = await Location.reverseGeocodeAsync({
-        latitude: location.coordinates.latitude,
-        longitude: location.coordinates.longitude,
-      });
-      const address = addresses[0];
-      const broadArea = address?.district || address?.subregion || address?.city || address?.region;
-      const postcodeArea = address?.postalCode?.split(/\s+/)[0];
-      const area =
-        broadArea && !/^(greater london|london)$/i.test(broadArea)
-          ? broadArea
-          : postcodeArea || broadArea;
-      if (!area) throw new Error('Current area unavailable');
+      let area = 'Nearby';
+      try {
+        const addresses = await Location.reverseGeocodeAsync({
+          latitude: location.coordinates.latitude,
+          longitude: location.coordinates.longitude,
+        });
+        const address = addresses[0];
+        const broadArea = address?.district || address?.subregion || address?.city || address?.region;
+        const postcodeArea = address?.postalCode?.split(/\s+/)[0];
+        area =
+          broadArea && !/^(greater london|london)$/i.test(broadArea)
+            ? broadArea
+            : postcodeArea || broadArea || area;
+      } catch {
+        // Coordinates are enough for discovery; Android geocoding can be temporarily unavailable.
+      }
 
       if (!requestPermission) {
         const cached = await readDiscoveryCache(location.coordinates, 'All');
@@ -539,7 +543,7 @@ export default function DiscoverScreen() {
             return [];
           }
           const venue = liveVenueFromResult(result, origin, area);
-          return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS ? [{ result, venue }] : [];
+          return venue.distanceMeters <= MAX_DISCOVERY_DISTANCE_METERS ? [{ result, venue }] : [];
         }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
         const hospitalityResults = eligibleResults
           .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
