@@ -1068,7 +1068,7 @@ export default function DiscoverScreen() {
               <>
                 <Ionicons name="cloud-offline-outline" size={28} color={colors.green700} />
                 <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
-                  Live venues did not load · B23 · {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
+                  Live venues did not load · B24 · {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
                 </Text>
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
                   Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
