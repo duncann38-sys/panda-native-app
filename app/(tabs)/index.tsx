@@ -1,5 +1,6 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { fetch as expoFetch } from 'expo/fetch';
 import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -175,6 +176,7 @@ type LiveDiscoveryFailureCode =
   | 'API-RATE-LIMIT'
   | 'API-FORBIDDEN'
   | 'API-NETWORK'
+  | 'API-TIMEOUT'
   | 'API-RESPONSE'
   | 'API-EMPTY'
   | 'FILTER-EMPTY';
@@ -300,10 +302,13 @@ async function writeDiscoveryCache(
 async function fetchWithTimeout(url: string, timeoutMs: number, init: RequestInit = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const headers = new Headers(init.headers);
+  headers.set('Accept', 'application/json');
   try {
-    return await fetch(url, {
-      ...init,
-      headers: { Accept: 'application/json', ...init.headers },
+    return await expoFetch(url, {
+      method: init.method,
+      headers,
+      body: init.body ?? undefined,
       signal: controller.signal,
     });
   } finally {
@@ -376,12 +381,12 @@ async function fetchDiscoveryBatch(
   try {
     const response = await fetchWithTimeout(
       `${PANDA_DISCOVERY_API}/api/panda-ai`,
-      30_000,
+      60_000,
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Panda-Client': 'android-build-23',
+          'X-Panda-Client': 'android-build-24',
         },
         body: JSON.stringify({
           venuesOnly: true,
@@ -409,8 +414,11 @@ async function fetchDiscoveryBatch(
       return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
     }
     return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
-  } catch {
-    return { venues: [], failure: { code: 'API-NETWORK' } };
+  } catch (error) {
+    return {
+      venues: [],
+      failure: { code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK' },
+    };
   }
 }
 
@@ -643,6 +651,7 @@ export default function DiscoverScreen() {
       if (!nextVenues.length) {
         const failureCode = requestFailures.find(({ code }) => code === 'API-FORBIDDEN')?.code
           || requestFailures.find(({ code }) => code === 'API-RATE-LIMIT')?.code
+          || requestFailures.find(({ code }) => code === 'API-TIMEOUT')?.code
           || requestFailures.find(({ code }) => code === 'API-NETWORK')?.code
           || requestFailures[0]?.code
           || (uniqueResults.size ? 'FILTER-EMPTY' : 'API-EMPTY');
