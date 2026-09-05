@@ -23,6 +23,24 @@ type LiveVenuesContextValue = {
 };
 
 const LiveVenuesContext = createContext<LiveVenuesContextValue | null>(null);
+const CURRENT_LOCATION_TIMEOUT_MS = 12_000;
+
+async function getCurrentPositionWithTimeout() {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error('Current location timed out')),
+          CURRENT_LOCATION_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
 
 export function LiveVenuesProvider({ children }: { children: React.ReactNode }) {
   const [coordinates, setCoordinates] = useState<UserCoordinates | null>(null);
@@ -59,8 +77,9 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
 
         let position: Location.LocationObject | null = null;
         try {
-          // Match the location path compiled into the phone-proven Build 15.
-          position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High });
+          // Keep the phone-proven high-accuracy path, but never let it block
+          // discovery indefinitely when Android's location provider stalls.
+          position = await getCurrentPositionWithTimeout();
         } catch {
           try {
             position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });

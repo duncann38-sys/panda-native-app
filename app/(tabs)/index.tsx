@@ -206,7 +206,6 @@ const LIVE_DISCOVERY_QUERIES = [
   'shops off licences and food stores',
   'museums parks landmarks and tourist attractions',
 ] as const;
-const STARTUP_DISCOVERY_CONCURRENCY = 4;
 const DISCOVERY_REQUEST_WINDOW_MS = 60_000;
 const DISCOVERY_REQUESTS_PER_WINDOW = 24;
 const LIVE_DISCOVERY_LIMIT = 300;
@@ -366,23 +365,53 @@ async function fetchDiscoveryPage(
   }
 }
 
-async function mapWithConcurrency<Input, Output>(
-  values: readonly Input[],
-  concurrency: number,
-  callback: (value: Input) => Promise<Output>,
-): Promise<Output[]> {
-  const output = new Array<Output>(values.length);
-  let nextIndex = 0;
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (nextIndex < values.length) {
-        const currentIndex = nextIndex;
-        nextIndex += 1;
-        output[currentIndex] = await callback(values[currentIndex]);
+async function fetchDiscoveryBatch(
+  queries: readonly string[],
+  location: { lat: number; lng: number },
+  reserveRequest?: () => boolean,
+): Promise<DiscoveryPage> {
+  if (reserveRequest && !reserveRequest()) {
+    return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
+  }
+  try {
+    const response = await fetchWithTimeout(
+      `${PANDA_DISCOVERY_API}/api/panda-ai`,
+      30_000,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Panda-Client': 'android-build-23',
+        },
+        body: JSON.stringify({
+          venuesOnly: true,
+          queries,
+          location,
+        }),
+      },
+    );
+    if (response.ok) {
+      const payload = await response.json() as { venues?: unknown };
+      if (!Array.isArray(payload.venues)) {
+        return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
       }
-    }),
-  );
-  return output;
+      return {
+        venues: payload.venues.flatMap((venue) => {
+          const normalized = normalizeLiveVenueResult(venue, 'live discovery');
+          return normalized ? [normalized] : [];
+        }),
+      };
+    }
+    if (response.status === 429) {
+      return { venues: [], failure: { code: 'API-RATE-LIMIT', status: response.status } };
+    }
+    if (response.status === 401 || response.status === 403) {
+      return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
+    }
+    return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
+  } catch {
+    return { venues: [], failure: { code: 'API-NETWORK' } };
+  }
 }
 
 function distanceInMeters(
@@ -562,13 +591,14 @@ export default function DiscoverScreen() {
         lat: location.coordinates.latitude,
         lng: location.coordinates.longitude,
       };
-      // One page per query keeps a cold start safely below the production
-      // proxy's 30 requests/IP/minute limit. Category expansion is separate.
-      const discoveryPages = await mapWithConcurrency(
+      // One server-batched request replaces fourteen phone requests. This
+      // avoids native transport/rate-limit fan-out while preserving the same
+      // live query coverage. Category expansion remains separate.
+      const discoveryPages = [await fetchDiscoveryBatch(
         LIVE_DISCOVERY_QUERIES,
-        STARTUP_DISCOVERY_CONCURRENCY,
-        (query) => fetchDiscoveryPage(query, locationPayload, undefined, undefined, reserveDiscoveryRequest),
-      );
+        locationPayload,
+        reserveDiscoveryRequest,
+      )];
       if (discoveryGeneration.current !== generation) return;
       const resultBatches = discoveryPages.map((page) => page.venues);
       const requestFailures = discoveryPages.flatMap((page) => page.failure ? [page.failure] : []);
@@ -1028,7 +1058,9 @@ export default function DiscoverScreen() {
             ) : liveDiscoveryState === 'error' || liveDiscoveryState === 'permission-denied' ? (
               <>
                 <Ionicons name="cloud-offline-outline" size={28} color={colors.green700} />
-                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Live venues did not load</Text>
+                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+                  Live venues did not load · B23 · {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
+                </Text>
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
                   Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
                 </Text>
