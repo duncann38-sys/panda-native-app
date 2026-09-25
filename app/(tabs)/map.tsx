@@ -22,7 +22,7 @@ import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
-import { decodeRoutePolyline, distanceBetweenCoordinates } from '@/utils/route-geometry';
+import { decodeRoutePolyline, distanceBetweenCoordinates, distanceFromCoordinateToSegment } from '@/utils/route-geometry';
 
 type Percentage = `${number}%`;
 
@@ -301,6 +301,10 @@ export default function MapScreen() {
   const [navigationPosition, setNavigationPosition] = useState<{ latitude: number; longitude: number } | null>(null);
   const [navigationOrigin, setNavigationOrigin] = useState<{ latitude: number; longitude: number } | null>(null);
   const lastStepAdvanceAt = useRef(0);
+  const lastStepAdvancePosition = useRef<{ latitude: number; longitude: number } | null>(null);
+  const previousGpsFix = useRef<{ latitude: number; longitude: number } | null>(null);
+  const [routeRetryKey, setRouteRetryKey] = useState(0);
+  const [routeUpdateError, setRouteUpdateError] = useState<string | null>(null);
   const [freshTransit, setFreshTransit] = useState<{
     venueId: string;
     route: TransitRouteContext;
@@ -322,7 +326,9 @@ export default function MapScreen() {
     : null;
   const walkingRoute = walkingRouteResult?.key === walkingRouteKey
     ? walkingRouteResult.route
-    : null;
+    : navigationActive && directionsVenue && walkingRouteResult?.key.startsWith(`${directionsVenue.id}:`)
+      ? walkingRouteResult.route
+      : null;
   const selectedVenue = mapVenues[selectedIndex % mapVenues.length];
   const parsedTransitSteps = useMemo(
     () => parseTransitSteps(String(transitSteps || '')),
@@ -386,40 +392,49 @@ export default function MapScreen() {
   useEffect(() => {
     if (!walkingRouteKey || !directionsVenue || !walkingOrigin) {
       setWalkingRouteResult(null);
+      setRouteUpdateError(null);
       return;
     }
+    setRouteUpdateError(null);
     const cached = walkingRouteCache.current.get(walkingRouteKey);
     if (cached) {
       setWalkingRouteResult({ key: walkingRouteKey, route: cached });
       return;
     }
     const controller = new AbortController();
-    setWalkingRouteResult(null);
+    if (!navigationActive) setWalkingRouteResult(null);
     const url = `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(directionsVenue.id)}/walking`
       + `?latitude=${encodeURIComponent(walkingOrigin.latitude)}&longitude=${encodeURIComponent(walkingOrigin.longitude)}`;
     fetch(url, { signal: controller.signal })
       .then(async (response) => {
-        if (!response.ok) return null;
+        if (!response.ok) throw new Error('Could not update walking directions. Try again in a moment.');
         const data: unknown = await response.json();
         if (!data || typeof data !== 'object' || !('distanceMeters' in data)
           || !('durationMinutes' in data) || typeof data.distanceMeters !== 'number'
-          || typeof data.durationMinutes !== 'number') return null;
+          || typeof data.durationMinutes !== 'number') throw new Error('Walking directions are unavailable right now.');
+        const steps = 'steps' in data ? parseWalkingSteps(data.steps) : [];
+        if (navigationActive && !steps.length) throw new Error('Could not update walking directions. Your previous steps are still available.');
         return {
           distanceMeters: data.distanceMeters,
           durationMinutes: data.durationMinutes,
           polyline: 'polyline' in data && typeof data.polyline === 'string' ? data.polyline : undefined,
-          steps: 'steps' in data ? parseWalkingSteps(data.steps) : [],
+          steps,
         };
       })
       .then((route) => {
         if (!controller.signal.aborted && route) {
           walkingRouteCache.current.set(walkingRouteKey, route);
           setWalkingRouteResult({ key: walkingRouteKey, route });
+          setRouteUpdateError(null);
         }
       })
-      .catch(() => {});
+      .catch((error) => {
+        if (!controller.signal.aborted) {
+          setRouteUpdateError(error instanceof Error ? error.message : 'Walking directions are unavailable right now.');
+        }
+      });
     return () => controller.abort();
-  }, [walkingRouteKey]);
+  }, [walkingRouteKey, routeRetryKey]);
 
   const refreshTransit = useCallback(async () => {
     const venueId = directionsVenue?.id;
@@ -512,6 +527,9 @@ export default function MapScreen() {
     setNavigationOrigin(null);
     setNavigationStepIndex(0);
     setNavigationError(null);
+    setRouteUpdateError(null);
+    previousGpsFix.current = null;
+    lastStepAdvancePosition.current = null;
   };
 
   useEffect(() => {
@@ -534,13 +552,27 @@ export default function MapScreen() {
             }
             setNavigationError(null);
             const steps = walkingRoute?.steps;
-            if (!steps?.length || Date.now() - lastStepAdvanceAt.current < 5000) return;
+            const priorFix = previousGpsFix.current;
+            previousGpsFix.current = position;
+            if (!steps?.length || Date.now() - lastStepAdvanceAt.current < 4000) return;
             setNavigationStepIndex((current) => {
               const target = steps[current]?.endLocation;
-              if (!target || distanceBetweenCoordinates(position, target) > Math.max(18, coords.accuracy ?? 0)) {
+              if (!target || current >= steps.length - 1) return current;
+              const movedSinceAdvance = !lastStepAdvancePosition.current
+                || distanceBetweenCoordinates(lastStepAdvancePosition.current, position)
+                  >= Math.min(12, Math.max(5, steps[current].distanceMeters * 0.4));
+              if (!movedSinceAdvance) return current;
+              const threshold = Math.max(14, Math.min(24, coords.accuracy ?? 18));
+              const closeToTurn = distanceBetweenCoordinates(position, target) <= threshold;
+              const travelled = priorFix ? distanceBetweenCoordinates(priorFix, position) : 0;
+              const passage = priorFix && travelled >= 8 && travelled <= 120
+                ? distanceFromCoordinateToSegment(target, priorFix, position) : null;
+              const crossedTurn = passage && passage.distanceMeters <= threshold && passage.progress >= 0.2;
+              if (!closeToTurn && !crossedTurn) {
                 return current;
               }
               lastStepAdvanceAt.current = Date.now();
+              lastStepAdvancePosition.current = position;
               return Math.min(current + 1, steps.length - 1);
             });
           },
@@ -865,7 +897,7 @@ export default function MapScreen() {
           onRefreshTransit={() => void refreshTransit()}
           navigationActive={navigationActive}
           navigationStepIndex={navigationStepIndex}
-          navigationError={navigationError}
+          navigationError={routeUpdateError ?? navigationError}
           onStartNavigation={() => {
             if (!walkingRoute?.steps?.length || !hasMappedRoute || Platform.OS === 'web') {
               setNavigationError('Step-by-step walking directions are unavailable for this route.');
@@ -879,6 +911,8 @@ export default function MapScreen() {
             setNavigationOrigin(coordinates);
             setNavigationStepIndex(0);
             lastStepAdvanceAt.current = 0;
+            lastStepAdvancePosition.current = null;
+            previousGpsFix.current = null;
             setNavigationActive(true);
           }}
           onStopNavigation={stopNavigation}
@@ -890,6 +924,10 @@ export default function MapScreen() {
             setNavigationStepIndex(0);
             setNavigationOrigin(navigationPosition);
             setNavigationError(null);
+            setRouteUpdateError(null);
+            lastStepAdvancePosition.current = null;
+            previousGpsFix.current = null;
+            setRouteRetryKey((value) => value + 1);
           }}
           onNavigationStepChange={setNavigationStepIndex}
           venue={directionsVenue}

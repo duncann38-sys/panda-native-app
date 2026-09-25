@@ -10,6 +10,29 @@ export function distanceBetweenCoordinates(a: MapCoordinate, b: MapCoordinate): 
   return 12_742_000 * Math.asin(Math.min(1, Math.sqrt(x)));
 }
 
+export function distanceFromCoordinateToSegment(
+  point: MapCoordinate,
+  start: MapCoordinate,
+  end: MapCoordinate,
+): { distanceMeters: number; progress: number } {
+  const latitudeMetres = 111_195;
+  const longitudeMetres = latitudeMetres * Math.cos(point.latitude * Math.PI / 180);
+  const sx = (start.longitude - point.longitude) * longitudeMetres;
+  const sy = (start.latitude - point.latitude) * latitudeMetres;
+  const ex = (end.longitude - point.longitude) * longitudeMetres;
+  const ey = (end.latitude - point.latitude) * latitudeMetres;
+  const dx = ex - sx;
+  const dy = ey - sy;
+  const lengthSquared = dx * dx + dy * dy;
+  const progress = lengthSquared > 0
+    ? Math.max(0, Math.min(1, -(sx * dx + sy * dy) / lengthSquared))
+    : 0;
+  return {
+    distanceMeters: Math.hypot(sx + progress * dx, sy + progress * dy),
+    progress,
+  };
+}
+
 // Google Routes returns encoded polylines in five-decimal-degree precision.
 // Reject malformed and oversized responses instead of drawing a misleading path.
 export function decodeRoutePolyline(encoded: string): MapCoordinate[] {
