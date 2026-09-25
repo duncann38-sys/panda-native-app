@@ -296,6 +296,7 @@ export default function MapScreen() {
   );
   type WalkingRoute = { distanceMeters: number; durationMinutes: number; polyline?: string; steps?: WalkingStep[] };
   const [navigationActive, setNavigationActive] = useState(false);
+  const [walkStartRequested, setWalkStartRequested] = useState(false);
   const [navigationStepIndex, setNavigationStepIndex] = useState(0);
   const [navigationError, setNavigationError] = useState<string | null>(null);
   const [navigationPosition, setNavigationPosition] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -522,6 +523,7 @@ export default function MapScreen() {
   }, [coordinates, directionsVenue?.id, routeMode, refreshTransit]);
 
   const stopNavigation = () => {
+    setWalkStartRequested(false);
     setNavigationActive(false);
     setNavigationPosition(null);
     setNavigationOrigin(null);
@@ -590,9 +592,35 @@ export default function MapScreen() {
     };
   }, [navigationActive, routeMode, directionsVenue?.id, walkingRoute?.steps]);
 
+  useEffect(() => {
+    if (!walkStartRequested || routeMode !== 'walking' || !directionsVenue) return;
+    if (routeUpdateError) {
+      setWalkStartRequested(false);
+      return;
+    }
+    if (!walkingRoute?.steps?.length) return;
+    setWalkStartRequested(false);
+    if (Platform.OS === 'web') {
+      setNavigationError('Start walking navigation in the Panda Android app.');
+      return;
+    }
+    if (!coordinates) {
+      setNavigationError('Allow location access to start walking navigation.');
+      return;
+    }
+    setNavigationError(null);
+    setNavigationOrigin(coordinates);
+    setNavigationStepIndex(0);
+    lastStepAdvanceAt.current = 0;
+    lastStepAdvancePosition.current = null;
+    previousGpsFix.current = null;
+    setNavigationActive(true);
+  }, [walkStartRequested, routeMode, directionsVenue?.id, routeUpdateError, walkingRoute?.steps, coordinates]);
+
   const changeRouteMode = (mode: 'walking' | 'transit') => {
     if (mode !== 'walking') stopNavigation();
     setRouteMode(mode);
+    if (mode === 'walking' && !navigationActive) setWalkStartRequested(true);
     if (mode === 'transit' && !transitRoute) void refreshTransit();
   };
   const filteredVenues = useMemo(() => {
@@ -899,21 +927,11 @@ export default function MapScreen() {
           navigationStepIndex={navigationStepIndex}
           navigationError={routeUpdateError ?? navigationError}
           onStartNavigation={() => {
-            if (!walkingRoute?.steps?.length || !hasMappedRoute || Platform.OS === 'web') {
+            if (!walkingRoute?.steps?.length) {
               setNavigationError('Step-by-step walking directions are unavailable for this route.');
               return;
             }
-            if (!coordinates) {
-              setNavigationError('Allow location access to start walking navigation.');
-              return;
-            }
-            setNavigationError(null);
-            setNavigationOrigin(coordinates);
-            setNavigationStepIndex(0);
-            lastStepAdvanceAt.current = 0;
-            lastStepAdvancePosition.current = null;
-            previousGpsFix.current = null;
-            setNavigationActive(true);
+            setWalkStartRequested(true);
           }}
           onStopNavigation={stopNavigation}
           onReroute={() => {
