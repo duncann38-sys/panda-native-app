@@ -427,9 +427,9 @@ export default function MapScreen() {
     setTransitRefreshing(true);
     setTransitError(null);
     try {
-      const location = coordinates
-        ? { status: 'ready' as const, coordinates }
-        : await refreshLocation(true);
+      // Transit plans start from the phone's current position, not the
+      // location that was captured when the discovery map first opened.
+      const location = await refreshLocation(!coordinates);
       if (location.status !== 'ready') {
         throw new Error(location.status === 'permission-denied'
           ? 'Allow location access to find nearby departures.'
