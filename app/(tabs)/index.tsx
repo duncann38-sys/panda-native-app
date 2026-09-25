@@ -658,8 +658,8 @@ export default function DiscoverScreen() {
         ? await refreshLocation(requestPermission)
         : { status: 'ready' as const, coordinates };
       if (location.status !== 'ready') {
-        await clearNearbyCache();
         const denied = location.status === 'permission-denied';
+        if (denied) await clearNearbyCache();
         if (cachedNearbyAtRef.current !== null) {
           cachedNearbyAtRef.current = null;
           setLiveVenues([]);
@@ -934,7 +934,6 @@ export default function DiscoverScreen() {
         displayedOrigin.current = null;
       }
     } else if (locationStatus === 'unavailable') {
-      void clearNearbyCache();
       setLiveDiscoveryFailure('LOCATION-UNAVAILABLE');
       setLiveDiscoveryState('error');
       if (cachedNearbyAtRef.current !== null) {
