@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.panda.pandamobile",
-      "versionCode": 35,
+      "versionCode": 36,
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"

@@ -79,8 +79,13 @@ export function SuggestionRow({
           </Text>
         </View>
         <View style={styles.metaRow}>
-          <Text style={[styles.open, { color: venue.openNow ? colors.openForeground : colors.closedForeground }]}>
-            {venue.openNow ? 'Open' : 'Closed'}
+          <Text
+            style={[
+              styles.open,
+              { color: venue.cached ? colors.green700 : venue.openNow ? colors.openForeground : colors.closedForeground },
+            ]}
+          >
+            {venue.cached ? 'Saved · check hours' : venue.openNow ? 'Open' : 'Closed'}
           </Text>
           <Text style={[styles.meta, { color: colors.foreground }]}>{venue.distance}</Text>
           <Text style={[styles.meta, { color: colors.foreground }]}>{venue.walkingTime}</Text>

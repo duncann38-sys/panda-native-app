@@ -53,6 +53,7 @@ type Message = {
   text: string;
   venues?: AiVenue[];
   transit?: AiTransitContext;
+  requestId?: number;
 };
 
 type AiTransitStation = {
@@ -135,10 +136,67 @@ type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 const PANDA_AI_URL = `${PANDA_PRODUCTION_API}/api/panda-ai`;
 const PANDA_AI_VENUE_LIMIT = 15;
+const PANDA_AI_REQUEST_TIMEOUT_MS = 18_000;
+const OPTIONAL_REQUEST_TIMEOUT_MS = 5_000;
+const TRANSIT_REQUEST_TIMEOUT_MS = 9_000;
+const REQUIRED_LOCATION_TIMEOUT_MS = 14_000;
 const suggestions = ['Nearest station & directions', 'What’s open now?', 'Dinner tonight', 'Cocktails nearby', 'Cheap eats'];
+
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit = {},
+  timeoutMs = OPTIONAL_REQUEST_TIMEOUT_MS,
+  externalSignal?: AbortSignal,
+) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortRequest = () => controller.abort();
+  if (externalSignal?.aborted) controller.abort();
+  else externalSignal?.addEventListener('abort', abortRequest, { once: true });
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeout);
+    externalSignal?.removeEventListener('abort', abortRequest);
+  }
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutValue: T) {
+  return new Promise<T>((resolve, reject) => {
+    const timeout = setTimeout(() => resolve(timeoutValue), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timeout);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timeout);
+        reject(error);
+      },
+    );
+  });
+}
 
 function isTransitQuestion(text: string) {
   return /\b(station|tube|underground|train|transport|directions?|get there|how do i get)\b/i.test(text);
+}
+
+function requiresCurrentLocation(text: string) {
+  if (
+    isTransitQuestion(text)
+    || /\b(near(?:by)?|near me|around (?:me|here)|local|closest|nearest|recommend(?:ation)?|suggest(?:ion)?|find me|looking for|where can i|where should i|where to go|where am i|what(?:'s|’s| is) happening here|what(?:'s|’s| is) around here|places?|spots?|somewhere|venues?|restaurants?|caf(?:e|é)s?|coffee|pubs?|bars?|food|eat|dinner|lunch|breakfast|brunch|drinks?|open now|open tonight|tonight|this evening|how far|this area|this place|here)\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  const normalizedText = text.trim();
+  const clearlyGeneral =
+    /^(?:hi|hello|hey|thanks|thank you|cheers|goodbye|bye|ok|okay)[!.?]*$/i.test(normalizedText)
+    || /^(?:what (?:is|are|does|did|was|were)|who (?:is|are|was|were)|when\b|why\b|how (?:do|does|did|is|are|to)\b|explain\b|define\b|translate\b|summari[sz]e\b|write\b|draft\b|calculate\b|solve\b|tell me (?:about|a joke)\b)/i.test(normalizedText);
+
+  // Panda is primarily a local concierge: ambiguous follow-ups should keep
+  // using real location rather than silently returning empty nearby results.
+  return !clearlyGeneral;
 }
 
 function isNearestStationOnly(text: string) {
@@ -155,18 +213,18 @@ async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
     .sort((left, right) => right.name.length - left.name.length)
     .find((venue) => normalizedText.includes(venue.name.toLocaleLowerCase('en-GB')));
   if (catalogVenue) {
-    return enrichAiVenue({
+    return {
       id: catalogVenue.id,
       name: catalogVenue.name,
       type: catalogVenue.type,
       rating: Number.parseFloat(catalogVenue.rating),
       price: catalogVenue.price,
       openNow: catalogVenue.openNow,
-    });
+    };
   }
 
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(text.slice(0, 120))}`,
       { headers: { Accept: 'application/json' } },
     );
@@ -176,7 +234,7 @@ async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
     };
     const result = payload.results?.[0];
     if (!result) return null;
-    return enrichAiVenue({ id: result.id, name: result.name, type: result.category });
+    return { id: result.id, name: result.name, type: result.category };
   } catch {
     return null;
   }
@@ -186,7 +244,7 @@ async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
   if (!venue.id || !venue.id.startsWith('ChI')) return venue;
 
   try {
-    const response = await fetch(
+    const response = await fetchWithTimeout(
       `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/profile?hoursVersion=1`,
       { headers: { Accept: 'application/json' } },
     );
@@ -299,6 +357,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const voiceRef = useRef<VoiceRecognition | null>(null);
   const finalTranscriptRef = useRef('');
   const submittedPromptRef = useRef('');
+  const requestSequenceRef = useRef(0);
+  const currentRequestRef = useRef(0);
+  const chatGenerationRef = useRef(0);
+  const primaryPendingRef = useRef(false);
+  const primaryControllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 50);
@@ -308,90 +371,189 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   useEffect(() => {
     return () => {
       voiceRef.current?.abort?.();
+      currentRequestRef.current = ++requestSequenceRef.current;
+      chatGenerationRef.current += 1;
+      primaryControllerRef.current?.abort();
     };
   }, []);
 
   const sendMessage = async (text = draft) => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
-    const nextMessages = [...messages, { role: 'user' as const, text: trimmed }];
-    setMessages(nextMessages);
+    if (!trimmed || primaryPendingRef.current) return;
+
+    const requestId = ++requestSequenceRef.current;
+    currentRequestRef.current = requestId;
+    primaryPendingRef.current = true;
+    const chatGeneration = chatGenerationRef.current;
+    const conversation = [...messages, { role: 'user' as const, text: trimmed }];
+    const needsCurrentLocation = requiresCurrentLocation(trimmed);
+    setMessages([
+      ...conversation,
+      ...(needsCurrentLocation
+        ? [{ role: 'model' as const, text: 'Getting your current location…', requestId }]
+        : []),
+    ]);
     setDraft('');
     setSending(true);
 
+    const isCurrentRequest = () => currentRequestRef.current === requestId;
+    const updateResult = (update: (message: Message) => Message) => {
+      if (chatGenerationRef.current !== chatGeneration) return;
+      setMessages((current) =>
+        current.map((message) => (message.requestId === requestId ? update(message) : message)),
+      );
+    };
+
     try {
-      const locationState = coordinates
-        ? { status: 'ready' as const, coordinates }
-        : await refreshLocation(true);
-      const requestCoordinates = locationState.coordinates;
-      const response = await fetch(PANDA_AI_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: {
-            parts: [
-              {
-                text:
-                  'You are Panda, a very polite British going-out concierge with a cheeky, playful sense of humour. Be warm, witty and useful, never rude or over-familiar. Reply concisely in two or three short sentences. Recommend only real places returned by the venue search. Do not invent opening hours, addresses, station names, routes or offers. For station and directions questions, say you are checking the customer’s live location; the app will append verified Google transit data.',
-              },
-            ],
-          },
-          contents: nextMessages.map((message) => ({
-            role: message.role,
-            parts: [{ text: message.text }],
-          })),
-          generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
-          ...(requestCoordinates
-            ? {
-                location: {
-                  lat: requestCoordinates.latitude,
-                  lng: requestCoordinates.longitude,
+      let requestCoordinates = coordinates;
+      if (!requestCoordinates) {
+        const locationResult = await withTimeout(
+          refreshLocation(true),
+          needsCurrentLocation ? REQUIRED_LOCATION_TIMEOUT_MS : 2_200,
+          null,
+        );
+        if (!isCurrentRequest()) return;
+        requestCoordinates = locationResult?.coordinates ?? null;
+        if (needsCurrentLocation && !requestCoordinates) {
+          const locationError =
+            locationResult?.status === 'permission-denied'
+              ? 'Panda needs location permission to find nearby places. Allow location access for Panda in your device settings, then try again.'
+              : 'I couldn’t get your current location. Turn on device location services and allow Panda to use your location, then try again.';
+          updateResult((message) => ({ ...message, text: locationError, venues: [] }));
+          return;
+        }
+      }
+
+      const controller = new AbortController();
+      primaryControllerRef.current = controller;
+      const response = await fetchWithTimeout(
+        PANDA_AI_URL,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({
+            systemInstruction: {
+              parts: [
+                {
+                  text:
+                    'You are Panda, a very polite British going-out concierge with a cheeky, playful sense of humour. Be warm, witty and useful, never rude or over-familiar. Reply concisely in two or three short sentences. Recommend only real places returned by the venue search. Do not invent opening hours, addresses, station names, routes or offers. For station and directions questions, say you are checking the customer’s live location; the app will append verified Google transit data.',
                 },
-              }
-            : {}),
-        }),
-      });
+              ],
+            },
+            contents: conversation.map((message) => ({
+              role: message.role,
+              parts: [{ text: message.text }],
+            })),
+            generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
+            ...(requestCoordinates
+              ? {
+                  location: {
+                    lat: requestCoordinates.latitude,
+                    lng: requestCoordinates.longitude,
+                  },
+                }
+              : {}),
+          }),
+        },
+        PANDA_AI_REQUEST_TIMEOUT_MS,
+        controller.signal,
+      );
       const data = (await response.json()) as { text?: string; venues?: AiVenue[] };
       if (!response.ok) throw new Error('Panda AI request failed');
+      if (!isCurrentRequest()) return;
+
+      const isTransit = isTransitQuestion(trimmed);
       const eligibleVenues = (data.venues ?? [])
         .filter((venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5)
         .sort((left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity))
         .slice(0, PANDA_AI_VENUE_LIMIT);
-      let enrichedVenues = await Promise.all(eligibleVenues.map(enrichAiVenue));
+      const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
       const baseReply =
         data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
-      const verifiedHours = enrichedVenues
-        .filter((venue) => venue.name && venue.todayHours)
-        .slice(0, 3)
-        .map((venue) => `${venue.name} — ${venue.todayHours}`)
-        .join('; ');
-      let transit: AiTransitContext | undefined;
-      let transitNote = '';
 
-      if (isTransitQuestion(trimmed)) {
-        const nearestStationOnly = isNearestStationOnly(trimmed);
-        if (nearestStationOnly) enrichedVenues = [];
-        const currentLocation = coordinates
-          ? { status: 'ready' as const, coordinates }
-          : await refreshLocation(true);
-        if (currentLocation.status === 'permission-denied') {
-          transitNote = 'Allow location access and I can find your nearest station and map the journey in Panda.';
-        } else if (currentLocation.status === 'unavailable') {
-          transitNote = 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.';
-        } else if (!currentLocation.coordinates) {
-          transitNote = 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.';
-        } else {
-          const { latitude, longitude } = currentLocation.coordinates;
-          const venue = nearestStationOnly ? null : await resolveTransitVenue(trimmed, enrichedVenues);
-          if (venue?.id && venue.name) {
-            if (!enrichedVenues.some((item) => item.id === venue.id)) {
-              enrichedVenues = [venue, ...enrichedVenues].slice(0, PANDA_AI_VENUE_LIMIT);
+      // Show the primary answer and venue results before any optional live-data lookups.
+      if (needsCurrentLocation) {
+        updateResult((message) => ({
+          ...message,
+          text: isTransit ? 'Checking live station and route information…' : baseReply,
+          venues: initialVenues,
+        }));
+      } else {
+        setMessages((current) => [
+          ...current,
+          { role: 'model', requestId, text: baseReply, venues: initialVenues },
+        ]);
+      }
+      primaryPendingRef.current = false;
+      setSending(false);
+      primaryControllerRef.current = null;
+
+      void Promise.all(initialVenues.map(enrichAiVenue))
+        .then((enrichedVenues) => {
+          const verifiedHours = enrichedVenues
+            .filter((venue) => venue.name && venue.todayHours)
+            .slice(0, 3)
+            .map((venue) => `${venue.name} — ${venue.todayHours}`)
+            .join('; ');
+          updateResult((message) => ({
+            ...message,
+            venues: enrichedVenues,
+            text:
+              !isTransit && verifiedHours && /\b(open|opening|close|closing|hours|time)\b/i.test(trimmed)
+                ? `${baseReply}\n\nToday’s verified hours: ${verifiedHours}.`
+                : message.text,
+          }));
+        })
+        .catch(() => {
+          // Profile enrichment is optional; the primary venue results remain usable.
+        });
+
+      if (isTransit) {
+        void (async () => {
+          try {
+            const currentLocation = requestCoordinates
+              ? { status: 'ready' as const, coordinates: requestCoordinates }
+              : await withTimeout(refreshLocation(true), 13_000, {
+                  status: 'unavailable' as const,
+                  coordinates: null,
+                });
+            if (!isCurrentRequest()) return;
+
+            if (currentLocation.status === 'permission-denied') {
+              updateResult((message) => ({
+                ...message,
+                text: 'Allow location access and I can find your nearest station and map the journey in Panda.',
+              }));
+              return;
             }
-            const transitResponse = await fetch(
-              `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
-              { headers: { Accept: 'application/json' } },
-            );
-            if (transitResponse.ok) {
+            if (!currentLocation.coordinates) {
+              updateResult((message) => ({
+                ...message,
+                text: 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.',
+              }));
+              return;
+            }
+
+            const { latitude, longitude } = currentLocation.coordinates;
+            const venue = isNearestStationOnly(trimmed)
+              ? null
+              : await resolveTransitVenue(trimmed, initialVenues);
+            if (!isCurrentRequest()) return;
+
+            if (venue?.id && venue.name) {
+              const transitResponse = await fetchWithTimeout(
+                `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
+                { headers: { Accept: 'application/json' } },
+                TRANSIT_REQUEST_TIMEOUT_MS,
+              );
+              if (!transitResponse.ok) {
+                updateResult((message) => ({
+                  ...message,
+                  text: 'I couldn’t load live station information for that venue right now.',
+                }));
+                return;
+              }
+
               const liveTransit = (await transitResponse.json()) as {
                 originStation: AiTransitStation;
                 destinationStation: AiTransitStation;
@@ -399,7 +561,14 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 transitRoute: AiTransitContext['transitRoute'];
                 venueWalk: { distanceMeters: number; durationMinutes: number } | null;
               };
-              transit = {
+              if (!liveTransit.originStation || !liveTransit.destinationStation) {
+                updateResult((message) => ({
+                  ...message,
+                  text: 'I couldn’t load live station information for that venue right now.',
+                }));
+                return;
+              }
+              const transit: AiTransitContext = {
                 venueId: venue.id,
                 venueName: venue.name,
                 venue,
@@ -415,51 +584,59 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               const transitText = liveTransit.transitRoute
                 ? `The live station-to-station journey is about ${liveTransit.transitRoute.durationMinutes} minutes.`
                 : 'I’ll show the verified station context while live route details are unavailable.';
-              transitNote = `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`;
-            } else {
-              transitNote = 'I couldn’t load live station information for that venue right now.';
+              updateResult((message) => ({
+                ...message,
+                text: `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`,
+                venues: message.venues?.some((item) => item.id === venue.id)
+                  ? message.venues
+                  : [venue, ...(message.venues ?? [])].slice(0, PANDA_AI_VENUE_LIMIT),
+                transit,
+              }));
+              return;
             }
-          } else {
-            const stationResponse = await fetch(
+
+            const stationResponse = await fetchWithTimeout(
               `${PANDA_RUNTIME_API}/api/partner/transit/nearest?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
               { headers: { Accept: 'application/json' } },
+              TRANSIT_REQUEST_TIMEOUT_MS,
             );
-            if (stationResponse.ok) {
-              const nearest = (await stationResponse.json()) as { station: AiTransitStation };
-              transit = { originStation: nearest.station };
-              transitNote = `Your nearest station right now is ${nearest.station.name}. Tell me where you’re heading and I’ll map the journey in Panda.`;
-            } else {
-              transitNote = 'I couldn’t find a live nearby station right now.';
+            if (!stationResponse.ok) {
+              updateResult((message) => ({ ...message, text: 'I couldn’t find a live nearby station right now.' }));
+              return;
             }
+            const nearest = (await stationResponse.json()) as { station: AiTransitStation };
+            if (!nearest.station) {
+              updateResult((message) => ({ ...message, text: 'I couldn’t find a live nearby station right now.' }));
+              return;
+            }
+            updateResult((message) => ({
+              ...message,
+              text: `Your nearest station right now is ${nearest.station.name}. Tell me where you’re heading and I’ll map the journey in Panda.`,
+              transit: { originStation: nearest.station },
+            }));
+          } catch {
+            updateResult((message) => ({
+              ...message,
+              text: 'Live station and route information is unavailable right now. Please try again shortly.',
+            }));
           }
+        })();
+      }
+    } catch {
+      if (isCurrentRequest()) {
+        const requestError = 'I couldn’t reach the Panda kitchen just now. Check your connection and try again.';
+        if (needsCurrentLocation) {
+          updateResult((message) => ({ ...message, text: requestError, venues: [] }));
+        } else {
+          setMessages((current) => [...current, { role: 'model', requestId, text: requestError }]);
         }
       }
-
-      const replyParts = isTransitQuestion(trimmed) ? [] : [baseReply];
-      if (!isTransitQuestion(trimmed) && verifiedHours && /\b(open|opening|close|closing|hours|time)\b/i.test(trimmed)) {
-        replyParts.push(`Today’s verified hours: ${verifiedHours}.`);
-      }
-      if (transitNote) replyParts.push(transitNote);
-      const replyText = replyParts.join('\n\n');
-      setMessages((current) => [
-        ...current,
-        {
-          role: 'model',
-          text: replyText,
-          venues: enrichedVenues,
-          transit,
-        },
-      ]);
-    } catch {
-      setMessages((current) => [
-        ...current,
-        {
-          role: 'model',
-          text: 'I couldn’t reach the Panda kitchen just now. Check your connection and try again.',
-        },
-      ]);
     } finally {
-      setSending(false);
+      if (isCurrentRequest()) {
+        primaryPendingRef.current = false;
+        primaryControllerRef.current = null;
+        setSending(false);
+      }
     }
   };
 
@@ -636,6 +813,22 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     });
   };
 
+  const clearChat = () => {
+    currentRequestRef.current = ++requestSequenceRef.current;
+    chatGenerationRef.current += 1;
+    primaryPendingRef.current = false;
+    primaryControllerRef.current?.abort();
+    primaryControllerRef.current = null;
+    setSending(false);
+    setDraft('');
+    setMessages([
+      {
+        role: 'model',
+        text: getPandaGreeting(),
+      },
+    ]);
+  };
+
   return (
     <KeyboardAvoidingView
       behavior="padding"
@@ -665,14 +858,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         <Pressable
           accessibilityLabel="Clear Panda AI chat"
           accessibilityRole="button"
-          onPress={() =>
-            setMessages([
-              {
-                role: 'model',
-                text: getPandaGreeting(),
-              },
-            ])
-          }
+          onPress={clearChat}
           style={styles.headerIcon}
         >
           <PandaIcon name="trash" size={19} color={colors.primaryForeground} />

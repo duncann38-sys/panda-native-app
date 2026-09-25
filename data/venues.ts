@@ -17,6 +17,7 @@ export type Venue = {
   feature: string;
   fullAddress: string;
   openNow: boolean;
+  cached?: boolean;
   website: string;
   mapsUri: string;
   phone: string;

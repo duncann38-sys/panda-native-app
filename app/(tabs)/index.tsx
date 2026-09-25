@@ -169,6 +169,16 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
   };
 }
 
+type NearbyVenue = Venue & {
+  discoveryCategories?: DiscoveryCategory[];
+  photoName?: string;
+  photoCount?: number;
+};
+
+function venueDiscoveryCategories(venue: Venue): DiscoveryCategory[] {
+  return (venue as NearbyVenue).discoveryCategories ?? [];
+}
+
 type LiveDiscoveryState = 'loading' | 'ready' | 'permission-denied' | 'error';
 type LiveDiscoveryFailureCode =
   | 'LOCATION-DENIED'
@@ -219,6 +229,44 @@ const MAX_CATEGORY_DISTANCE_METERS = 20_000;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
 const DISCOVERY_CACHE_PREFIX = 'panda-live-discovery-v2';
+const CACHE_REUSE_DISTANCE_METERS = 2_000;
+const NEARBY_CACHE_KEY = 'panda-live-nearby-v1';
+type NearbyCacheEntry = {
+  savedAt: number;
+  area: string;
+  origin: { latitude: number; longitude: number };
+  venues: Venue[];
+};
+
+async function readNearbyCache(): Promise<NearbyCacheEntry | null> {
+  try {
+    const raw = await AsyncStorage.getItem(NEARBY_CACHE_KEY);
+    if (!raw) return null;
+    const value = JSON.parse(raw) as NearbyCacheEntry;
+    if (!Array.isArray(value.venues) || !value.venues.length || !value.area
+      || !Number.isFinite(value.origin?.latitude) || !Number.isFinite(value.origin?.longitude)
+      || !Number.isFinite(value.savedAt) || Date.now() - value.savedAt > DISCOVERY_CACHE_TTL_MS) return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+async function writeNearbyCache(value: NearbyCacheEntry) {
+  try {
+    await AsyncStorage.setItem(NEARBY_CACHE_KEY, JSON.stringify(value));
+  } catch {
+    // An unavailable device cache must never prevent live results.
+  }
+}
+
+async function clearNearbyCache() {
+  try {
+    await AsyncStorage.removeItem(NEARBY_CACHE_KEY);
+  } catch {
+    // An unavailable device cache must never prevent live results.
+  }
+}
 const CATEGORY_SEARCH_QUERIES: Partial<Record<DiscoveryCategory, string>> = {
   Indian: 'indian restaurants',
   Italian: 'italian restaurants',
@@ -299,54 +347,37 @@ async function writeDiscoveryCache(
   }
 }
 
-async function fetchWithTimeout(url: string, timeoutMs: number, init: RequestInit = {}) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const headers = new Headers(init.headers);
-  headers.set('Accept', 'application/json');
-  try {
-    return await expoFetch(url, {
-      method: init.method,
-      headers,
-      body: init.body ?? undefined,
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function fetchDiscoveryPage(
   query: string,
   location: { lat: number; lng: number },
   pageToken?: string,
   expansionRingKm?: number,
   reserveRequest?: () => boolean,
+  transport: 'expo' | 'system' = 'expo',
 ): Promise<DiscoveryPage> {
   if (reserveRequest && !reserveRequest()) {
     return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), transport === 'system' ? 12_000 : 20_000);
   try {
-    const response = await fetchWithTimeout(
-      `${PANDA_DISCOVERY_API}/api/panda-ai`,
-      20_000,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          venuesOnly: true,
-          query,
-          location,
-          ...(pageToken ? { pageToken } : {}),
-          ...(expansionRingKm ? { expansionRingKm } : {}),
-        }),
-      },
-    );
+    const requestInit = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        venuesOnly: true,
+        query,
+        location,
+        ...(pageToken ? { pageToken } : {}),
+        ...(expansionRingKm ? { expansionRingKm } : {}),
+      }),
+      signal: controller.signal,
+    };
+    const response = transport === 'system'
+      ? await fetch(PANDA_DISCOVERY_API + '/api/panda-ai', requestInit)
+      : await expoFetch(PANDA_DISCOVERY_API + '/api/panda-ai', requestInit);
     if (response.ok) {
-      const payload = await response.json() as {
-        venues?: unknown;
-        nextPageToken?: unknown;
-      };
+      const payload = await response.json() as { venues?: unknown; nextPageToken?: unknown };
       if (!Array.isArray(payload.venues)) {
         return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
       }
@@ -365,8 +396,15 @@ async function fetchDiscoveryPage(
       return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
     }
     return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
-  } catch {
-    return { venues: [], failure: { code: 'API-NETWORK' } };
+  } catch (error) {
+    return {
+      venues: [],
+      failure: {
+        code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK',
+      },
+    };
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -378,50 +416,53 @@ async function fetchDiscoveryBatch(
   if (reserveRequest && !reserveRequest()) {
     return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
   }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
   try {
-    const response = await fetchWithTimeout(
-      `${PANDA_DISCOVERY_API}/api/panda-ai`,
-      60_000,
+    const response = await expoFetch(
+      PANDA_DISCOVERY_API + '/api/panda-ai',
       {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'X-Panda-Client': 'android-build-24',
+          Accept: 'application/json',
         },
-        body: JSON.stringify({
-          venuesOnly: true,
-          queries,
-          location,
-        }),
+        body: JSON.stringify({ venuesOnly: true, queries, location }),
+        signal: controller.signal,
       },
     );
-    if (response.ok) {
-      const payload = await response.json() as { venues?: unknown };
-      if (!Array.isArray(payload.venues)) {
-        return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
-      }
+    if (!response.ok) {
       return {
-        venues: payload.venues.flatMap((venue) => {
-          const normalized = normalizeLiveVenueResult(venue, 'live discovery');
-          return normalized ? [normalized] : [];
-        }),
+        venues: [],
+        failure: {
+          code: response.status === 429
+            ? 'API-RATE-LIMIT'
+            : response.status === 401 || response.status === 403 ? 'API-FORBIDDEN' : 'API-RESPONSE',
+          status: response.status,
+        },
       };
     }
-    if (response.status === 429) {
-      return { venues: [], failure: { code: 'API-RATE-LIMIT', status: response.status } };
+    const payload = await response.json() as { venues?: unknown };
+    if (!Array.isArray(payload.venues)) {
+      return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
     }
-    if (response.status === 401 || response.status === 403) {
-      return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
-    }
-    return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
+    return {
+      venues: payload.venues.flatMap((venue) => {
+        const normalized = normalizeLiveVenueResult(venue, 'live discovery');
+        return normalized ? [normalized] : [];
+      }),
+    };
   } catch (error) {
     return {
       venues: [],
-      failure: { code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK' },
+      failure: {
+        code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK',
+      },
     };
+  } finally {
+    clearTimeout(timeout);
   }
 }
-
 function distanceInMeters(
   origin: { latitude: number; longitude: number },
   destination: { latitude: number; longitude: number },
@@ -454,7 +495,7 @@ function liveVenueFromResult(
   result: LiveVenueResult,
   origin: { latitude: number; longitude: number },
   area: string,
-): Venue {
+): NearbyVenue {
   const distanceMeters = distanceInMeters(origin, {
     latitude: result.lat,
     longitude: result.lng,
@@ -479,11 +520,15 @@ function liveVenueFromResult(
     hasMusic: result.hasMusic,
   });
 
+  const category: Venue['category'] = classification.primary === 'Bar'
+    || classification.primary === 'Coffee' || classification.primary === 'Pub'
+    ? classification.primary : 'Restaurant';
+
   return {
     id: result.id,
     name: result.name,
     neighborhood: area,
-    category: classification.primary,
+    category,
     type: result.type,
     distance,
     walkingTime: distanceMeters ? `≈ ${Math.max(1, Math.round(distanceMeters / 80))} min walk` : 'Directions available',
@@ -543,9 +588,13 @@ export default function DiscoverScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
+  const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
   const liveLoadInFlight = useRef(false);
+  const freshResultsLoaded = useRef(false);
+  const displayedOrigin = useRef<{ latitude: number; longitude: number } | null>(null);
+  const cachedNearbyAtRef = useRef<number | null>(null);
   const categoryLoadInFlight = useRef(false);
   const discoveryGeneration = useRef(0);
   const discoveryRequestTimes = useRef<number[]>([]);
@@ -557,6 +606,39 @@ export default function DiscoverScreen() {
     discoveryRequestTimes.current.push(now);
     return true;
   }, []);
+  useEffect(() => {
+    if (locationStatus === 'permission-denied' || locationStatus === 'unavailable') return;
+    let mounted = true;
+    void (async () => {
+      if (Platform.OS === 'web') return;
+      const cached = await readNearbyCache();
+      if (!cached || !mounted || freshResultsLoaded.current) return;
+      let reference = locationStatus === 'ready' ? coordinates : null;
+      if (!reference) {
+        try {
+          const permission = await Location.getForegroundPermissionsAsync();
+          if (!permission.granted) return;
+          const lastKnown = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+          if (lastKnown) {
+            reference = { latitude: lastKnown.coords.latitude, longitude: lastKnown.coords.longitude };
+          }
+        } catch {
+          return;
+        }
+      }
+      if (!reference || !mounted || freshResultsLoaded.current) return;
+      if (distanceInMeters(cached.origin, reference) > CACHE_REUSE_DISTANCE_METERS) {
+        await clearNearbyCache();
+        return;
+      }
+      displayedOrigin.current = cached.origin;
+      cachedNearbyAtRef.current = cached.savedAt;
+      setLiveArea(cached.area);
+      setLiveVenues(cached.venues.map((venue) => ({ ...venue, cached: true })));
+      setCachedNearbyAt(cached.savedAt);
+    })();
+    return () => { mounted = false; };
+  }, [coordinates?.latitude, coordinates?.longitude, locationStatus, setLiveArea, setLiveVenues]);
   const loadLiveVenues = useCallback(async (requestPermission: boolean) => {
     if (liveLoadInFlight.current) return;
     liveLoadInFlight.current = true;
@@ -564,20 +646,45 @@ export default function DiscoverScreen() {
     discoveryGeneration.current = generation;
     setLiveDiscoveryState('loading');
     setLiveDiscoveryFailure(null);
-    setLiveArea('');
-    setLiveVenues([]);
+    if (displayedOrigin.current && cachedNearbyAtRef.current === null) {
+      const savedAt = Date.now();
+      cachedNearbyAtRef.current = savedAt;
+      setCachedNearbyAt(savedAt);
+      setLiveVenues((current) => current.map((venue) => ({ ...venue, cached: true })));
+    }
     loadedCategories.current.clear();
     try {
       const location = requestPermission || !coordinates
         ? await refreshLocation(requestPermission)
         : { status: 'ready' as const, coordinates };
       if (location.status !== 'ready') {
+        await clearNearbyCache();
         const denied = location.status === 'permission-denied';
+        if (cachedNearbyAtRef.current !== null) {
+          cachedNearbyAtRef.current = null;
+          setLiveVenues([]);
+          setLiveArea('');
+          setCachedNearbyAt(null);
+          displayedOrigin.current = null;
+        }
         setLiveDiscoveryFailure(denied ? 'LOCATION-DENIED' : 'LOCATION-UNAVAILABLE');
         setLiveDiscoveryState(denied ? 'permission-denied' : 'error');
         return;
       }
 
+      const origin = {
+        latitude: location.coordinates.latitude,
+        longitude: location.coordinates.longitude,
+      };
+      if (displayedOrigin.current
+        && distanceInMeters(displayedOrigin.current, origin) > CACHE_REUSE_DISTANCE_METERS) {
+        await clearNearbyCache();
+        setLiveVenues([]);
+        setCachedNearbyAt(null);
+        cachedNearbyAtRef.current = null;
+        setLiveArea('');
+        displayedOrigin.current = null;
+      }
       let area = 'your location';
       try {
         const addresses = await Location.reverseGeocodeAsync({
@@ -602,18 +709,22 @@ export default function DiscoverScreen() {
       // One server-batched request replaces fourteen phone requests. This
       // avoids native transport/rate-limit fan-out while preserving the same
       // live query coverage. Category expansion remains separate.
-      const discoveryPages = [await fetchDiscoveryBatch(
+      const batch = await fetchDiscoveryBatch(
         LIVE_DISCOVERY_QUERIES,
         locationPayload,
         reserveDiscoveryRequest,
-      )];
+      );
+      const discoveryPages = [batch];
+      if (!batch.venues.length && batch.failure?.code !== 'API-FORBIDDEN'
+        && batch.failure?.code !== 'API-RATE-LIMIT') {
+        const smallPage = await fetchDiscoveryPage(
+          'restaurants', locationPayload, undefined, undefined, reserveDiscoveryRequest, 'system',
+        );
+        discoveryPages.push(smallPage);
+      }
       if (discoveryGeneration.current !== generation) return;
       const resultBatches = discoveryPages.map((page) => page.venues);
       const requestFailures = discoveryPages.flatMap((page) => page.failure ? [page.failure] : []);
-      const origin = {
-        latitude: location.coordinates.latitude,
-        longitude: location.coordinates.longitude,
-      };
       const uniqueResults = new Map<string, LiveVenueResult>();
       resultBatches.flat().forEach((result) => {
         if (!result.id) return;
@@ -642,10 +753,12 @@ export default function DiscoverScreen() {
         return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS ? [{ result, venue }] : [];
       }).sort((a, b) => a.venue.distanceMeters - b.venue.distanceMeters);
       const hospitalityResults = eligibleResults
-        .filter(({ venue }) => venue.category !== 'Shop' && venue.category !== 'Place of Interest')
+        .filter(({ venue }) => !venueDiscoveryCategories(venue).includes('Shops')
+          && !venueDiscoveryCategories(venue).includes('Places of Interest'))
         .slice(0, LIVE_DISCOVERY_LIMIT);
       const supportingResults = eligibleResults
-        .filter(({ venue }) => venue.category === 'Shop' || venue.category === 'Place of Interest')
+        .filter(({ venue }) => venueDiscoveryCategories(venue).includes('Shops')
+          || venueDiscoveryCategories(venue).includes('Places of Interest'))
         .slice(0, 120);
       const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
       if (!nextVenues.length) {
@@ -661,7 +774,12 @@ export default function DiscoverScreen() {
       }
       setLiveArea(area);
       setLiveVenues(nextVenues);
+      displayedOrigin.current = origin;
+      freshResultsLoaded.current = true;
+      cachedNearbyAtRef.current = null;
+      setCachedNearbyAt(null);
       setLiveDiscoveryState('ready');
+      await writeNearbyCache({ savedAt: Date.now(), area, origin, venues: nextVenues });
     } catch {
       setLiveDiscoveryFailure('API-RESPONSE');
       setLiveDiscoveryState('error');
@@ -730,7 +848,7 @@ export default function DiscoverScreen() {
         }
         const venue = liveVenueFromResult(result, origin, liveArea);
         return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
-          && venue.discoveryCategories?.includes(selectedCategory)
+          && venueDiscoveryCategories(venue).includes(selectedCategory)
           ? [venue]
           : [];
       });
@@ -771,8 +889,8 @@ export default function DiscoverScreen() {
                 ...existing,
                 ...venue,
                 discoveryCategories: [...new Set([
-                  ...(existing.discoveryCategories ?? []),
-                  ...(venue.discoveryCategories ?? []),
+                  ...venueDiscoveryCategories(existing),
+                  ...venueDiscoveryCategories(venue),
                 ])],
               }
             : venue);
@@ -803,6 +921,32 @@ export default function DiscoverScreen() {
     }
   }, [loadLiveVenues, locationStatus]);
 
+  useEffect(() => {
+    if (locationStatus === 'permission-denied') {
+      void clearNearbyCache();
+      setLiveDiscoveryFailure('LOCATION-DENIED');
+      setLiveDiscoveryState('permission-denied');
+      if (cachedNearbyAtRef.current !== null) {
+        cachedNearbyAtRef.current = null;
+        setLiveVenues([]);
+        setLiveArea('');
+        setCachedNearbyAt(null);
+        displayedOrigin.current = null;
+      }
+    } else if (locationStatus === 'unavailable') {
+      void clearNearbyCache();
+      setLiveDiscoveryFailure('LOCATION-UNAVAILABLE');
+      setLiveDiscoveryState('error');
+      if (cachedNearbyAtRef.current !== null) {
+        cachedNearbyAtRef.current = null;
+        setLiveVenues([]);
+        setLiveArea('');
+        setCachedNearbyAt(null);
+        displayedOrigin.current = null;
+      }
+    }
+  }, [locationStatus, setLiveArea, setLiveVenues]);
+
   const orderedCategories = useMemo(() => {
     const hour = new Date().getHours();
     const timeKey = hour < 11 ? 'morning' : hour < 16 ? 'midday' : hour < 23 ? 'evening' : 'late';
@@ -823,8 +967,9 @@ export default function DiscoverScreen() {
     const result = liveVenues.filter((venue) => {
       const matchesCategory =
         category === 'All'
-          ? venue.category !== 'Shop' && venue.category !== 'Place of Interest'
-          : venue.discoveryCategories?.includes(category) === true;
+          ? !venueDiscoveryCategories(venue).includes('Shops')
+            && !venueDiscoveryCategories(venue).includes('Places of Interest')
+          : venueDiscoveryCategories(venue).includes(category);
       const matchesPrice = priceFilter === 'Any price' || poundPrice(venue.price) === priceFilter;
       return matchesCategory && matchesPrice;
     });
@@ -975,10 +1120,14 @@ export default function DiscoverScreen() {
               />
               <Text style={[styles.liveStatusText, { color: colors.mutedForeground }]}>
                 {liveDiscoveryState === 'loading'
-                  ? 'Connecting to live places near you…'
+                  ? cachedNearbyAt !== null
+                    ? 'Saved nearby places · checking for updates…'
+                    : 'Connecting to live places near you…'
                   : liveDiscoveryState === 'ready'
                      ? `Live near ${liveArea} · ${liveVenues.length} places`
-                    : liveDiscoveryState === 'permission-denied'
+                    : cachedNearbyAt !== null
+                      ? 'Showing saved nearby places · live refresh unavailable'
+                      : liveDiscoveryState === 'permission-denied'
                        ? 'Location is off · no venue catalogue substituted'
                        : 'Live places could not load · no venue catalogue substituted'}
               </Text>
