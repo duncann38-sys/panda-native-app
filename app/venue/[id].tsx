@@ -1,7 +1,6 @@
 import { BlurView } from 'expo-blur';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import * as Location from 'expo-location';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useMemo, useRef, useState, useEffect } from 'react';
@@ -25,6 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon, type PandaIconName } from '@/components/PandaIcon';
 import { VenuePhoto, venuePhotosFor, type VenuePhotoItem } from '@/components/VenuePhoto';
 import { PANDA_RUNTIME_API } from '@/constants/services';
+import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 
@@ -41,20 +41,25 @@ type GoogleVenueProfile = {
   }>;
   latitude: number | null;
   longitude: number | null;
+  website: string | null;
+  googleMapsUrl: string;
   source: 'google_places';
 };
 
 type TransitStation = {
-  id: string;
+  id?: string;
   name: string;
-  address: string;
-  googleMapsUrl: string;
-  source: 'google_places';
+  address?: string;
+  latitude: number;
+  longitude: number;
+  googleMapsUrl?: string;
+  source: 'google_places' | 'google_routes';
 };
 
 type TransitWalk = {
   distanceMeters: number;
   durationMinutes: number;
+  polyline?: string;
   source: 'google_routes';
 };
 
@@ -67,6 +72,12 @@ type TransitStep = {
   headsign: string | null;
   departureStop: string | null;
   arrivalStop: string | null;
+  departureTime?: string;
+  arrivalTime?: string;
+  liveDepartureTime?: string;
+  liveUpdatedAt?: string;
+  departurePlatform?: string;
+  polyline?: string;
 };
 
 type TransitContext = {
@@ -77,14 +88,18 @@ type TransitContext = {
     durationMinutes: number;
     distanceMeters: number;
     steps: TransitStep[];
+    updatedAt?: string;
+    polyline?: string;
     source: 'google_routes';
   } | null;
   venueWalk: {
     distanceMeters: number;
     durationMinutes: number;
+    polyline?: string;
     source: 'google_routes';
   } | null;
   source: 'google_places';
+  updatedAt?: string;
 };
 
 type TransitStatus = 'idle' | 'loading' | 'ready' | 'permission-denied' | 'unavailable';
@@ -132,7 +147,16 @@ export default function VenueDetailScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id, fromPlanner, plannerIds, plannerVenues: plannerVenueData, plannerMode, plannerLocation, plannerPrice } = useLocalSearchParams<{
+  const {
+    id,
+    fromPlanner,
+    plannerIds,
+    plannerVenues: plannerVenueData,
+    plannerMode,
+    plannerLocation,
+    plannerPrice,
+    venueData,
+  } = useLocalSearchParams<{
     id: string;
     fromPlanner?: string;
     plannerIds?: string;
@@ -140,17 +164,26 @@ export default function VenueDetailScreen() {
     plannerMode?: string;
     plannerLocation?: string;
     plannerPrice?: string;
+    venueData?: string;
   }>();
+  const { coordinates, refreshLocation } = useLiveVenues();
+  const dynamicVenue = useMemo(() => {
+    if (!venueData) return null;
+    try {
+      const parsed = JSON.parse(String(venueData)) as Venue;
+      return parsed?.id === id ? parsed : null;
+    } catch {
+      return null;
+    }
+  }, [id, venueData]);
   const dynamicPlannerVenues = useMemo(
     () => parsePlannerVenueData(String(plannerVenueData || '')),
     [plannerVenueData],
   );
-  const venue = getVenue(id ?? '') ?? dynamicPlannerVenues.find((item) => item.id === id);
+  const venue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
-  // Up to 5 photos as requested
-  const allPhotos = venuePhotosFor(venue?.id ?? '');
-  const photos = allPhotos.slice(0, 5);
+  const photos = venue ? venuePhotosFor(venue) : [];
 
   const [heroActive, setHeroActive] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -215,19 +248,18 @@ export default function VenueDetailScreen() {
 
     void (async () => {
       try {
-        const permission = await Location.requestForegroundPermissionsAsync();
+        const location = coordinates
+          ? { status: 'ready' as const, coordinates }
+          : await refreshLocation(true);
         if (!active) return;
-        if (permission.status !== 'granted') {
+        if (location.status === 'permission-denied') {
           setTransitStatus('permission-denied');
           return;
         }
-
-        const position = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        });
+        if (location.status !== 'ready') throw new Error('Current location unavailable');
         if (!active) return;
         const response = await fetch(
-          `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/transit?latitude=${encodeURIComponent(position.coords.latitude)}&longitude=${encodeURIComponent(position.coords.longitude)}`,
+          `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/transit?latitude=${encodeURIComponent(location.coordinates.latitude)}&longitude=${encodeURIComponent(location.coordinates.longitude)}`,
           { signal: controller.signal },
         );
         if (!response.ok) throw new Error('Live transit information unavailable');
@@ -246,7 +278,7 @@ export default function VenueDetailScreen() {
       active = false;
       controller.abort();
     };
-  }, [transitRetryKey, venue?.id]);
+  }, [coordinates, refreshLocation, transitRetryKey, venue?.id]);
 
   if (!venue) {
     return (
@@ -267,6 +299,32 @@ export default function VenueDetailScreen() {
   const displayedAddress = googleProfile?.address || venue.fullAddress;
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
+  const openWalkingDirections = () => {
+    router.push({
+      pathname: '/map',
+      params: {
+        directionsVenueId: venue.id,
+        directionsVenueData: JSON.stringify({
+          ...venue,
+          latitude: googleProfile?.latitude ?? venue.latitude,
+          longitude: googleProfile?.longitude ?? venue.longitude,
+        }),
+        directionsReturn: 'back',
+        plannerLocation: venue.neighborhood || 'Current location',
+      },
+    });
+  };
+  const officialVenueUrl = googleProfile?.website || venue.website;
+  const openVenuePage = (kind: 'menu' | 'reservation') => {
+    router.push({
+      pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
+      params: {
+        id: venue.id,
+        venueData: JSON.stringify(venue),
+        pageUrl: kind === 'menu' ? officialVenueUrl : '',
+      },
+    });
+  };
   const openTransitRoute = () => {
     if (!transitContext) return;
     router.push({
@@ -275,6 +333,11 @@ export default function VenueDetailScreen() {
         directionsVenueId: venue.id,
         transitOriginName: transitContext.originStation.name,
         transitDestinationName: transitContext.destinationStation.name,
+        transitOriginCoordinates: `${transitContext.originStation.latitude},${transitContext.originStation.longitude}`,
+        transitDestinationCoordinates: `${transitContext.destinationStation.latitude},${transitContext.destinationStation.longitude}`,
+        transitOriginPolyline: transitContext.originWalk?.polyline ?? '',
+        transitPolyline: transitContext.transitRoute?.polyline ?? '',
+        transitDestinationPolyline: transitContext.venueWalk?.polyline ?? '',
         transitOriginWalkMinutes: transitContext.originWalk?.durationMinutes.toString() ?? '',
         transitOriginWalkDistance: transitContext.originWalk?.distanceMeters.toString() ?? '',
         transitDurationMinutes: transitContext.transitRoute?.durationMinutes.toString() ?? '',
@@ -284,13 +347,19 @@ export default function VenueDetailScreen() {
           : '',
         transitWalkMinutes: transitContext.venueWalk?.durationMinutes.toString() ?? '',
         transitWalkDistance: transitContext.venueWalk?.distanceMeters.toString() ?? '',
+        transitUpdatedAt: transitContext.transitRoute?.updatedAt ?? transitContext.updatedAt ?? '',
+        directionsVenueData: JSON.stringify({
+          ...venue,
+          latitude: googleProfile?.latitude ?? venue.latitude,
+          longitude: googleProfile?.longitude ?? venue.longitude,
+        }),
+        plannerIds: plannerOpen ? plannerIds || '' : '',
+        plannerVenues: plannerOpen ? String(plannerVenueData || '') : '',
+        plannerLocation: plannerOpen ? plannerLocation || 'Current location' : venue.neighborhood,
         ...(plannerOpen
           ? {
-              plannerIds: plannerIds || '',
-               plannerVenues: String(plannerVenueData || ''),
               plannerMode: plannerMode || 'night',
               plannerPrice: plannerPrice || '££',
-              plannerLocation: plannerLocation || 'Current location',
             }
           : {}),
       },
@@ -320,8 +389,8 @@ export default function VenueDetailScreen() {
   const heroHeight = Math.min(430, Math.max(290, height * 0.34));
 
   const backToPlanner = () => {
-    router.replace({
-      pathname: '/',
+    const plannerHref = {
+      pathname: '/' as const,
       params: {
         openPlanner: plannerMode || 'night',
         plannerIds: plannerIds || '',
@@ -329,7 +398,12 @@ export default function VenueDetailScreen() {
         plannerLocation: plannerLocation || 'Current location',
         plannerPrice: plannerPrice || '££',
       },
-    });
+    };
+    if (router.canDismiss()) {
+      router.dismissTo(plannerHref);
+      return;
+    }
+    router.replace(plannerHref);
   };
 
   if (plannerOpen) {
@@ -345,9 +419,9 @@ export default function VenueDetailScreen() {
         colors={colors}
         insets={insets}
         onBack={backToPlanner}
-        onDirections={() => router.push(`/venue/${venue.id}/directions`)}
-        onMenu={() => router.push(`/venue/${venue.id}/menu`)}
-        onReservation={() => router.push(`/venue/${venue.id}/reservation`)}
+        onDirections={openWalkingDirections}
+        onMenu={() => openVenuePage('menu')}
+        onReservation={() => openVenuePage('reservation')}
         plannerMode={plannerMode || 'night'}
         plannerVenues={plannerBackgroundVenues}
         photos={photos}
@@ -576,7 +650,7 @@ export default function VenueDetailScreen() {
               full
               background={colors.honey}
               foreground={colors.honeyInk}
-              onPress={() => router.push(`/venue/${venue.id}/menu`)}
+              onPress={() => openVenuePage('menu')}
             />
             <ActionButton
               label="Reservations"
@@ -584,14 +658,14 @@ export default function VenueDetailScreen() {
               full
               background={colors.goldSoft}
               foreground={colors.honeyInk}
-              onPress={() => router.push(`/venue/${venue.id}/reservation`)}
+              onPress={() => openVenuePage('reservation')}
             />
             <ActionButton
               label="Directions"
                 icon="navigate"
               background={colors.green700}
               foreground={colors.primaryForeground}
-              onPress={() => router.push(`/venue/${venue.id}/directions`)}
+              onPress={openWalkingDirections}
             />
             {venue.phone ? (
               <ActionButton
@@ -702,7 +776,7 @@ function PlannerVenuePreview({
           {plannerVenues.map((plannerVenue, index) => (
             <View key={`${plannerVenue.id}-${index}`} style={[styles.plannerBackdropStop, { backgroundColor: colors.card }]}>
               <View style={styles.plannerBackdropPhoto}>
-                <VenuePhoto venueId={plannerVenue.id} venueName={plannerVenue.name} height={73} />
+                <VenuePhoto venue={plannerVenue} venueId={plannerVenue.id} venueName={plannerVenue.name} height={73} />
               </View>
               <View style={styles.plannerBackdropStopCopy}>
                 <Text style={[styles.plannerBackdropStopLabel, { color: colors.green700 }]}>
@@ -742,7 +816,7 @@ function PlannerVenuePreview({
               width={previewWidth}
             />
           ) : (
-            <VenuePhoto venueId={venue.id} venueName={venue.name} height={245} />
+            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={245} />
           )}
           <LinearGradient
             colors={['rgba(5,26,20,0.02)', 'rgba(5,26,20,0.62)']}

@@ -1,12 +1,9 @@
 import { Image } from 'expo-image';
-import * as Location from 'expo-location';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -15,17 +12,21 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { PandaIcon } from '@/components/PandaIcon';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
-import { venues as pandaVenues } from '@/data/venues';
+import { useLiveVenues } from '@/context/live-venues';
+import { venues as pandaVenues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 
 type AiVenue = {
   id?: string;
   name?: string;
+  address?: string;
+  fullAddress?: string;
   type?: string;
   rating?: number;
   distanceMeters?: number;
@@ -35,6 +36,7 @@ type AiVenue = {
   mapsUri?: string;
   photoName?: string;
   photoAttribution?: string;
+  photoCount?: number;
   openNow?: boolean;
   todayHours?: string;
 };
@@ -57,11 +59,14 @@ type AiTransitStation = {
   id: string;
   name: string;
   address: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 type AiRouteWalk = {
   distanceMeters: number;
   durationMinutes: number;
+  polyline?: string;
 };
 
 type AiTransitStep = {
@@ -73,11 +78,18 @@ type AiTransitStep = {
   headsign: string | null;
   departureStop: string | null;
   arrivalStop: string | null;
+  departureTime?: string;
+  arrivalTime?: string;
+  liveDepartureTime?: string;
+  liveUpdatedAt?: string;
+  departurePlatform?: string;
+  polyline?: string;
 };
 
 type AiTransitContext = {
   venueId?: string;
   venueName?: string;
+  venue?: AiVenue;
   originStation: AiTransitStation;
   destinationStation?: AiTransitStation;
   originWalk?: AiRouteWalk | null;
@@ -85,10 +97,13 @@ type AiTransitContext = {
     durationMinutes: number;
     distanceMeters: number;
     steps: AiTransitStep[];
+    updatedAt?: string;
+    polyline?: string;
   } | null;
   venueWalk?: {
     distanceMeters: number;
     durationMinutes: number;
+    polyline?: string;
   } | null;
 };
 
@@ -119,26 +134,16 @@ type VoiceRecognition = {
 type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 const PANDA_AI_URL = `${PANDA_PRODUCTION_API}/api/panda-ai`;
+const PANDA_AI_VENUE_LIMIT = 15;
 const suggestions = ['Nearest station & directions', 'What’s open now?', 'Dinner tonight', 'Cocktails nearby', 'Cheap eats'];
 
 function isTransitQuestion(text: string) {
   return /\b(station|tube|underground|train|transport|directions?|get there|how do i get)\b/i.test(text);
 }
 
-async function getCurrentLocation() {
-  const permission = await Location.requestForegroundPermissionsAsync();
-  if (permission.status !== 'granted') return { status: 'permission-denied' as const };
-
-  try {
-    const position = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    return {
-      status: 'ready' as const,
-      latitude: position.coords.latitude,
-      longitude: position.coords.longitude,
-    };
-  } catch {
-    return { status: 'unavailable' as const };
-  }
+function isNearestStationOnly(text: string) {
+  return /\b(nearest|closest|local)\s+(?:tube|underground|train|rail)?\s*station\b/i.test(text)
+    && !/\b(?:to|for)\s+[a-z0-9]/i.test(text);
 }
 
 async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
@@ -200,6 +205,56 @@ async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
   }
 }
 
+function aiVenueToVenue(venue: AiVenue): Venue | null {
+  if (!venue.id || !venue.name) return null;
+  const normalizedType = venue.type?.toLowerCase() ?? '';
+  const category: Venue['category'] =
+    normalizedType.includes('coffee') || normalizedType.includes('cafe')
+      ? 'Coffee'
+      : normalizedType.includes('pub')
+        ? 'Pub'
+        : normalizedType.includes('bar')
+          ? 'Bar'
+          : 'Restaurant';
+  const mapsUri =
+    venue.mapsUri
+    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.name)}&query_place_id=${encodeURIComponent(venue.id)}`;
+
+  return {
+    id: venue.id,
+    name: venue.name,
+    neighborhood: 'Live nearby',
+    category,
+    type: venue.type || 'Local venue',
+    distance:
+      typeof venue.distanceMeters === 'number'
+        ? venue.distanceMeters < 1000
+          ? `${Math.round(venue.distanceMeters)} m`
+          : `${(venue.distanceMeters / 1000).toFixed(1)} km`
+        : 'Nearby',
+    walkingTime:
+      typeof venue.distanceMeters === 'number'
+        ? `≈ ${Math.max(1, Math.round(venue.distanceMeters / 80))} min walk`
+        : 'Directions available',
+    rating: venue.rating?.toFixed(1) ?? '',
+    ratingCount: 0,
+    price: venue.price || '££',
+    distanceMeters: venue.distanceMeters ?? 0,
+    description: `Live Panda recommendation for ${venue.name}.`,
+    hours: venue.todayHours || 'Live hours unavailable',
+    feature: venue.type || 'Panda pick',
+    fullAddress: venue.fullAddress || venue.address || venue.name,
+    openNow: venue.openNow === true,
+    website: venue.website || mapsUri,
+    mapsUri,
+    phone: '',
+    premium: false,
+    banging: false,
+    promoted: false,
+    photoAttributions: venue.photoAttribution ? [venue.photoAttribution] : [],
+  };
+}
+
 function getPandaGreeting(date = new Date()) {
   const hour = date.getHours();
 
@@ -224,11 +279,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const colors = useColors(isNight ? 'dark' : undefined);
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { coordinates, refreshLocation } = useLiveVenues();
   const { prompt: promptParam } = useLocalSearchParams<{ prompt?: string | string[] }>();
   const initialPrompt = Array.isArray(promptParam) ? promptParam[0]?.trim() ?? '' : promptParam?.trim() ?? '';
-  const androidBottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0;
-  const tabBarClearance =
-    embedded && Platform.OS !== 'ios' ? (Platform.OS === 'web' ? 84 : 78 + androidBottomInset) : 0;
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'model',
@@ -267,6 +320,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     setSending(true);
 
     try {
+      const locationState = coordinates
+        ? { status: 'ready' as const, coordinates }
+        : await refreshLocation(true);
+      const requestCoordinates = locationState.coordinates;
       const response = await fetch(PANDA_AI_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
@@ -275,7 +332,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             parts: [
               {
                 text:
-                  'You are Panda, a warm, concise London going-out concierge. Reply in two short helpful sentences. Recommend real places returned by the venue search when available. Do not invent opening hours, addresses, station names, or routes. For station and directions questions, say you are checking the customer’s live location; the app will append verified Google transit data.',
+                  'You are Panda, a very polite British going-out concierge with a cheeky, playful sense of humour. Be warm, witty and useful, never rude or over-familiar. Reply concisely in two or three short sentences. Recommend only real places returned by the venue search. Do not invent opening hours, addresses, station names, routes or offers. For station and directions questions, say you are checking the customer’s live location; the app will append verified Google transit data.',
               },
             ],
           },
@@ -284,11 +341,23 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             parts: [{ text: message.text }],
           })),
           generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
+          ...(requestCoordinates
+            ? {
+                location: {
+                  lat: requestCoordinates.latitude,
+                  lng: requestCoordinates.longitude,
+                },
+              }
+            : {}),
         }),
       });
       const data = (await response.json()) as { text?: string; venues?: AiVenue[] };
       if (!response.ok) throw new Error('Panda AI request failed');
-      let enrichedVenues = await Promise.all((data.venues ?? []).slice(0, 8).map(enrichAiVenue));
+      const eligibleVenues = (data.venues ?? [])
+        .filter((venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5)
+        .sort((left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity))
+        .slice(0, PANDA_AI_VENUE_LIMIT);
+      let enrichedVenues = await Promise.all(eligibleVenues.map(enrichAiVenue));
       const baseReply =
         data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
       const verifiedHours = enrichedVenues
@@ -300,19 +369,26 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       let transitNote = '';
 
       if (isTransitQuestion(trimmed)) {
-        const currentLocation = await getCurrentLocation();
+        const nearestStationOnly = isNearestStationOnly(trimmed);
+        if (nearestStationOnly) enrichedVenues = [];
+        const currentLocation = coordinates
+          ? { status: 'ready' as const, coordinates }
+          : await refreshLocation(true);
         if (currentLocation.status === 'permission-denied') {
           transitNote = 'Allow location access and I can find your nearest station and map the journey in Panda.';
         } else if (currentLocation.status === 'unavailable') {
           transitNote = 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.';
+        } else if (!currentLocation.coordinates) {
+          transitNote = 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.';
         } else {
-          const venue = await resolveTransitVenue(trimmed, enrichedVenues);
+          const { latitude, longitude } = currentLocation.coordinates;
+          const venue = nearestStationOnly ? null : await resolveTransitVenue(trimmed, enrichedVenues);
           if (venue?.id && venue.name) {
             if (!enrichedVenues.some((item) => item.id === venue.id)) {
-              enrichedVenues = [venue, ...enrichedVenues].slice(0, 8);
+              enrichedVenues = [venue, ...enrichedVenues].slice(0, PANDA_AI_VENUE_LIMIT);
             }
             const transitResponse = await fetch(
-              `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(currentLocation.latitude)}&longitude=${encodeURIComponent(currentLocation.longitude)}`,
+              `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
               { headers: { Accept: 'application/json' } },
             );
             if (transitResponse.ok) {
@@ -326,6 +402,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               transit = {
                 venueId: venue.id,
                 venueName: venue.name,
+                venue,
                 originStation: liveTransit.originStation,
                 destinationStation: liveTransit.destinationStation,
                 originWalk: liveTransit.originWalk,
@@ -344,7 +421,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             }
           } else {
             const stationResponse = await fetch(
-              `${PANDA_RUNTIME_API}/api/partner/transit/nearest?latitude=${encodeURIComponent(currentLocation.latitude)}&longitude=${encodeURIComponent(currentLocation.longitude)}`,
+              `${PANDA_RUNTIME_API}/api/partner/transit/nearest?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
               { headers: { Accept: 'application/json' } },
             );
             if (stationResponse.ok) {
@@ -464,12 +541,23 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
   const openAiTransitDirections = (transit: AiTransitContext) => {
     if (!transit.venueId || !transit.venueName || !transit.destinationStation) return;
+    const routeVenue = aiVenueToVenue(
+      transit.venue ?? { id: transit.venueId, name: transit.venueName, type: 'Live venue' },
+    );
     router.push({
       pathname: '/map',
       params: {
         directionsVenueId: transit.venueId,
+        directionsVenueData: routeVenue ? JSON.stringify(routeVenue) : '',
+        directionsReturn: 'back',
+        plannerLocation: 'Current location',
         transitOriginName: transit.originStation.name,
         transitDestinationName: transit.destinationStation.name,
+        transitOriginCoordinates: `${transit.originStation.latitude},${transit.originStation.longitude}`,
+        transitDestinationCoordinates: `${transit.destinationStation.latitude},${transit.destinationStation.longitude}`,
+        transitOriginPolyline: transit.originWalk?.polyline ?? '',
+        transitPolyline: transit.transitRoute?.polyline ?? '',
+        transitDestinationPolyline: transit.venueWalk?.polyline ?? '',
         transitOriginWalkMinutes: transit.originWalk?.durationMinutes.toString() ?? '',
         transitOriginWalkDistance: transit.originWalk?.distanceMeters.toString() ?? '',
         transitDurationMinutes: transit.transitRoute?.durationMinutes.toString() ?? '',
@@ -479,13 +567,79 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           : '',
         transitWalkMinutes: transit.venueWalk?.durationMinutes.toString() ?? '',
         transitWalkDistance: transit.venueWalk?.distanceMeters.toString() ?? '',
+        transitUpdatedAt: transit.transitRoute?.updatedAt ?? '',
+      },
+    });
+  };
+
+  const openAiVenue = (aiVenue: AiVenue) => {
+    const venue = aiVenueToVenue(aiVenue);
+    if (!venue) return;
+    router.push({
+      pathname: '/venue/[id]',
+      params: {
+        id: venue.id,
+        venueData: JSON.stringify(venue),
+        plannerLocation: 'Current location',
+      },
+    });
+  };
+
+  const openAiVenueDirections = async (aiVenue: AiVenue) => {
+    const venue = aiVenueToVenue(aiVenue);
+    if (!venue) return;
+    const locationState = coordinates
+      ? { status: 'ready' as const, coordinates }
+      : await refreshLocation(true);
+    const currentLocation = locationState.coordinates;
+    if (currentLocation) {
+      const { latitude, longitude } = currentLocation;
+      try {
+        const transitResponse = await fetch(
+          `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
+          { headers: { Accept: 'application/json' } },
+        );
+        if (transitResponse.ok) {
+          const liveTransit = (await transitResponse.json()) as {
+            originStation: AiTransitStation;
+            destinationStation: AiTransitStation;
+            originWalk: AiRouteWalk | null;
+            transitRoute: AiTransitContext['transitRoute'];
+            venueWalk: { distanceMeters: number; durationMinutes: number } | null;
+          };
+          if (liveTransit.originStation && liveTransit.destinationStation) {
+            openAiTransitDirections({
+              venueId: venue.id,
+              venueName: venue.name,
+              venue: aiVenue,
+              originStation: liveTransit.originStation,
+              destinationStation: liveTransit.destinationStation,
+              originWalk: liveTransit.originWalk,
+              transitRoute: liveTransit.transitRoute,
+              venueWalk: liveTransit.venueWalk,
+            });
+            return;
+          }
+        }
+      } catch {
+        // Keep the established map directions route as a safe fallback.
+      }
+    }
+    router.push({
+      pathname: '/map',
+      params: {
+        directionsVenueId: venue.id,
+        directionsVenueData: JSON.stringify(venue),
+        directionsReturn: 'back',
+        plannerLocation: 'Current location',
       },
     });
   };
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior="padding"
+      keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
       <View style={[styles.header, { backgroundColor: colors.green800, paddingTop: insets.top + 12 }]}>
@@ -555,8 +709,26 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             </View>
             {message.venues?.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
-                {message.venues.slice(0, 8).map((venue, venueIndex) => (
-                  <AiVenueCard key={`${venue.id ?? venue.name}-${venueIndex}`} venue={venue} colors={colors} />
+                {message.venues.slice(0, PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => (
+                  <AiVenueCard
+                    key={`${venue.id ?? venue.name}-${venueIndex}`}
+                    venue={venue}
+                    colors={colors}
+                    onDirections={() => void openAiVenueDirections(venue)}
+                    onMenu={() => {
+                      const routeVenue = aiVenueToVenue(venue);
+                      if (!routeVenue) return;
+                      router.push({
+                        pathname: '/venue/[id]/menu',
+                        params: {
+                          id: routeVenue.id,
+                          venueData: JSON.stringify(routeVenue),
+                          pageUrl: venue.menuLink || venue.website || routeVenue.website,
+                        },
+                      });
+                    }}
+                    onOpen={() => openAiVenue(venue)}
+                  />
                 ))}
               </ScrollView>
             ) : null}
@@ -617,7 +789,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           {
              backgroundColor: isNight ? colors.input : colors.background,
             borderTopColor: colors.border,
-            paddingBottom: Math.max(12, insets.bottom + 8) + tabBarClearance,
+            marginBottom:
+              embedded && Platform.OS === 'android'
+                ? 78 + Math.max(insets.bottom, 24)
+                : 0,
+            paddingBottom: embedded ? 12 : Math.max(12, insets.bottom + 8),
           },
         ]}
       >
@@ -680,7 +856,19 @@ export default function PandaAiRoute() {
   return <PandaAiScreen />;
 }
 
-function AiVenueCard({ venue, colors }: { venue: AiVenue; colors: ReturnType<typeof useColors> }) {
+function AiVenueCard({
+  venue,
+  colors,
+  onDirections,
+  onMenu,
+  onOpen,
+}: {
+  venue: AiVenue;
+  colors: ReturnType<typeof useColors>;
+  onDirections: () => void;
+  onMenu: () => void;
+  onOpen: () => void;
+}) {
   const photoUri = venue.photoName
     ? `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(venue.photoName)}&max=500`
     : null;
@@ -700,42 +888,54 @@ function AiVenueCard({ venue, colors }: { venue: AiVenue; colors: ReturnType<typ
 
   return (
     <View style={[styles.resultCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      {photoUri ? (
-        <Image source={{ uri: photoUri }} contentFit="cover" style={styles.resultPhoto} />
-      ) : (
-        <View style={[styles.resultPhotoFallback, { backgroundColor: colors.ivory }]}>
-          <PandaLogo size={48} />
-        </View>
-      )}
-      <View style={styles.resultBody}>
-        <Text numberOfLines={1} style={[styles.resultName, { color: colors.foreground }]}>
-          {venue.name ?? 'Panda pick'}
-        </Text>
-        <Text numberOfLines={1} style={[styles.resultMeta, { color: colors.mutedForeground }]}>
-          {venue.rating ? `★ ${venue.rating}` : venue.type ?? 'Local venue'}
-          {distance ? ` · ${distance}` : ''}
-          {venue.price ? ` · ${venue.price}` : ''}
-        </Text>
-        {openingText ? (
-          <View style={[styles.resultHours, { backgroundColor: colors.honeySoft, borderColor: colors.goldLine }]}>
-            <PandaIcon name="clock" size={12} color={colors.honeyInk} />
-            <Text numberOfLines={2} style={[styles.resultHoursText, { color: colors.honeyInk }]}>
-              {openingText}
-            </Text>
+      <Pressable
+        accessibilityLabel={`Open ${venue.name ?? 'Panda recommendation'}`}
+        accessibilityHint="Opens live venue details"
+        accessibilityRole="button"
+        onPress={onOpen}
+        style={({ pressed }) => pressed && styles.pressed}
+      >
+        {photoUri ? (
+          <Image source={{ uri: photoUri }} contentFit="cover" style={styles.resultPhoto} />
+        ) : (
+          <View style={[styles.resultPhotoFallback, { backgroundColor: colors.ivory }]}>
+            <PandaLogo size={48} />
           </View>
-        ) : null}
+        )}
+        <View style={styles.resultBody}>
+          <Text numberOfLines={1} style={[styles.resultName, { color: colors.foreground }]}>
+            {venue.name ?? 'Panda pick'}
+          </Text>
+          <Text numberOfLines={1} style={[styles.resultMeta, { color: colors.mutedForeground }]}>
+            {venue.rating ? `★ ${venue.rating}` : venue.type ?? 'Local venue'}
+            {distance ? ` · ${distance}` : ''}
+            {venue.price ? ` · ${venue.price}` : ''}
+          </Text>
+          {openingText ? (
+            <View style={[styles.resultHours, { backgroundColor: colors.honeySoft, borderColor: colors.goldLine }]}>
+              <PandaIcon name="clock" size={12} color={colors.honeyInk} />
+              <Text numberOfLines={2} style={[styles.resultHoursText, { color: colors.honeyInk }]}>
+                {openingText}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </Pressable>
+      <View style={[styles.resultActions, styles.resultActionsInset]}>
         <View style={styles.resultActions}>
           {venue.mapsUri ? (
             <Pressable
-              onPress={() => Linking.openURL(venue.mapsUri as string)}
+              accessibilityLabel={`Directions to ${venue.name ?? 'venue'}`}
+              accessibilityRole="button"
+              onPress={onDirections}
               style={[styles.resultPrimaryAction, { backgroundColor: colors.gold, borderColor: colors.goldLine }]}
             >
-              <PandaIcon name="navigate" size={12} color={colors.goldDeep} />
-              <Text style={[styles.resultActionText, { color: colors.goldDeep }]}>Directions</Text>
+              <PandaIcon name="navigate" size={12} color="#171006" />
+              <Text style={[styles.resultActionText, styles.embossedGoldText]}>Directions</Text>
             </Pressable>
           ) : null}
           {venue.website || venue.menuLink ? (
-            <Pressable onPress={() => Linking.openURL((venue.menuLink || venue.website) as string)}>
+            <Pressable accessibilityRole="button" onPress={onMenu}>
               <Text style={[styles.resultActionText, { color: colors.green700 }]}>Menu</Text>
             </Pressable>
           ) : null}
@@ -823,7 +1023,7 @@ function AiTransitCard({
           ]}
         >
           <PandaIcon name="navigate" size={15} color={colors.goldDeep} />
-          <Text style={[styles.aiTransitActionText, { color: colors.goldDeep }]}>Get directions in Panda</Text>
+          <Text style={[styles.aiTransitActionText, styles.embossedGoldText]}>Get directions in Panda</Text>
         </Pressable>
       ) : null}
     </View>
@@ -1030,6 +1230,17 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 9,
   },
+  resultActionsInset: {
+    marginTop: 0,
+    paddingBottom: 11,
+    paddingHorizontal: 11,
+  },
+  embossedGoldText: {
+    color: '#171006',
+    textShadowColor: 'rgba(255, 247, 196, 0.9)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 1,
+  },
   resultHours: {
     alignItems: 'center',
     borderRadius: 9,
@@ -1081,10 +1292,14 @@ const styles = StyleSheet.create({
   composer: {
     alignItems: 'center',
     borderTopWidth: 1,
+    elevation: 12,
     flexDirection: 'row',
+    flexShrink: 0,
     gap: 9,
     paddingHorizontal: 14,
     paddingTop: 10,
+    position: 'relative',
+    zIndex: 40,
   },
   input: {
     borderRadius: 16,
