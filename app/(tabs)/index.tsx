@@ -106,6 +106,7 @@ type LiveVenueResult = {
   hasMusic?: boolean;
   sourceQueries?: string[];
   categories?: DiscoveryCategory[];
+  cachedAt?: number;
 };
 
 function stringValue(value: unknown): string {
@@ -166,6 +167,7 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
     hasMusic: record.hasMusic === true,
     sourceQueries: [...new Set([...stringArray(record.sourceQueries), query])],
     categories: stringArray(record.categories) as DiscoveryCategory[],
+    cachedAt: finiteNumber(record.cachedAt),
   };
 }
 
@@ -188,6 +190,7 @@ type LiveDiscoveryFailureCode =
   | 'API-NETWORK'
   | 'API-TIMEOUT'
   | 'API-RESPONSE'
+  | 'API-QUOTA'
   | 'API-EMPTY'
   | 'FILTER-EMPTY';
 type DiscoveryPageFailure = {
@@ -417,9 +420,11 @@ async function fetchDiscoveryBatch(
     return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
   }
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15_000);
+  const timeout = setTimeout(() => controller.abort(), 20_000);
   try {
-    const response = await expoFetch(
+    // Build 32's standard React Native transport worked on the device.
+    // Keep the batched server request, but do not use expo/fetch for its body.
+    const response = await fetch(
       PANDA_DISCOVERY_API + '/api/panda-ai',
       {
         method: 'POST',
@@ -435,14 +440,21 @@ async function fetchDiscoveryBatch(
       return {
         venues: [],
         failure: {
-          code: response.status === 429
+          code: response.status === 503
+            ? 'API-QUOTA'
+            : response.status === 429
             ? 'API-RATE-LIMIT'
             : response.status === 401 || response.status === 403 ? 'API-FORBIDDEN' : 'API-RESPONSE',
           status: response.status,
         },
       };
     }
-    const payload = await response.json() as { venues?: unknown };
+    let payload: { venues?: unknown };
+    try {
+      payload = await response.json() as { venues?: unknown };
+    } catch {
+      return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
+    }
     if (!Array.isArray(payload.venues)) {
       return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
     }
@@ -537,10 +549,11 @@ function liveVenueFromResult(
     price: poundPrice(result.price),
     distanceMeters,
     description: `${result.type} near ${area}.`,
-    hours: todayHours ?? 'Live hours unavailable',
+    hours: result.cachedAt ? 'Saved place · hours may have changed' : todayHours ?? 'Live hours unavailable',
     feature: result.type,
     fullAddress: result.fullAddress || result.address,
     openNow: result.openNow === true,
+    cached: Boolean(result.cachedAt),
     website: result.website || result.menuLink || mapsUri,
     mapsUri,
     phone: result.phone ?? '',
@@ -716,7 +729,8 @@ export default function DiscoverScreen() {
       );
       const discoveryPages = [batch];
       if (!batch.venues.length && batch.failure?.code !== 'API-FORBIDDEN'
-        && batch.failure?.code !== 'API-RATE-LIMIT') {
+        && batch.failure?.code !== 'API-RATE-LIMIT'
+        && batch.failure?.code !== 'API-QUOTA') {
         const smallPage = await fetchDiscoveryPage(
           'restaurants', locationPayload, undefined, undefined, reserveDiscoveryRequest, 'system',
         );
@@ -763,6 +777,7 @@ export default function DiscoverScreen() {
       const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
       if (!nextVenues.length) {
         const failureCode = requestFailures.find(({ code }) => code === 'API-FORBIDDEN')?.code
+          || requestFailures.find(({ code }) => code === 'API-QUOTA')?.code
           || requestFailures.find(({ code }) => code === 'API-RATE-LIMIT')?.code
           || requestFailures.find(({ code }) => code === 'API-TIMEOUT')?.code
           || requestFailures.find(({ code }) => code === 'API-NETWORK')?.code
@@ -776,10 +791,13 @@ export default function DiscoverScreen() {
       setLiveVenues(nextVenues);
       displayedOrigin.current = origin;
       freshResultsLoaded.current = true;
-      cachedNearbyAtRef.current = null;
-      setCachedNearbyAt(null);
+      const providerCacheTimes = eligibleResults.flatMap(({ result }) =>
+        result.cachedAt ? [result.cachedAt] : []);
+      const providerCachedAt = providerCacheTimes.length ? Math.min(...providerCacheTimes) : null;
+      cachedNearbyAtRef.current = providerCachedAt;
+      setCachedNearbyAt(providerCachedAt);
       setLiveDiscoveryState('ready');
-      await writeNearbyCache({ savedAt: Date.now(), area, origin, venues: nextVenues });
+      await writeNearbyCache({ savedAt: providerCachedAt ?? Date.now(), area, origin, venues: nextVenues });
     } catch {
       setLiveDiscoveryFailure('API-RESPONSE');
       setLiveDiscoveryState('error');
@@ -1123,7 +1141,9 @@ export default function DiscoverScreen() {
                     ? 'Saved nearby places · checking for updates…'
                     : 'Connecting to live places near you…'
                   : liveDiscoveryState === 'ready'
-                     ? `Live near ${liveArea} · ${liveVenues.length} places`
+                     ? cachedNearbyAt !== null
+                       ? `Saved nearby places · ${liveVenues.length} places · hours may have changed`
+                       : `Live near ${liveArea} · ${liveVenues.length} places`
                     : cachedNearbyAt !== null
                       ? 'Showing saved nearby places · live refresh unavailable'
                       : liveDiscoveryState === 'permission-denied'
