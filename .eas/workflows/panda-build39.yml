@@ -1,0 +1,11 @@
+name: Panda Android Build 39
+on:
+  push:
+    branches: [panda-build-39]
+jobs:
+  build_android_preview:
+    name: Build 39 Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview
