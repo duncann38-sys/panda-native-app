@@ -5,8 +5,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon } from './PandaIcon';
 import type { VenuePhotoItem } from './VenuePhoto';
 
-export function VenueGallery({ photos, venueName, initialIndex, visible, onClose }: {
-  photos: VenuePhotoItem[]; venueName: string; initialIndex: number; visible: boolean; onClose: () => void;
+function creditName(value: unknown): string {
+  if (typeof value === 'string') return value === '[object Object]' ? '' : value;
+  if (Array.isArray(value)) return value.map(creditName).filter(Boolean).join(', ');
+  if (!value || typeof value !== 'object') return '';
+  const fields = value as Record<string, unknown>;
+  return creditName(fields.displayName || fields.label || fields.name || fields.text || fields.authorAttributions);
+}
+
+export function VenueGallery({ photos, venueName, initialIndex, visible, onClose, onIndexChange }: {
+  photos: VenuePhotoItem[]; venueName: string; initialIndex: number; visible: boolean; onClose: () => void; onIndexChange?: (index: number) => void;
 }) {
   const { width, height } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -19,18 +27,43 @@ export function VenueGallery({ photos, venueName, initialIndex, visible, onClose
     return () => clearTimeout(timer);
   }, [visible, initialIndex, width]);
   const top = Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 0) + 16;
+  const credit = creditName(photos[index]?.attribution);
+  const movePhoto = (next: number) => {
+    const target = Math.max(0, Math.min(photos.length - 1, next));
+    setIndex(target);
+    onIndexChange?.(target);
+    scroll.current?.scrollTo({ x: target * width, animated: false });
+  };
   return <Modal visible={visible} onRequestClose={onClose} animationType="fade" statusBarTranslucent={false}>
     <View style={{ flex: 1, backgroundColor: '#071b14' }}>
       <Image source={{ uri: photos[index]?.uri }} contentFit="cover" blurRadius={30}
         style={{ position: 'absolute', width: '100%', height: '100%', opacity: 0.75 }} />
       <ScrollView ref={scroll} horizontal pagingEnabled showsHorizontalScrollIndicator={false}
-        onMomentumScrollEnd={event => setIndex(Math.min(photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / width)))}>
+        onMomentumScrollEnd={event => {
+          const next = Math.min(photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / width));
+          setIndex(next);
+          onIndexChange?.(next);
+        }}>
         {photos.map((photo, i) => <View key={photo.uri} style={{ width, height: '100%', paddingTop: top + 60, paddingBottom: Math.max(insets.bottom, 20) + 94 }}>
           {Math.abs(i - index) <= 1 ? <Image source={{ uri: photo.uri }} contentFit="contain"
             accessibilityLabel={`${venueName} full photo ${i + 1} of ${photos.length}`}
             style={{ width, flex: 1 }} /> : null}
         </View>)}
       </ScrollView>
+      {photos.length > 1 ? <>
+        <Pressable accessibilityRole="button" accessibilityLabel="Previous photo" disabled={index === 0}
+          onPress={() => movePhoto(index - 1)} hitSlop={8} style={{ position: 'absolute', left: 12, top: '48%',
+            width: 46, height: 46, borderRadius: 23, backgroundColor: '#0008', opacity: index === 0 ? 0.35 : 1,
+            alignItems: 'center', justifyContent: 'center' }}>
+          <PandaIcon name="arrow-left" color="#fff" size={24} />
+        </Pressable>
+        <Pressable accessibilityRole="button" accessibilityLabel="Next photo" disabled={index === photos.length - 1}
+          onPress={() => movePhoto(index + 1)} hitSlop={8} style={{ position: 'absolute', right: 12, top: '48%',
+            width: 46, height: 46, borderRadius: 23, backgroundColor: '#0008', opacity: index === photos.length - 1 ? 0.35 : 1,
+            alignItems: 'center', justifyContent: 'center', transform: [{ rotate: '180deg' }] }}>
+          <PandaIcon name="arrow-left" color="#fff" size={24} />
+        </Pressable>
+      </> : null}
       <Pressable testID="gallery-close" accessibilityLabel="Close gallery" accessibilityRole="button"
         hitSlop={12} onPress={onClose} style={{ position: 'absolute', top, right: 20, width: 52, height: 52,
           borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fffdf2', elevation: 8 }}>
@@ -39,7 +72,7 @@ export function VenueGallery({ photos, venueName, initialIndex, visible, onClose
       <View pointerEvents="none" style={{ position: 'absolute', bottom: Math.max(insets.bottom, 20) + 12, left: 20,
         right: 20, padding: 16, borderRadius: 18, backgroundColor: '#000b' }}>
         <Text style={{ color: '#fff', fontWeight: '700', fontSize: 16 }}>{venueName} · {index + 1}/{photos.length}</Text>
-        <Text style={{ color: '#fff', marginTop: 5 }} numberOfLines={2}>{photos[index]?.attribution ? `Photo by ${photos[index].attribution}` : 'Google Maps photo'}</Text>
+        <Text style={{ color: '#fff', marginTop: 5 }} numberOfLines={2}>{credit ? `Photo by ${credit}` : 'Google Maps photo'}</Text>
       </View>
     </View>
   </Modal>;
