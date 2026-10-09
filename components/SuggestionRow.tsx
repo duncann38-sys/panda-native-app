@@ -47,7 +47,7 @@ export function SuggestionRow({
             {venue.promoted ? (
               <View style={[styles.promotedLabel, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
                 <MaterialCommunityIcons name="star-four-points" size={9} color={colors.goldDeep} />
-                <Text style={[styles.promotedLabelText, { color: colors.goldDeep }]}>PANDA PREMIUM</Text>
+                <Text style={[styles.promotedLabelText, { color: colors.goldDeep }]}>Promoted</Text>
               </View>
             ) : null}
             <Text
