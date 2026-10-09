@@ -3,9 +3,11 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useRef, useState, useEffect } from 'react';
+import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import {
   ActivityIndicator,
+  AppState,
   Alert,
   Linking,
   Modal,
@@ -22,7 +24,8 @@ import {
 import type { DimensionValue, StyleProp, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon, type PandaIconName } from '@/components/PandaIcon';
-import { VenuePhoto, venuePhotosFor, type VenuePhotoItem } from '@/components/VenuePhoto';
+import { VenuePhoto, useVenuePhotos, type VenuePhotoItem } from '@/components/VenuePhoto';
+import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
@@ -65,6 +68,7 @@ type TransitWalk = {
 
 type TransitStep = {
   mode: 'WALK' | 'TRANSIT';
+  vehicleType?: string;
   instruction: string;
   durationMinutes: number;
   distanceMeters: number;
@@ -81,6 +85,10 @@ type TransitStep = {
 };
 
 type TransitContext = {
+  recommendation?: 'walk' | 'transit';
+  recommendationReason?: string;
+  directWalk?: TransitWalk | null;
+  timingSource?: string;
   originStation: TransitStation;
   destinationStation: TransitStation;
   originWalk: TransitWalk | null;
@@ -183,7 +191,21 @@ export default function VenueDetailScreen() {
   const venue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
-  const photos = venue ? venuePhotosFor(venue) : [];
+  const photos = useVenuePhotos(venue);
+  const [officialLinks, setOfficialLinks] = useState<{ menuUrl?: string; reservationUrl?: string } | null>(null);
+  const officialLinksRequest = useRef<Promise<{ menuUrl?: string; reservationUrl?: string } | null> | null>(null);
+  useEffect(() => {
+    setOfficialLinks(null);
+    if (!venue?.id) return;
+    const controller = new AbortController();
+    const request = fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/links`, { signal: controller.signal })
+      .then(async response => {
+        if (!response.ok) throw new Error('Official links unavailable');
+        return response.json();
+      }).then(links => { setOfficialLinks(links); return links; }).catch(() => null);
+    officialLinksRequest.current = request;
+    return () => controller.abort();
+  }, [venue?.id]);
 
   const [heroActive, setHeroActive] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -192,6 +214,23 @@ export default function VenueDetailScreen() {
   const [transitContext, setTransitContext] = useState<TransitContext | null>(null);
   const [transitStatus, setTransitStatus] = useState<TransitStatus>('idle');
   const [transitRetryKey, setTransitRetryKey] = useState(0);
+  useEffect(() => {
+    setTransitContext(null);
+    setTransitStatus('idle');
+  }, [venue?.id]);
+  useEffect(() => {
+    setHeroActive(current => Math.min(current, Math.max(0, photos.length - 1)));
+    setGalleryActive(current => Math.min(current, Math.max(0, photos.length - 1)));
+  }, [venue?.id, photos.length]);
+  useFocusEffect(useCallback(() => {
+    const timer = setInterval(() => {
+      if (AppState.currentState === 'active') setTransitRetryKey(value => value + 1);
+    }, 60000);
+    const subscription = AppState.addEventListener('change', state => {
+      if (state === 'active') setTransitRetryKey(value => value + 1);
+    });
+    return () => { clearInterval(timer); subscription.remove(); };
+  }, []));
   const [scrollViewportHeight, setScrollViewportHeight] = useState(0);
   const [scrollContentHeight, setScrollContentHeight] = useState(0);
   const detailScrollRef = useRef<ScrollView>(null);
@@ -243,8 +282,7 @@ export default function VenueDetailScreen() {
 
     let active = true;
     const controller = new AbortController();
-    setTransitContext(null);
-    setTransitStatus('loading');
+    setTransitStatus(previous => previous === 'ready' ? 'ready' : 'loading');
 
     void (async () => {
       try {
@@ -300,70 +338,23 @@ export default function VenueDetailScreen() {
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
   const openWalkingDirections = () => {
-    router.push({
-      pathname: '/map',
-      params: {
-        directionsVenueId: venue.id,
-        directionsVenueData: JSON.stringify({
-          ...venue,
-          latitude: googleProfile?.latitude ?? venue.latitude,
-          longitude: googleProfile?.longitude ?? venue.longitude,
-        }),
-        directionsReturn: 'back',
-        plannerLocation: venue.neighborhood || 'Current location',
-      },
-    });
+    void Linking.openURL(googleDirectionsUrl(venue, 'walking'))
+      .catch(() => Alert.alert('Google Maps could not open', 'Please check that a maps app or browser is available.'));
   };
-  const officialVenueUrl = googleProfile?.website || venue.website;
-  const openVenuePage = (kind: 'menu' | 'reservation') => {
-    router.push({
-      pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
-      params: {
-        id: venue.id,
-        venueData: JSON.stringify(venue),
-        pageUrl: kind === 'menu' ? officialVenueUrl : '',
-      },
-    });
+  const openVenuePage = async (kind: 'menu' | 'reservation') => {
+    const links = officialLinks ?? await officialLinksRequest.current;
+    const pageUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
+    if (!pageUrl) {
+      Alert.alert('Verified venue link unavailable',
+        `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
+      return;
+    }
+    void Linking.openURL(pageUrl).catch(() => Alert.alert('Unable to open the venue website', 'Please check your browser and connection.'));
   };
   const openTransitRoute = () => {
-    if (!transitContext) return;
-    router.push({
-      pathname: '/map',
-      params: {
-        directionsVenueId: venue.id,
-        transitOriginName: transitContext.originStation.name,
-        transitDestinationName: transitContext.destinationStation.name,
-        transitOriginCoordinates: `${transitContext.originStation.latitude},${transitContext.originStation.longitude}`,
-        transitDestinationCoordinates: `${transitContext.destinationStation.latitude},${transitContext.destinationStation.longitude}`,
-        transitOriginPolyline: transitContext.originWalk?.polyline ?? '',
-        transitPolyline: transitContext.transitRoute?.polyline ?? '',
-        transitDestinationPolyline: transitContext.venueWalk?.polyline ?? '',
-        transitOriginWalkMinutes: transitContext.originWalk?.durationMinutes.toString() ?? '',
-        transitOriginWalkDistance: transitContext.originWalk?.distanceMeters.toString() ?? '',
-        transitDurationMinutes: transitContext.transitRoute?.durationMinutes.toString() ?? '',
-        transitDistanceMeters: transitContext.transitRoute?.distanceMeters.toString() ?? '',
-        transitSteps: transitContext.transitRoute?.steps.length
-          ? JSON.stringify(transitContext.transitRoute.steps)
-          : '',
-        transitWalkMinutes: transitContext.venueWalk?.durationMinutes.toString() ?? '',
-        transitWalkDistance: transitContext.venueWalk?.distanceMeters.toString() ?? '',
-        transitUpdatedAt: transitContext.transitRoute?.updatedAt ?? transitContext.updatedAt ?? '',
-        directionsVenueData: JSON.stringify({
-          ...venue,
-          latitude: googleProfile?.latitude ?? venue.latitude,
-          longitude: googleProfile?.longitude ?? venue.longitude,
-        }),
-        plannerIds: plannerOpen ? plannerIds || '' : '',
-        plannerVenues: plannerOpen ? String(plannerVenueData || '') : '',
-        plannerLocation: plannerOpen ? plannerLocation || 'Current location' : venue.neighborhood,
-        ...(plannerOpen
-          ? {
-              plannerMode: plannerMode || 'night',
-              plannerPrice: plannerPrice || '££',
-            }
-          : {}),
-      },
-    });
+    void Linking.openURL(googleDirectionsUrl(venue,
+      transitContext?.recommendation === 'walk' ? 'walking' : 'transit'))
+      .catch(() => Alert.alert('Google Maps could not open', 'Please check your maps app or browser.'));
   };
 
   const openGallery = () => {
@@ -983,6 +974,29 @@ function ConciergeTransitCard({
   status: TransitStatus;
 }) {
   if (status === 'idle') return null;
+  if (context?.recommendation === 'walk') {
+    return (
+      <Pressable onPress={onOpenRoute} accessibilityRole="button"
+        style={[styles.transitCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+        <View style={styles.transitTitleRow}>
+          <PandaIcon name="walk" size={20} color={colors.green700} />
+          <Text style={[styles.transitTitle, { color: colors.foreground }]}>
+            {context.directWalk ? 'Walking is the better option' : 'You’re very close'}
+          </Text>
+        </View>
+        <Text style={[styles.transitStatusText, { color: colors.foreground }]}>
+          {context.recommendationReason}{context.directWalk ? ` · ${context.directWalk.durationMinutes} min walk` : ''}
+        </Text>
+        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Start walking in Google Maps →</Text>
+      </Pressable>
+    );
+  }
+  const transitSteps = context?.transitRoute?.steps.filter(step => step.mode === 'TRANSIT') ?? [];
+  const vehicle = transitSteps[0]?.vehicleType ?? '';
+  const vehicleSymbol = vehicle === 'BUS' ? '🚌' : vehicle === 'FERRY' ? '⛴' : '🚆';
+  const vehicleLabel = vehicle === 'BUS' ? 'Bus' : vehicle === 'FERRY' ? 'Boat' : 'Public transport';
+  const hasFreshLive = transitSteps.some(step => step.liveDepartureTime && step.liveUpdatedAt &&
+    Date.now() - Date.parse(step.liveUpdatedAt) < 60000);
 
   const venueWalkLabel = context?.venueWalk
     ? `${context.venueWalk.durationMinutes} min walk · ${
@@ -992,7 +1006,7 @@ function ConciergeTransitCard({
       }`
     : 'Nearest rail or Underground station';
   const liveRouteLabel = context?.transitRoute
-    ? `${context.transitRoute.durationMinutes} min by public transport · ${context.transitRoute.steps.length} live steps`
+    ? `${vehicleSymbol} ${vehicleLabel} · ${context.transitRoute.durationMinutes} min · ${hasFreshLive ? 'Live departure' : 'Google estimate'}`
     : null;
 
   const actionable = Boolean(context) || status === 'permission-denied' || status === 'unavailable';
@@ -1007,7 +1021,7 @@ function ConciergeTransitCard({
       accessibilityLabel={actionLabel}
       accessibilityRole={actionable ? 'button' : undefined}
       disabled={!actionable}
-      onPress={context ? onOpenRoute : onRetry}
+      onPress={context || status === 'unavailable' ? onOpenRoute : onRetry}
       style={({ pressed }) => [
         styles.transitCard,
         compact && styles.transitCardCompact,
@@ -1018,7 +1032,7 @@ function ConciergeTransitCard({
     >
       <View style={styles.transitTitleRow}>
         <PandaIcon name="map" size={15} color={colors.green700} />
-        <Text style={[styles.transitTitle, { color: colors.green800 }]}>LIVE TRANSIT CONTEXT</Text>
+        <Text style={[styles.transitTitle, { color: colors.green800 }]}>{hasFreshLive ? 'LIVE DEPARTURES' : 'TRANSIT DIRECTIONS'}</Text>
       </View>
 
       {status === 'loading' ? (
@@ -1042,7 +1056,7 @@ function ConciergeTransitCard({
               <Text style={styles.transitEmoji}>📍</Text>
             </View>
             <View style={styles.transitPointCopy}>
-              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>YOUR NEAREST STATION</Text>
+              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>BOARD {vehicleLabel.toUpperCase()}</Text>
               <Text style={[styles.transitPointName, { color: colors.foreground }]}>{context.originStation.name}</Text>
             </View>
           </View>
@@ -1071,13 +1085,13 @@ function ConciergeTransitCard({
       ) : (
         <>
           <Text style={[styles.transitStatusText, { color: colors.mutedForeground }]}>
-            Live station information is unavailable for this venue right now.
+            Live departures are unavailable right now. Google Maps can still find a route.
           </Text>
-          <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Tap to try again</Text>
+          <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Open Google Maps directions</Text>
         </>
       )}
       {status === 'ready' ? (
-        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Get directions in Panda →</Text>
+        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Get directions in Google Maps →</Text>
       ) : null}
     </Pressable>
   );

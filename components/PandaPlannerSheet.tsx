@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Fragment, useEffect, useMemo, useState } from 'react';
 import {
   Keyboard,
+  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -18,8 +19,11 @@ import { PANDA_RUNTIME_API } from '@/constants/services';
 import { getPandaTimeMode } from '@/constants/panda-time';
 import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { useLiveVenues } from '@/context/live-venues';
+import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget } from '@/utils/venue-actions';
 
 export type PlannerMode = 'morning' | 'lunch' | 'night';
+const plannerRoutes = new Map<string, { durationMinutes: number; expires: number }>();
 
 type PlannerStop = {
   icon: string;
@@ -40,6 +44,10 @@ type GooglePlannerProfile = {
   todayHours: string | null;
   googleMapsUrl: string;
   source: 'google_places';
+  latitude?: number | null;
+  longitude?: number | null;
+  website?: string | null;
+  photoNames?: Array<{ name: string; attribution: string }>;
 };
 
 type PlannerSearchResult = {
@@ -47,6 +55,9 @@ type PlannerSearchResult = {
   name: string;
   address: string;
   category: string;
+  price?: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
 };
 
 const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: PlannerStop[]; greetings: string[] }> = {
@@ -139,7 +150,7 @@ function plannerCategory(category: string): Venue['category'] {
 }
 
 function venueFromSearchResult(
-  result: { id: string; name: string; address: string; category: string },
+  result: PlannerSearchResult,
   location: string,
 ): Venue {
   const category = plannerCategory(result.category);
@@ -153,7 +164,9 @@ function venueFromSearchResult(
     walkingTime: 'Directions available',
     rating: '',
     ratingCount: 0,
-    price: '££',
+    price: result.price || '',
+    latitude: result.latitude ?? undefined,
+    longitude: result.longitude ?? undefined,
     distanceMeters: 0,
     description: `${result.category} in ${location}.`,
     hours: 'Loading live details',
@@ -227,9 +240,8 @@ function getPlan(mode: PlannerMode, price: string, location: string, offset: num
   });
 }
 
-function walkBetween(first: Venue, second: Venue) {
-  const metres = Math.max(180, Math.abs(first.distanceMeters - second.distanceMeters) + 260);
-  return `~${Math.max(3, Math.round(metres / 80))} min walk`;
+function walkBetween(first: Venue, second: Venue, route?: { durationMinutes: number }) {
+  return route ? `${route.durationMinutes} min walk · Google route` : 'Walking route unavailable';
 }
 
 export function PandaPlannerSheet({
@@ -281,13 +293,70 @@ export function PandaPlannerSheet({
     const restored = ids.map((id) => venues.find((venue) => venue.id === id));
     return restored.every(Boolean) ? (restored as Venue[]) : null;
   }, [initialPlanIds]);
+  const { liveVenues, coordinates } = useLiveVenues();
   const config = PLAN_MODES[mode];
   const locationQuery = plannerLocationQuery(location);
   const localPlan = useMemo(
-    () => locationQuery ? getPlan(mode, price, locationQuery, shuffle) : restoredPlan ?? getPlan(mode, price, location, shuffle),
-    [location, locationQuery, mode, price, restoredPlan, shuffle],
+    () => choosePlanStops(config.stops, liveVenues, price, shuffle),
+    [config.stops, liveVenues, price, shuffle],
   );
-  const plan = remotePlan && remoteLocation === locationQuery ? remotePlan : localPlan;
+  const candidatePlan = remotePlan && remoteLocation === locationQuery
+    ? choosePlanStops(config.stops, remotePlan, price, shuffle) : locationQuery ? [] : localPlan;
+  const candidateKey = `${price}:${candidatePlan.map(venue => venue.id).join(',')}`;
+  const [verified, setVerified] = useState<{ key: string; plan: Venue[]; legs: Record<string, { durationMinutes: number }> } | null>(null);
+  const [planCheck, setPlanCheck] = useState<'loading' | 'ready' | 'error' | 'empty'>('empty');
+  const plan = verified?.key === candidateKey ? verified.plan : [];
+  const verifiedLegs = verified?.key === candidateKey ? verified.legs : {};
+
+  useEffect(() => {
+    if (!open) return;
+    let active = true;
+    const controller = new AbortController();
+    if (candidatePlan.length < config.stops.length) { setVerified(null); setPlanCheck('empty'); return; }
+    setPlanCheck('loading');
+    void (async () => {
+      const profiles = await Promise.all(candidatePlan.map(async venue => {
+        const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/profile`,
+          { signal: controller.signal });
+        if (!response.ok) throw new Error('Venue facts unavailable');
+        return await response.json() as GooglePlannerProfile;
+      }));
+      if (profiles.some(profile => !knownPriceWithinBudget(profile.price, price) ||
+        !Number.isFinite(profile.latitude) || !Number.isFinite(profile.longitude))) {
+        throw new Error('A venue has no verified price within the selected budget');
+      }
+      const verifiedVenues = candidatePlan.map((venue, index) => ({
+        ...venue, name: profiles[index].name, fullAddress: profiles[index].address,
+        price: profiles[index].price!, latitude: profiles[index].latitude!,
+        longitude: profiles[index].longitude!, mapsUri: profiles[index].googleMapsUrl,
+        website: profiles[index].website || venue.website, photoNames: profiles[index].photoNames,
+      }));
+      const legs: Record<string, { durationMinutes: number }> = {};
+      for (let first = 0; first < verifiedVenues.length; first++) {
+        for (let second = first + 1; second < verifiedVenues.length; second++) {
+          const from = verifiedVenues[first], to = verifiedVenues[second];
+          const key = `${from.id}:${to.id}`;
+          let route = plannerRoutes.get(key);
+          if (!route || route.expires <= Date.now()) {
+            const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(to.id)}/walking?latitude=${from.latitude}&longitude=${from.longitude}`,
+              { signal: controller.signal });
+            if (!response.ok) throw new Error('Walking journey unavailable');
+            const payload = await response.json() as { durationMinutes: number };
+            if (!Number.isFinite(payload.durationMinutes) || payload.durationMinutes < 1) throw new Error('Invalid walking journey');
+            route = { durationMinutes: payload.durationMinutes, expires: Date.now() + 3 * 60 * 60 * 1000 };
+            plannerRoutes.set(key, route);
+          }
+          if (route.durationMinutes > 60) throw new Error('Venues are more than one hour apart');
+          legs[key] = route;
+        }
+      }
+      if (!active) return;
+      setGoogleProfiles(current => ({ ...current, ...Object.fromEntries(profiles.map(profile => [profile.id, profile])) }));
+      setVerified({ key: candidateKey, plan: verifiedVenues, legs });
+      setPlanCheck('ready');
+    })().catch(() => { if (active) { setVerified(null); setPlanCheck('error'); } });
+    return () => { active = false; controller.abort(); };
+  }, [candidateKey, open]);
   const displayedLocation = locationQuery
     ? locationQuery.replace(/\b\w/g, (letter) => letter.toUpperCase())
     : 'Current location';
@@ -296,6 +365,7 @@ export function PandaPlannerSheet({
   );
 
   useEffect(() => {
+    if (!open) return;
     if (!locationQuery) {
       setRemotePlan(null);
       setRemoteLocation('');
@@ -308,7 +378,7 @@ export function PandaPlannerSheet({
     const timer = setTimeout(() => {
       void fetch(
         `${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(
-          `${REMOTE_SEARCH_TERMS[mode]} in ${locationQuery}, United Kingdom`,
+          `${REMOTE_SEARCH_TERMS[mode]} in ${locationQuery}`,
         )}`,
         { headers: { Accept: 'application/json' } },
       )
@@ -318,7 +388,7 @@ export function PandaPlannerSheet({
         })
         .then((payload) => {
           if (!active) return;
-          setRemotePlan(buildRemotePlan(mode, locationQuery, payload.results ?? []));
+          setRemotePlan((payload.results ?? []).map(result => venueFromSearchResult(result, locationQuery)));
           setRemoteLocation(locationQuery);
           setRemoteSearchState('ready');
         })
@@ -334,7 +404,7 @@ export function PandaPlannerSheet({
       active = false;
       clearTimeout(timer);
     };
-  }, [locationQuery, mode]);
+  }, [locationQuery, mode, open]);
 
   useEffect(() => {
     let active = true;
@@ -567,6 +637,12 @@ export function PandaPlannerSheet({
                 </Text>
               </View>
 
+              <Text style={[styles.venueMeta, { color: colors.green700 }]}>
+                {planCheck === 'loading' ? 'Verifying venue prices and walking journeys…' :
+                  planCheck === 'error' ? 'No verified plan within your budget and one-hour travel limit. Try another area or budget.' :
+                    planCheck === 'ready' ? 'Verified prices · every venue within a one-hour walk of every other venue' :
+                      remoteSearchState === 'loading' ? 'Searching live venues…' : 'No complete plan matches this budget and area.'}
+              </Text>
               {plan.length ? plan.map((venue, index) => {
                 const google = googleProfiles[venue.id];
                 const displayName = google?.name ?? venue.name;
@@ -584,12 +660,12 @@ export function PandaPlannerSheet({
                     accessibilityRole="button"
                     onPress={() => {
                       setOpen(false);
-                      onOpenDirections(venue, { plan, mode, price, location });
+                      onOpenVenue(venue, { plan, mode, price, location });
                     }}
                     style={[styles.venueCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                   >
                     <View style={styles.photo}>
-                      <VenuePhoto venueId={venue.id} venueName={venue.name} height={88} />
+                      <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={88} />
                     </View>
                     <View style={styles.venueCopy}>
                       <Text numberOfLines={1} style={[styles.venueName, { color: colors.foreground }]}>
@@ -622,7 +698,7 @@ export function PandaPlannerSheet({
                     accessibilityRole="button"
                     onPress={() => {
                       setOpen(false);
-                      onOpenVenue(venue, { plan, mode, price, location });
+                      void Linking.openURL(googleDirectionsUrl(venue, 'walking'));
                     }}
                     style={styles.walkingLink}
                   >
@@ -633,7 +709,7 @@ export function PandaPlannerSheet({
                     <View style={styles.connector}>
                       <View style={[styles.connectorLine, { backgroundColor: colors.goldLine }]} />
                       <Text style={[styles.connectorText, { color: colors.foreground }]}>
-                        ↓ {walkBetween(venue, plan[index + 1])} to the next stop
+                        ↓ {walkBetween(venue, plan[index + 1], verifiedLegs[`${venue.id}:${plan[index + 1].id}`])} to the next stop
                       </Text>
                     </View>
                   ) : null}

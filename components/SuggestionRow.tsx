@@ -39,7 +39,7 @@ export function SuggestionRow({
         </>
       ) : null}
       <View style={styles.photo}>
-        <VenuePhoto venueId={venue.id} venueName={venue.name} height={76} />
+        <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={76} />
       </View>
       <View style={styles.copy}>
         <View style={styles.titleRow}>

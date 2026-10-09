@@ -42,6 +42,7 @@ export function VenueCard({
     >
       <View style={styles.photo}>
         <VenuePhoto
+          venue={venue}
           venueId={venue.id}
           venueName={venue.name}
           height={compact ? 100 : premiumFeatured ? 148 : 136}

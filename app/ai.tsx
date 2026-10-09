@@ -1,9 +1,10 @@
-import { Image } from 'expo-image';
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
   Alert,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -21,6 +22,9 @@ import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { VenuePhoto } from '@/components/VenuePhoto';
+import { googleDirectionsUrl } from '@/utils/venue-actions';
+import { getPartnerTier } from '@/utils/partner-venues';
 
 type AiVenue = {
   id?: string;
@@ -35,6 +39,7 @@ type AiVenue = {
   menuLink?: string;
   mapsUri?: string;
   photoName?: string;
+  photoNames?: Venue['photoNames'];
   photoAttribution?: string;
   photoCount?: number;
   openNow?: boolean;
@@ -71,6 +76,7 @@ type AiRouteWalk = {
 };
 
 type AiTransitStep = {
+  vehicleType?: string | null;
   mode: 'WALK' | 'TRANSIT';
   instruction: string;
   durationMinutes: number;
@@ -265,6 +271,7 @@ async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
 
 function aiVenueToVenue(venue: AiVenue): Venue | null {
   if (!venue.id || !venue.name) return null;
+  const tier = getPartnerTier(venue.id);
   const normalizedType = venue.type?.toLowerCase() ?? '';
   const category: Venue['category'] =
     normalizedType.includes('coffee') || normalizedType.includes('cafe')
@@ -306,9 +313,11 @@ function aiVenueToVenue(venue: AiVenue): Venue | null {
     website: venue.website || mapsUri,
     mapsUri,
     phone: '',
-    premium: false,
-    banging: false,
-    promoted: false,
+    premium: tier === 'banging',
+    banging: tier === 'banging',
+    promoted: Boolean(tier),
+    photoName: venue.photoName,
+    photoNames: venue.photoNames,
     photoAttributions: venue.photoAttribution ? [venue.photoAttribution] : [],
   };
 }
@@ -721,32 +730,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const routeVenue = aiVenueToVenue(
       transit.venue ?? { id: transit.venueId, name: transit.venueName, type: 'Live venue' },
     );
-    router.push({
-      pathname: '/map',
-      params: {
-        directionsVenueId: transit.venueId,
-        directionsVenueData: routeVenue ? JSON.stringify(routeVenue) : '',
-        directionsReturn: 'back',
-        plannerLocation: 'Current location',
-        transitOriginName: transit.originStation.name,
-        transitDestinationName: transit.destinationStation.name,
-        transitOriginCoordinates: `${transit.originStation.latitude},${transit.originStation.longitude}`,
-        transitDestinationCoordinates: `${transit.destinationStation.latitude},${transit.destinationStation.longitude}`,
-        transitOriginPolyline: transit.originWalk?.polyline ?? '',
-        transitPolyline: transit.transitRoute?.polyline ?? '',
-        transitDestinationPolyline: transit.venueWalk?.polyline ?? '',
-        transitOriginWalkMinutes: transit.originWalk?.durationMinutes.toString() ?? '',
-        transitOriginWalkDistance: transit.originWalk?.distanceMeters.toString() ?? '',
-        transitDurationMinutes: transit.transitRoute?.durationMinutes.toString() ?? '',
-        transitDistanceMeters: transit.transitRoute?.distanceMeters.toString() ?? '',
-        transitSteps: transit.transitRoute?.steps?.length
-          ? JSON.stringify(transit.transitRoute.steps)
-          : '',
-        transitWalkMinutes: transit.venueWalk?.durationMinutes.toString() ?? '',
-        transitWalkDistance: transit.venueWalk?.distanceMeters.toString() ?? '',
-        transitUpdatedAt: transit.transitRoute?.updatedAt ?? '',
-      },
-    });
+    if (routeVenue) void Linking.openURL(googleDirectionsUrl(routeVenue, 'transit'))
+      .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
   };
 
   const openAiVenue = (aiVenue: AiVenue) => {
@@ -765,52 +750,20 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const openAiVenueDirections = async (aiVenue: AiVenue) => {
     const venue = aiVenueToVenue(aiVenue);
     if (!venue) return;
-    const locationState = coordinates
-      ? { status: 'ready' as const, coordinates }
-      : await refreshLocation(true);
-    const currentLocation = locationState.coordinates;
-    if (currentLocation) {
-      const { latitude, longitude } = currentLocation;
-      try {
-        const transitResponse = await fetch(
-          `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/transit?latitude=${encodeURIComponent(latitude)}&longitude=${encodeURIComponent(longitude)}`,
-          { headers: { Accept: 'application/json' } },
-        );
-        if (transitResponse.ok) {
-          const liveTransit = (await transitResponse.json()) as {
-            originStation: AiTransitStation;
-            destinationStation: AiTransitStation;
-            originWalk: AiRouteWalk | null;
-            transitRoute: AiTransitContext['transitRoute'];
-            venueWalk: { distanceMeters: number; durationMinutes: number } | null;
-          };
-          if (liveTransit.originStation && liveTransit.destinationStation) {
-            openAiTransitDirections({
-              venueId: venue.id,
-              venueName: venue.name,
-              venue: aiVenue,
-              originStation: liveTransit.originStation,
-              destinationStation: liveTransit.destinationStation,
-              originWalk: liveTransit.originWalk,
-              transitRoute: liveTransit.transitRoute,
-              venueWalk: liveTransit.venueWalk,
-            });
-            return;
-          }
-        }
-      } catch {
-        // Keep the established map directions route as a safe fallback.
-      }
+    await Linking.openURL(googleDirectionsUrl(venue, 'walking'))
+      .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
+  };
+  const openAiVenueMenu = async (venue: AiVenue) => {
+    if (!venue.id) return;
+    try {
+      const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/links`);
+      if (!response.ok) throw new Error('Official menu lookup unavailable');
+      const links = await response.json() as { menuUrl?: string | null };
+      if (!links.menuUrl || !/^https?:\/\//i.test(links.menuUrl)) throw new Error('No verified menu link');
+      await Linking.openURL(links.menuUrl);
+    } catch {
+      Alert.alert('Menu link unavailable', 'A correct official menu link could not be verified. No homepage or search link has been substituted.');
     }
-    router.push({
-      pathname: '/map',
-      params: {
-        directionsVenueId: venue.id,
-        directionsVenueData: JSON.stringify(venue),
-        directionsReturn: 'back',
-        plannerLocation: 'Current location',
-      },
-    });
   };
 
   const clearChat = () => {
@@ -832,6 +785,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   return (
     <KeyboardAvoidingView
       behavior="padding"
+      enabled={Platform.OS !== 'android'}
       keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
@@ -901,18 +855,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                     venue={venue}
                     colors={colors}
                     onDirections={() => void openAiVenueDirections(venue)}
-                    onMenu={() => {
-                      const routeVenue = aiVenueToVenue(venue);
-                      if (!routeVenue) return;
-                      router.push({
-                        pathname: '/venue/[id]/menu',
-                        params: {
-                          id: routeVenue.id,
-                          venueData: JSON.stringify(routeVenue),
-                          pageUrl: venue.menuLink || venue.website || routeVenue.website,
-                        },
-                      });
-                    }}
+                    onMenu={() => void openAiVenueMenu(venue)}
                     onOpen={() => openAiVenue(venue)}
                   />
                 ))}
@@ -922,6 +865,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               <AiTransitCard
                 colors={colors}
                 context={message.transit}
+                refreshLive={message === [...messages].reverse().find(item => item.transit)}
                 onDirections={() => openAiTransitDirections(message.transit as AiTransitContext)}
               />
             ) : null}
@@ -1055,9 +999,7 @@ function AiVenueCard({
   onMenu: () => void;
   onOpen: () => void;
 }) {
-  const photoUri = venue.photoName
-    ? `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(venue.photoName)}&max=500`
-    : null;
+  const photoVenue = aiVenueToVenue(venue);
   const distance =
     typeof venue.distanceMeters === 'number'
       ? venue.distanceMeters < 1000
@@ -1073,7 +1015,11 @@ function AiVenueCard({
         : null;
 
   return (
-    <View style={[styles.resultCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+    <View style={[styles.resultCard, {
+      backgroundColor: colors.card,
+      borderColor: photoVenue?.promoted ? colors.goldDeep : colors.border,
+      borderWidth: photoVenue?.promoted ? 2 : 1,
+    }]}>
       <Pressable
         accessibilityLabel={`Open ${venue.name ?? 'Panda recommendation'}`}
         accessibilityHint="Opens live venue details"
@@ -1081,8 +1027,8 @@ function AiVenueCard({
         onPress={onOpen}
         style={({ pressed }) => pressed && styles.pressed}
       >
-        {photoUri ? (
-          <Image source={{ uri: photoUri }} contentFit="cover" style={styles.resultPhoto} />
+        {photoVenue ? (
+          <VenuePhoto venueId={photoVenue.id} venueName={photoVenue.name} venue={photoVenue} height={styles.resultPhoto.height} />
         ) : (
           <View style={[styles.resultPhotoFallback, { backgroundColor: colors.ivory }]}>
             <PandaLogo size={48} />
@@ -1133,13 +1079,76 @@ function AiVenueCard({
 
 function AiTransitCard({
   colors,
-  context,
+  context: initialContext,
   onDirections,
+  refreshLive,
 }: {
   colors: ReturnType<typeof useColors>;
   context: AiTransitContext;
   onDirections: () => void;
+  refreshLive: boolean;
 }) {
+  const { coordinates } = useLiveVenues();
+  const [context, setContext] = useState(initialContext);
+  const [clock, setClock] = useState(Date.now());
+  const [walking, setWalking] = useState<{ reason: string; duration?: number } | null>(null);
+  useEffect(() => { setContext(initialContext); setWalking(null); }, [initialContext]);
+  useFocusEffect(useCallback(() => {
+    if (!refreshLive || !initialContext.venueId || !coordinates) return;
+    let active = true;
+    const refresh = async () => {
+      if (AppState.currentState !== 'active') return;
+      try {
+        const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(initialContext.venueId!)}/transit?latitude=${coordinates.latitude}&longitude=${coordinates.longitude}`);
+        if (!response.ok) return;
+        const next = await response.json() as AiTransitContext & {
+          recommendation?: string; recommendationReason?: string;
+          directWalk?: { durationMinutes: number } | null;
+        };
+        if (!active) return;
+        if (next.recommendation === 'walk') {
+          setWalking({ reason: next.recommendationReason || 'Check walking access in Google Maps', duration: next.directWalk?.durationMinutes });
+        } else if (next.originStation && next.destinationStation) {
+          setWalking(null);
+          setContext({ ...initialContext, ...next });
+        }
+      } catch {
+        // Retain the dated route; never label an expired prediction as live.
+      } finally {
+        if (active) setClock(Date.now());
+      }
+    };
+    void refresh();
+    const timer = setInterval(() => void refresh(), 60000);
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') void refresh();
+    });
+    return () => { active = false; clearInterval(timer); listener.remove(); };
+  }, [refreshLive, initialContext, coordinates?.latitude, coordinates?.longitude]));
+  if (walking) {
+    const venue = aiVenueToVenue(context.venue ?? { id: context.venueId, name: context.venueName });
+    return <View style={[styles.aiTransitCard, { backgroundColor: colors.card, borderColor: colors.goldLine }]}>
+      <Text style={[styles.aiTransitTitle, { color: colors.foreground }]}>
+        {walking.duration ? 'Walking is the better option' : 'You’re very close'}
+      </Text>
+      <Text style={[styles.aiTransitWalk, { color: colors.green700 }]}>
+        {walking.reason}{walking.duration ? ` · ${walking.duration} min walk` : ''}
+      </Text>
+      <Pressable onPress={() => {
+        if (venue) void Linking.openURL(googleDirectionsUrl(venue, 'walking'))
+          .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
+      }} accessibilityRole="button" style={styles.aiTransitAction}>
+        <Text style={[styles.aiTransitActionText, { color: colors.goldDeep }]}>Walk in Google Maps →</Text>
+      </Pressable>
+    </View>;
+  }
+  const transitSteps = context.transitRoute?.steps.filter(step => step.mode === 'TRANSIT') ?? [];
+  const live = transitSteps.some(step => step.liveUpdatedAt &&
+    clock - new Date(step.liveUpdatedAt).getTime() >= 0 &&
+    clock - new Date(step.liveUpdatedAt).getTime() < 60000);
+  const vehicle = transitSteps[0]?.vehicleType?.toUpperCase() ?? '';
+  const symbol = vehicle === 'BUS' ? '🚌' : ['FERRY', 'BOAT'].includes(vehicle) ? '⛴' : '🚆';
+  const vehicleLabel = vehicle === 'BUS' ? 'Bus' : ['FERRY', 'BOAT'].includes(vehicle) ? 'Boat' : 'Train';
   const hasRoute = Boolean(context.venueId && context.venueName && context.destinationStation);
   const walkLabel = context.venueWalk
     ? `${context.venueWalk.durationMinutes} min walk · ${
@@ -1149,7 +1158,7 @@ function AiTransitCard({
       }`
     : null;
   const routeLabel = context.transitRoute
-    ? `${context.transitRoute.durationMinutes} min by public transport · ${context.transitRoute.steps.length} live steps`
+    ? `${symbol} ${vehicleLabel} · ${context.transitRoute.durationMinutes} min · ${live ? 'live TfL' : 'Google route estimate'}`
     : null;
 
   return (
@@ -1159,15 +1168,15 @@ function AiTransitCard({
           <PandaIcon name="map" size={15} color={colors.green700} />
         </View>
         <View style={styles.aiTransitHeaderCopy}>
-          <Text style={[styles.aiTransitEyebrow, { color: colors.green700 }]}>LIVE STATION ANSWER</Text>
+          <Text style={[styles.aiTransitEyebrow, { color: colors.green700 }]}>{live ? 'LIVE TRANSIT ANSWER' : 'TRANSIT ROUTE ESTIMATE'}</Text>
           <Text style={[styles.aiTransitTitle, { color: colors.foreground }]}>From your current location</Text>
         </View>
       </View>
 
       <View style={styles.aiTransitPoint}>
-        <Text style={styles.aiTransitEmoji}>📍</Text>
+        <Text style={styles.aiTransitEmoji}>{symbol}</Text>
         <View style={styles.aiTransitPointCopy}>
-          <Text style={[styles.aiTransitLabel, { color: colors.mutedForeground }]}>YOUR NEAREST STATION</Text>
+          <Text style={[styles.aiTransitLabel, { color: colors.mutedForeground }]}>YOUR BOARDING STOP</Text>
           <Text style={[styles.aiTransitName, { color: colors.foreground }]}>{context.originStation.name}</Text>
         </View>
       </View>
@@ -1179,7 +1188,7 @@ function AiTransitCard({
             <Text style={styles.aiTransitEmoji}>🎯</Text>
             <View style={styles.aiTransitPointCopy}>
               <Text style={[styles.aiTransitLabel, { color: colors.mutedForeground }]}>
-                VENUE’S NEAREST STATION
+                ALIGHTING STOP NEAR THE VENUE
               </Text>
               <Text style={[styles.aiTransitName, { color: colors.foreground }]}>
                 {context.destinationStation.name}
@@ -1199,7 +1208,7 @@ function AiTransitCard({
 
       {hasRoute ? (
         <Pressable
-          accessibilityLabel={`Get directions to ${context.venueName} in Panda`}
+          accessibilityLabel={`Get live directions to ${context.venueName} in Google Maps`}
           accessibilityRole="button"
           onPress={onDirections}
           style={({ pressed }) => [
@@ -1209,7 +1218,7 @@ function AiTransitCard({
           ]}
         >
           <PandaIcon name="navigate" size={15} color={colors.goldDeep} />
-          <Text style={[styles.aiTransitActionText, styles.embossedGoldText]}>Get directions in Panda</Text>
+          <Text style={[styles.aiTransitActionText, styles.embossedGoldText]}>Get directions in Google Maps</Text>
         </Pressable>
       ) : null}
     </View>

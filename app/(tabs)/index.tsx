@@ -23,6 +23,7 @@ import { FilterDropdown } from '@/components/FilterDropdown';
 import { PandaPlannerSheet, type PlannerMode } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
 import { SuggestionRow } from '@/components/SuggestionRow';
+import { loadPartnerVenues } from '@/utils/partner-venues';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -102,6 +103,7 @@ type LiveVenueResult = {
   photoAttribution?: string;
   photoName?: string;
   photoCount?: number;
+  photoNames?: Array<{ name: string; attribution: string }>;
   distanceMeters?: number;
   types?: string[];
   hasMusic?: boolean;
@@ -163,6 +165,12 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
     photoAttribution: stringValue(record.photoAttribution) || undefined,
     photoName: stringValue(record.photoName) || undefined,
     photoCount,
+    photoNames: Array.isArray(record.photoNames) ? record.photoNames.flatMap(photo => {
+      if (!photo || typeof photo !== 'object') return [];
+      const entry = photo as Record<string, unknown>;
+      return typeof entry.name === 'string'
+        ? [{ name: entry.name, attribution: stringValue(entry.attribution) }] : [];
+    }) : undefined,
     distanceMeters: finiteNumber(record.distanceMeters),
     types: stringArray(record.types),
     hasMusic: record.hasMusic === true,
@@ -568,6 +576,7 @@ function liveVenueFromResult(
     promoted: false,
     photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
     photoName: result.photoName,
+    photoNames: result.photoNames,
     photoCount: Number.isFinite(result.photoCount) ? result.photoCount! : 0,
     discoveryCategories: [...new Set([
       ...classification.categories,
@@ -606,6 +615,13 @@ export default function DiscoverScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
+  const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
+  useEffect(() => {
+    if (!coordinates) return;
+    const controller = new AbortController();
+    void loadPartnerVenues(coordinates, controller.signal).then(setPartners).catch(() => {});
+    return () => controller.abort();
+  }, [coordinates?.latitude, coordinates?.longitude]);
   const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
   const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
@@ -986,8 +1002,26 @@ export default function DiscoverScreen() {
     ];
   }, []);
 
+  const displayVenues = useMemo(() => {
+    const combined = new Map<string, Venue>(liveVenues.map(venue => [venue.id, venue]));
+    for (const venue of partners.venues) if (venue.distanceMeters <= 20000) {
+      combined.set(venue.id, { ...combined.get(venue.id), ...venue });
+    }
+    return [...combined.values()].map(venue => partners.tiers[venue.id] ? {
+      ...venue, promoted: true, banging: partners.tiers[venue.id] === 'banging',
+      premium: partners.tiers[venue.id] === 'banging',
+    } : venue);
+  }, [liveVenues, partners]);
+  const bangingVenues = useMemo(() => [
+    ...partners.venues.filter(venue => venue.banging),
+    ...venues.filter(venue => !partners.venues.some(partner => partner.id === venue.id) &&
+      !partners.tiers[venue.id]).map(venue => ({
+        ...venue, promoted: false,
+        premium: false, banging: venue.banging,
+      })),
+  ], [partners]);
   const filteredVenues = useMemo(() => {
-    const result = liveVenues.filter((venue) => {
+    const result = displayVenues.filter((venue) => {
       const matchesCategory =
         category === 'All'
           ? !venueDiscoveryCategories(venue).includes('Shops')
@@ -1001,7 +1035,7 @@ export default function DiscoverScreen() {
         ? Number(a.distanceMeters) - Number(b.distanceMeters)
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
     );
-  }, [category, liveVenues, priceFilter, sortBy]);
+  }, [category, displayVenues, priceFilter, sortBy]);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -1212,10 +1246,6 @@ export default function DiscoverScreen() {
               saved={isSaved(item.id)}
               onToggleSaved={() => toggleSaved(item)}
               onPress={() => {
-                if (!liveVenues.some((venue) => venue.id === item.id)) {
-                  router.push(`/venue/${item.id}`);
-                  return;
-                }
                 router.push({
                   pathname: '/venue/[id]',
                   params: {
@@ -1276,10 +1306,11 @@ export default function DiscoverScreen() {
         }
       />
       <BangingDrawer
-        venues={venues}
+        venues={bangingVenues}
         isSaved={isSaved}
         onToggleSaved={toggleSaved}
-        onPress={(venue) => router.push(`/venue/${venue.id}`)}
+        onPress={(venue) => router.push({ pathname: '/venue/[id]',
+          params: { id: venue.id, venueData: JSON.stringify(venue) } })}
       />
       <PandaPlannerSheet
         initialLocation={plannerLocation}

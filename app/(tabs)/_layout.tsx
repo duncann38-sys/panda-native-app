@@ -55,6 +55,7 @@ function ClassicTabLayout() {
   return (
     <Tabs
       screenOptions={{
+        tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: colors.goldDeep,
         tabBarInactiveTintColor: colors.mutedForeground,
         headerShown: false,

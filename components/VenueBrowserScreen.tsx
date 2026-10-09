@@ -5,6 +5,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
 import { PandaIcon } from '@/components/PandaIcon';
 import { getVenue } from '@/data/venues';
+import { useLiveVenues } from '@/context/live-venues';
 import { useColors } from '@/hooks/useColors';
 
 type VenueBrowserKind = 'menu' | 'reservation';
@@ -13,15 +14,15 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id } = useLocalSearchParams<{ id: string }>();
-  const venue = getVenue(id ?? '');
+  const { id, venueData, pageUrl: providedUrl } = useLocalSearchParams<{ id: string; venueData?: string; pageUrl?: string }>();
+  const { liveVenues } = useLiveVenues();
+  let passedVenue: ReturnType<typeof getVenue>;
+  try { passedVenue = venueData ? JSON.parse(venueData) : undefined; } catch { passedVenue = undefined; }
+  const venue = passedVenue?.id === id ? passedVenue : liveVenues.find(item => item.id === id) ?? getVenue(id ?? '');
   const isMenu = kind === 'menu';
   const eyebrow = isMenu ? 'PANDA MENU' : 'PANDA RESERVATIONS';
   const title = isMenu ? 'View menu' : 'Reserve a table';
-  const fallbackUrl = `https://www.google.com/search?q=${encodeURIComponent(
-    `${venue?.name ?? 'London venue'} ${isMenu ? 'menu' : 'reservations'}`,
-  )}`;
-  const pageUrl = venue?.website || fallbackUrl;
+  const pageUrl = providedUrl && /^https?:\/\//i.test(providedUrl) ? providedUrl : null;
 
   const goBack = () => {
     if (router.canGoBack()) {
@@ -31,10 +32,10 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
     router.replace(venue ? `/venue/${venue.id}` : '/');
   };
 
-  if (!venue) {
+  if (!venue || !pageUrl) {
     return (
       <View style={[styles.notFound, { backgroundColor: colors.background }]}>
-        <Text style={[styles.notFoundTitle, { color: colors.foreground }]}>Venue unavailable</Text>
+        <Text style={[styles.notFoundTitle, { color: colors.foreground }]}>Verified venue link unavailable</Text>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel="Return to Panda"

@@ -20,6 +20,7 @@ export type Venue = {
   longitude?: number;
   photoName?: string;
   photoCount?: number;
+  photoNames?: Array<{ name: string; attribution: string }>;
   openNow: boolean;
   cached?: boolean;
   website: string;
