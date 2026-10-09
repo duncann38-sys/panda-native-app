@@ -1,0 +1,14 @@
+name: Panda Android Build 37
+
+on:
+  push:
+    branches:
+      - panda-build-37
+
+jobs:
+  build_android_preview:
+    name: Build 37 Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview
