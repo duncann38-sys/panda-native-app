@@ -16,6 +16,10 @@ export type Venue = {
   hours: string;
   feature: string;
   fullAddress: string;
+  latitude?: number;
+  longitude?: number;
+  photoName?: string;
+  photoCount?: number;
   openNow: boolean;
   cached?: boolean;
   website: string;

@@ -1,7 +1,8 @@
 import { Image } from 'expo-image';
 import { StyleSheet, Text, View } from 'react-native';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
-import { getVenue } from '@/data/venues';
+import { getVenue, type Venue } from '@/data/venues';
+import { useLiveVenues } from '@/context/live-venues';
 import { useColors } from '@/hooks/useColors';
 
 export type VenuePhotoItem = {
@@ -9,26 +10,36 @@ export type VenuePhotoItem = {
   attribution: string;
 };
 
-export function venuePhotosFor(venueId: string): VenuePhotoItem[] {
-  const venue = getVenue(venueId);
+export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
+  const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
+  if (venue.photoName) {
+    return [{
+      uri: `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(venue.photoName)}&max=900`,
+      attribution: venue.photoAttributions.join(' · '),
+    }];
+  }
   return venue.photoAttributions.map((attribution, index) => ({
-    uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venueId)}/photos/${index}/image`,
+    uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`,
     attribution,
   }));
 }
 
 export function VenuePhoto({
+  venue,
   venueId,
   venueName,
   height,
 }: {
+  venue?: Venue;
   venueId: string;
   venueName: string;
   height: number;
 }) {
   const colors = useColors();
-  const photo = venuePhotosFor(venueId)[0];
+  const { liveVenues } = useLiveVenues();
+  const record = venue ?? liveVenues.find((item) => item.id === venueId) ?? getVenue(venueId);
+  const photo = record ? venuePhotosFor(record)[0] : undefined;
 
   if (photo) {
     return (

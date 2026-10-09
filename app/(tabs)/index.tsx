@@ -30,6 +30,7 @@ import { useSavedVenues } from '@/context/saved-venues';
 import { venues, type Venue } from '@/data/venues';
 import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
+import { loadProgressiveDiscovery } from '@/utils/discovery-loading';
 
 type TopCategory = 'All' | DiscoveryCategory;
 
@@ -398,6 +399,9 @@ async function fetchDiscoveryPage(
     if (response.status === 401 || response.status === 403) {
       return { venues: [], failure: { code: 'API-FORBIDDEN', status: response.status } };
     }
+    if (response.status === 503) {
+      return { venues: [], failure: { code: 'API-QUOTA', status: response.status } };
+    }
     return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
   } catch (error) {
     return {
@@ -552,6 +556,8 @@ function liveVenueFromResult(
     hours: result.cachedAt ? 'Saved place · hours may have changed' : todayHours ?? 'Live hours unavailable',
     feature: result.type,
     fullAddress: result.fullAddress || result.address,
+    latitude: result.lat,
+    longitude: result.lng,
     openNow: result.openNow === true,
     cached: Boolean(result.cachedAt),
     website: result.website || result.menuLink || mapsUri,
@@ -699,7 +705,9 @@ export default function DiscoverScreen() {
         displayedOrigin.current = null;
       }
       let area = 'your location';
-      try {
+      let published = false;
+      // The area label is optional. Never hold live venues behind geocoding.
+      void (async () => { try {
         const addresses = await Location.reverseGeocodeAsync({
           latitude: location.coordinates.latitude,
           longitude: location.coordinates.longitude,
@@ -711,31 +719,16 @@ export default function DiscoverScreen() {
           broadArea && !/^(greater london|london)$/i.test(broadArea)
             ? broadArea
             : postcodeArea || broadArea || area;
+        if (published && discoveryGeneration.current === generation) setLiveArea(area);
       } catch {
         // A device geocoder failure must not block coordinate-based venue discovery.
-      }
+      } })();
 
       const locationPayload = {
         lat: location.coordinates.latitude,
         lng: location.coordinates.longitude,
       };
-      // One server-batched request replaces fourteen phone requests. This
-      // avoids native transport/rate-limit fan-out while preserving the same
-      // live query coverage. Category expansion remains separate.
-      const batch = await fetchDiscoveryBatch(
-        LIVE_DISCOVERY_QUERIES,
-        locationPayload,
-        reserveDiscoveryRequest,
-      );
-      const discoveryPages = [batch];
-      if (!batch.venues.length && batch.failure?.code !== 'API-FORBIDDEN'
-        && batch.failure?.code !== 'API-RATE-LIMIT'
-        && batch.failure?.code !== 'API-QUOTA') {
-        const smallPage = await fetchDiscoveryPage(
-          'restaurants', locationPayload, undefined, undefined, reserveDiscoveryRequest, 'system',
-        );
-        discoveryPages.push(smallPage);
-      }
+      const publishPages = (discoveryPages: DiscoveryPage[], complete: boolean) => {
       if (discoveryGeneration.current !== generation) return;
       const resultBatches = discoveryPages.map((page) => page.venues);
       const requestFailures = discoveryPages.flatMap((page) => page.failure ? [page.failure] : []);
@@ -758,6 +751,7 @@ export default function DiscoverScreen() {
           !result.id
           || !result.name
           || !result.photoName
+          || (result.photoCount ?? 0) < 5
           || !Number.isFinite(result.lat)
           || !Number.isFinite(result.lng)
         ) {
@@ -776,6 +770,7 @@ export default function DiscoverScreen() {
         .slice(0, 120);
       const nextVenues = [...hospitalityResults, ...supportingResults].map(({ venue }) => venue);
       if (!nextVenues.length) {
+        if (!complete) return;
         const failureCode = requestFailures.find(({ code }) => code === 'API-FORBIDDEN')?.code
           || requestFailures.find(({ code }) => code === 'API-QUOTA')?.code
           || requestFailures.find(({ code }) => code === 'API-RATE-LIMIT')?.code
@@ -797,7 +792,18 @@ export default function DiscoverScreen() {
       cachedNearbyAtRef.current = providerCachedAt;
       setCachedNearbyAt(providerCachedAt);
       setLiveDiscoveryState('ready');
-      await writeNearbyCache({ savedAt: providerCachedAt ?? Date.now(), area, origin, venues: nextVenues });
+      published = true;
+      void writeNearbyCache({ savedAt: providerCachedAt ?? Date.now(), area, origin, venues: nextVenues });
+      };
+      await loadProgressiveDiscovery({
+        queries: LIVE_DISCOVERY_QUERIES,
+        loadFirst: (query) => fetchDiscoveryPage(
+          query, locationPayload, undefined, undefined, reserveDiscoveryRequest, 'system',
+        ),
+        loadMore: (queries) => fetchDiscoveryBatch(queries, locationPayload, reserveDiscoveryRequest),
+        onResults: publishPages,
+        isCurrent: () => discoveryGeneration.current === generation,
+      });
     } catch {
       setLiveDiscoveryFailure('API-RESPONSE');
       setLiveDiscoveryState('error');
