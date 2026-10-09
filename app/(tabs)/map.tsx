@@ -5,6 +5,7 @@ import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState 
 import {
   AppState,
   Keyboard,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -17,6 +18,7 @@ import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import NativeGoogleMap from '@/components/NativeGoogleMap';
+import { googleDirectionsUrl } from '@/utils/venue-actions';
 import PandaRouteSheet, { type WalkingStep } from '@/components/PandaRouteSheet';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -28,6 +30,9 @@ type Percentage = `${number}%`;
 
 type TransitStep = {
   mode: 'WALK' | 'TRANSIT';
+  vehicleType?: string;
+  intermediateStops?: Array<{ name: string }>;
+  stopCount?: number;
   instruction: string;
   durationMinutes: number;
   distanceMeters: number;
@@ -102,6 +107,11 @@ function parseTransitSteps(value: string): TransitStep[] {
 
       return [{
         mode: step.mode,
+        vehicleType: 'vehicleType' in step && typeof step.vehicleType === 'string' ? step.vehicleType : undefined,
+        stopCount: 'stopCount' in step && typeof step.stopCount === 'number' ? step.stopCount : undefined,
+        intermediateStops: 'intermediateStops' in step && Array.isArray(step.intermediateStops)
+          ? step.intermediateStops.filter((stop: unknown): stop is { name: string } =>
+            !!stop && typeof stop === 'object' && 'name' in stop && typeof stop.name === 'string') : undefined,
         instruction: step.instruction,
         durationMinutes: step.durationMinutes,
         distanceMeters: step.distanceMeters,
@@ -201,11 +211,12 @@ function parseWalkingSteps(value: unknown): WalkingStep[] {
 export default function MapScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { coordinates, liveArea, liveVenues, refreshLocation } = useLiveVenues();
+  const { coordinates, liveArea, liveVenues, listedVenues, refreshLocation } = useLiveVenues();
   const {
     directionsVenueData,
     directionsVenueId,
     directionsReturn,
+    routeMode: requestedRouteMode,
     plannerIds,
     plannerVenues: plannerVenueData,
     plannerLocation,
@@ -230,6 +241,7 @@ export default function MapScreen() {
     directionsVenueData?: string;
     directionsVenueId?: string;
     directionsReturn?: 'back' | 'map';
+    routeMode?: 'walking' | 'transit';
     plannerIds?: string;
     plannerVenues?: string;
     plannerLocation?: string;
@@ -270,7 +282,7 @@ export default function MapScreen() {
   }, [dynamicPlannerVenues, plannerIds]);
   const plannerContextAvailable = plannerVenues.length > 0;
   const plannerActive = plannerContextAvailable && !directionsVenueId;
-  const baseDiscoveryVenues = liveVenues;
+  const baseDiscoveryVenues = listedVenues ?? liveVenues;
   const discoveryVenues = useMemo(
     () => dynamicDirectionsVenue && !baseDiscoveryVenues.some((venue) => venue.id === dynamicDirectionsVenue.id)
       ? [dynamicDirectionsVenue, ...baseDiscoveryVenues]
@@ -292,8 +304,9 @@ export default function MapScreen() {
     ?? null,
   );
   const [routeMode, setRouteMode] = useState<'walking' | 'transit'>(
-    transitOriginName && transitDestinationName ? 'transit' : 'walking',
+    requestedRouteMode === 'transit' || (transitOriginName && transitDestinationName) ? 'transit' : 'walking',
   );
+  useEffect(() => { setRouteMode(requestedRouteMode === 'transit' ? 'transit' : 'walking'); }, [directionsVenueId, requestedRouteMode]);
   type WalkingRoute = { distanceMeters: number; durationMinutes: number; polyline?: string; steps?: WalkingStep[] };
   const [navigationActive, setNavigationActive] = useState(false);
   const [walkStartRequested, setWalkStartRequested] = useState(false);
@@ -459,6 +472,8 @@ export default function MapScreen() {
         ? 'Please wait a moment before refreshing departures.'
         : 'Transit connections are unavailable right now.');
       const data = await response.json() as {
+        recommendation?: string;
+        reason?: string;
         originStation?: { name?: string; latitude?: number; longitude?: number };
         destinationStation?: { name?: string; latitude?: number; longitude?: number };
         originWalk?: { durationMinutes?: number; distanceMeters?: number; polyline?: string } | null;
@@ -469,6 +484,11 @@ export default function MapScreen() {
         venueWalk?: { durationMinutes?: number; distanceMeters?: number; polyline?: string } | null;
         updatedAt?: string;
       };
+      if (data.recommendation === 'walk') {
+        setRouteMode('walking');
+        setNavigationError(data.reason || 'Walking is the better option for this nearby venue.');
+        return;
+      }
       const origin = data.originStation;
       const destination = data.destinationStation;
       const route = data.transitRoute;
@@ -927,11 +947,8 @@ export default function MapScreen() {
           navigationStepIndex={navigationStepIndex}
           navigationError={routeUpdateError ?? navigationError}
           onStartNavigation={() => {
-            if (!walkingRoute?.steps?.length) {
-              setNavigationError('Step-by-step walking directions are unavailable for this route.');
-              return;
-            }
-            setWalkStartRequested(true);
+            void Linking.openURL(googleDirectionsUrl(directionsVenue, routeMode))
+              .catch(() => setNavigationError('Google Maps could not open. Please check your maps app.'));
           }}
           onStopNavigation={stopNavigation}
           onReroute={() => {

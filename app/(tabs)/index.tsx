@@ -24,6 +24,7 @@ import { PandaPlannerSheet, type PlannerMode } from '@/components/PandaPlannerSh
 import { PandaWordmark } from '@/components/PandaWordmark';
 import { SuggestionRow } from '@/components/SuggestionRow';
 import { loadPartnerVenues } from '@/utils/partner-venues';
+import { interleavePromotions } from '@/utils/venue-actions';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -54,7 +55,7 @@ const categories: Array<{
   { label: 'American', emoji: '🍔', terms: ['american', 'burger', 'diner'] },
   { label: 'Meat', emoji: '🥩', terms: ['meat', 'steak', 'steakhouse', 'grill', 'bbq', 'barbecue', 'roast', 'churrasco'] },
   { label: 'Bar', emoji: '🍹', terms: ['bar', 'cocktail', 'pub', 'wine', 'drinks', 'nightlife'] },
-  { label: 'Lebanese', emoji: '🍕', terms: ['lebanese', 'middle eastern'] },
+  { label: 'Lebanese', emoji: '🧆', terms: ['lebanese', 'middle eastern'] },
   { label: 'Thai', emoji: '🍜', terms: ['thai'] },
   { label: 'Chicken', emoji: '🍗', terms: ['chicken'] },
   { label: 'Pizza', emoji: '🍕', terms: ['pizza'] },
@@ -70,6 +71,7 @@ const categories: Array<{
   { label: 'Sports', emoji: '⚽', terms: ['sport', 'football'] },
   { label: 'Live Music', emoji: '🎵', terms: ['music', 'dj', 'live'] },
   { label: 'Nightlife', emoji: '🌙', terms: ['nightlife', 'club', 'late night'] },
+  { label: 'Clubs', emoji: '🪩', terms: ['night club', 'nightclub', 'disco'] },
   { label: 'Shops', emoji: '🛍️', terms: [] },
   { label: 'Places of Interest', emoji: '🏛️', terms: [] },
 ];
@@ -309,6 +311,7 @@ const CATEGORY_SEARCH_QUERIES: Partial<Record<DiscoveryCategory, string>> = {
   Sports: 'sports bars showing live football',
   'Live Music': 'live music venues bars',
   Nightlife: 'nightlife clubs live music sports bars entertainment',
+  Clubs: 'nightclubs discos dance clubs',
   Shops: 'shops off licences and food stores',
   'Places of Interest': 'museums parks landmarks and tourist attractions',
 };
@@ -1030,12 +1033,14 @@ export default function DiscoverScreen() {
       const matchesPrice = priceFilter === 'Any price' || poundPrice(venue.price) === priceFilter;
       return matchesCategory && matchesPrice;
     });
-    return result.sort((a, b) =>
+    return interleavePromotions(result.sort((a, b) =>
       sortBy === 'Nearest'
         ? Number(a.distanceMeters) - Number(b.distanceMeters)
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
-    );
+    ));
   }, [category, displayVenues, priceFilter, sortBy]);
+  const { setListedVenues } = useLiveVenues();
+  useEffect(() => { setListedVenues(filteredVenues); }, [filteredVenues, setListedVenues]);
 
   const onRefresh = async () => {
     setRefreshing(true);

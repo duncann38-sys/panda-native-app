@@ -26,6 +26,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon, type PandaIconName } from '@/components/PandaIcon';
 import { VenuePhoto, useVenuePhotos, type VenuePhotoItem } from '@/components/VenuePhoto';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
+import { VenueGallery } from '@/components/VenueGallery';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
@@ -338,8 +339,8 @@ export default function VenueDetailScreen() {
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
   const openWalkingDirections = () => {
-    void Linking.openURL(googleDirectionsUrl(venue, 'walking'))
-      .catch(() => Alert.alert('Google Maps could not open', 'Please check that a maps app or browser is available.'));
+    router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
+      directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };
   const openVenuePage = async (kind: 'menu' | 'reservation') => {
     const links = officialLinks ?? await officialLinksRequest.current;
@@ -349,12 +350,12 @@ export default function VenueDetailScreen() {
         `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
       return;
     }
-    void Linking.openURL(pageUrl).catch(() => Alert.alert('Unable to open the venue website', 'Please check your browser and connection.'));
+    router.push({ pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
+      params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl } });
   };
   const openTransitRoute = () => {
-    void Linking.openURL(googleDirectionsUrl(venue,
-      transitContext?.recommendation === 'walk' ? 'walking' : 'transit'))
-      .catch(() => Alert.alert('Google Maps could not open', 'Please check your maps app or browser.'));
+    router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
+      directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'transit' } });
   };
 
   const openGallery = () => {
@@ -445,7 +446,7 @@ export default function VenueDetailScreen() {
               onIndexChange={setHeroActive}
               onPhotoTap={openGallery}
             />
-            <View style={[styles.heroOverlay, { justifyContent: 'flex-end' }]}>
+            <View pointerEvents="box-none" style={[styles.heroOverlay, { justifyContent: 'flex-end' }]}>
               {photos.length > 1 && (
                 <View style={styles.pagination}>
                   {photos.map((_, idx) => (
@@ -507,7 +508,7 @@ export default function VenueDetailScreen() {
               ]}
             >
               <PandaIcon name="award" size={13} color={colors.goldDeep} />
-              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
+              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>Promoted</Text>
             </View>
           )}
 
@@ -1124,66 +1125,7 @@ function PhotoGallery({
 
   if (!visible) return null;
 
-  return (
-    <Modal visible={visible} animationType="fade" transparent={false} onRequestClose={onClose}>
-      <StatusBar style="dark" backgroundColor={colors.ivory} translucent={false} />
-      <View style={[styles.gallery, { backgroundColor: colors.green950 }]}>
-        <UniversalSwiper
-          photos={photos}
-          activeIndex={active}
-          width={width}
-          height={height}
-          contentFit="contain"
-          backdropColor={colors.green950}
-          fixedBackdropUri={photos[0]?.uri}
-          centerForeground
-          onIndexChange={onActiveChange}
-        />
-
-        {/* Top Controls */}
-        <View
-          style={[
-            styles.galleryTop,
-            { paddingTop: Platform.OS === 'web' ? 24 : Math.max(20, insets.top) },
-          ]}
-        >
-          <BoutiqueCloseButton
-            accessibilityLabel="Close gallery"
-            onPress={onClose}
-            colors={colors}
-            testID="gallery-close"
-            containerStyle={styles.galleryCloseBtn}
-          />
-        </View>
-
-        {/* Bottom Attribution */}
-        <View
-          style={[
-            styles.galleryBottom,
-            { paddingBottom: Platform.OS === 'web' ? 32 : Math.max(32, insets.bottom + 10) },
-          ]}
-        >
-          <View style={styles.galleryBottomWrapper}>
-            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
-            <View style={styles.galleryBottomInner}>
-              <Text
-                style={[
-                  styles.galleryVenueName,
-                  { color: venue.premium ? colors.goldLine : colors.primaryForeground },
-                ]}
-                numberOfLines={1}
-              >
-                {venue.name}
-              </Text>
-              <Text style={styles.galleryAttribution} numberOfLines={2}>
-                Photo by {photos[active]?.attribution || 'Unknown'}
-              </Text>
-            </View>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
+  return <VenueGallery photos={photos} venueName={venue.name} initialIndex={active} visible={visible} onClose={onClose} />;
 }
 
 // -----------------------------------------------------------------------------

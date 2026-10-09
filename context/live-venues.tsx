@@ -16,6 +16,8 @@ type LiveVenuesContextValue = {
   coordinates: UserCoordinates | null;
   liveArea: string;
   liveVenues: Venue[];
+  listedVenues: Venue[] | null;
+  setListedVenues: React.Dispatch<React.SetStateAction<Venue[] | null>>;
   locationStatus: 'loading' | UserLocationSnapshot['status'];
   refreshLocation: (requestPermission?: boolean) => Promise<UserLocationSnapshot>;
   setLiveArea: React.Dispatch<React.SetStateAction<string>>;
@@ -46,6 +48,7 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
   const [coordinates, setCoordinates] = useState<UserCoordinates | null>(null);
   const [liveArea, setLiveArea] = useState('');
   const [liveVenues, setLiveVenues] = useState<Venue[]>([]);
+  const [listedVenues, setListedVenues] = useState<Venue[] | null>(null);
   const [locationStatus, setLocationStatus] = useState<LiveVenuesContextValue['locationStatus']>('loading');
 
   const refreshLocation = useCallback(async (requestPermission = true): Promise<UserLocationSnapshot> => {
@@ -131,12 +134,14 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
       coordinates,
       liveArea,
       liveVenues,
+      listedVenues,
+      setListedVenues,
       locationStatus,
       refreshLocation,
       setLiveArea,
       setLiveVenues,
     }),
-    [coordinates, liveArea, liveVenues, locationStatus, refreshLocation],
+    [coordinates, liveArea, liveVenues, listedVenues, locationStatus, refreshLocation],
   );
 
   return <LiveVenuesContext.Provider value={value}>{children}</LiveVenuesContext.Provider>;

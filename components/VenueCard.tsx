@@ -50,7 +50,7 @@ export function VenueCard({
         {venue.premium ? (
           <View style={[styles.premiumBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
             <Text style={[styles.premiumStar, { color: colors.goldDeep }]}>✦</Text>
-            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
+            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>Promoted</Text>
           </View>
         ) : null}
         <View style={styles.topRow}>

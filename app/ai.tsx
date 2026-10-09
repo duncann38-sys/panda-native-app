@@ -730,8 +730,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const routeVenue = aiVenueToVenue(
       transit.venue ?? { id: transit.venueId, name: transit.venueName, type: 'Live venue' },
     );
-    if (routeVenue) void Linking.openURL(googleDirectionsUrl(routeVenue, 'transit'))
-      .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
+    if (routeVenue) router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: routeVenue.id,
+      directionsVenueData: JSON.stringify(routeVenue), directionsReturn: 'back', routeMode: 'transit' } });
   };
 
   const openAiVenue = (aiVenue: AiVenue) => {
@@ -750,8 +750,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const openAiVenueDirections = async (aiVenue: AiVenue) => {
     const venue = aiVenueToVenue(aiVenue);
     if (!venue) return;
-    await Linking.openURL(googleDirectionsUrl(venue, 'walking'))
-      .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
+    router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
+      directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };
   const openAiVenueMenu = async (venue: AiVenue) => {
     if (!venue.id) return;
@@ -760,7 +760,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!response.ok) throw new Error('Official menu lookup unavailable');
       const links = await response.json() as { menuUrl?: string | null };
       if (!links.menuUrl || !/^https?:\/\//i.test(links.menuUrl)) throw new Error('No verified menu link');
-      await Linking.openURL(links.menuUrl);
+      const record = aiVenueToVenue(venue);
+      if (!record) throw new Error('Venue unavailable');
+      router.push({ pathname: '/venue/[id]/menu', params: { id: record.id, venueData: JSON.stringify(record), pageUrl: links.menuUrl } });
     } catch {
       Alert.alert('Menu link unavailable', 'A correct official menu link could not be verified. No homepage or search link has been substituted.');
     }
@@ -784,8 +786,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <KeyboardAvoidingView
-      behavior="padding"
-      enabled={Platform.OS !== 'android'}
+      behavior={Platform.OS === 'android' ? 'height' : 'padding'}
+      enabled
       keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >

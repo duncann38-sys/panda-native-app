@@ -23,6 +23,9 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
   const eyebrow = isMenu ? 'PANDA MENU' : 'PANDA RESERVATIONS';
   const title = isMenu ? 'View menu' : 'Reserve a table';
   const pageUrl = providedUrl && /^https?:\/\//i.test(providedUrl) ? providedUrl : null;
+  const securePageUrl = pageUrl?.replace(/^http:\/\/(?=(?:www\.)?sevenrooms\.com(?:\/|$))/i, 'https://');
+  const browserUrl = isMenu && Platform.OS === 'android' && securePageUrl && /\.pdf(?:[?#]|$)/i.test(securePageUrl)
+    ? `https://docs.google.com/gview?embedded=true&url=${encodeURIComponent(securePageUrl)}` : securePageUrl;
 
   const goBack = () => {
     if (router.canGoBack()) {
@@ -53,7 +56,7 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
       {Platform.OS === 'web'
         ? createElement('iframe', {
             title: `${title} for ${venue.name}`,
-            src: pageUrl,
+            src: browserUrl,
             loading: 'eager',
             referrerPolicy: 'no-referrer-when-downgrade',
             style: {
@@ -67,12 +70,14 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
           })
         : (
           <WebView
-            source={{ uri: pageUrl }}
+            source={{ uri: browserUrl! }}
             originWhitelist={['https://*', 'http://*']}
             javaScriptEnabled
             domStorageEnabled
             setSupportMultipleWindows={false}
-            style={StyleSheet.absoluteFill}
+            sharedCookiesEnabled
+            thirdPartyCookiesEnabled
+            style={{ position: 'absolute', top: insets.top + 88, left: 0, right: 0, bottom: 0 }}
           />
         )}
 
@@ -88,7 +93,7 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
           ]}
         >
           <PandaIcon name="arrow-left" size={18} color={colors.green800} />
-          <Text style={[styles.backButtonText, { color: colors.green800 }]}>Back</Text>
+          <Text style={[styles.backButtonText, { color: colors.green800 }]}>Back to Panda</Text>
         </Pressable>
         <View style={[styles.headerTitle, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <Text style={[styles.headerEyebrow, { color: colors.green700 }]}>{eyebrow}</Text>

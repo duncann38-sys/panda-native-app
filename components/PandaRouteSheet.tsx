@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { PandaIcon } from './PandaIcon';
 
 export type WalkingStep = {
   instruction: string;
@@ -12,6 +13,9 @@ export type WalkingStep = {
 };
 
 export type TransitStep = {
+  vehicleType?: string;
+  intermediateStops?: Array<{ name: string }>;
+  stopCount?: number;
   mode: 'WALK' | 'TRANSIT';
   instruction: string;
   durationMinutes: number;
@@ -303,6 +307,10 @@ export default function PandaRouteSheet({
       >
       {showingTransit && transitRoute ? (
         <>
+          <Pressable onPress={onStartNavigation} accessibilityRole="button" accessibilityLabel="Continue transit in Google Maps"
+            style={[styles.startNavigation, { backgroundColor: colors.green800, marginBottom: 14 }]}>
+            <Text style={[styles.startNavigationText, { color: colors.primaryForeground }]}>Continue transit in Google Maps</Text>
+          </Pressable>
           <View style={[styles.points, { borderBottomColor: colors.border }]}>
             <RoutePoint label="BOARD AT" name={transitRoute.originName} />
             <RoutePoint label="GET OFF AT" name={transitRoute.destinationName} end />
@@ -351,17 +359,28 @@ export default function PandaRouteSheet({
                 // Predictions are only labelled live while the feed's own timestamp is fresh.
                 <View key={`${index}-${step.mode}-${step.instruction}`} style={styles.leg}>
                   <View style={[styles.legIcon, { backgroundColor: step.mode === 'TRANSIT' ? colors.goldSoft : colors.secondary }]}>
-                    <Ionicons
-                      name={step.mode === 'TRANSIT' ? 'train-outline' : 'walk-outline'}
+                    <PandaIcon
+                      name={step.mode === 'TRANSIT' ? step.vehicleType === 'BUS' ? 'bus' : step.vehicleType === 'FERRY' ? 'boat' : 'train' : 'walk'}
                       size={17}
                       color={step.mode === 'TRANSIT' ? colors.goldDeep : colors.green800}
                     />
                   </View>
                   <View style={[styles.legCopy, index < transitRoute.steps.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
                     <Text style={[styles.legKicker, { color: step.mode === 'TRANSIT' ? colors.goldDeep : colors.green700 }]}>
-                      {step.mode === 'TRANSIT' ? step.lineName || 'PUBLIC TRANSPORT' : 'WALK'}
+                      {step.mode === 'TRANSIT' ? `${step.vehicleType === 'BUS' ? 'BUS' : step.vehicleType === 'FERRY' ? 'BOAT' : 'TRAIN'} · ${step.lineName || 'PUBLIC TRANSPORT'}` : 'WALK'}
                     </Text>
                     <Text style={[styles.legTitle, { color: colors.foreground }]}>{step.instruction}</Text>
+                    {step.mode === 'TRANSIT' ? <>
+                      <Text style={[styles.legDetail, { color: colors.foreground }]}>
+                        {transitRoute.steps.slice(0, index).some(previous => previous.mode === 'TRANSIT') ? 'Change at' : 'Board at'} {step.departureStop}
+                        {' · Get off at '}{step.arrivalStop}
+                      </Text>
+                      {step.intermediateStops?.length ? <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>
+                        Stops: {step.intermediateStops.map(stop => stop.name).join(' → ')}
+                      </Text> : step.stopCount ? <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>
+                        {step.stopCount} stops · Full stop list in Google Maps
+                      </Text> : null}
+                    </> : null}
                     {step.mode === 'TRANSIT' && step.headsign ? (
                       <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>Towards {step.headsign}</Text>
                     ) : null}
@@ -524,13 +543,12 @@ export default function PandaRouteSheet({
               accessibilityRole="button"
               accessibilityLabel="Start walking navigation"
               testID="navigation-start"
-              disabled={!hasWalkingSteps}
               onPress={onStartNavigation}
-              style={[styles.startNavigation, { backgroundColor: colors.green800, opacity: hasWalkingSteps ? 1 : 0.55 }]}
+              style={[styles.startNavigation, { backgroundColor: colors.green800 }]}
             >
               <Ionicons name="navigate-outline" size={18} color={colors.primaryForeground} />
               <Text style={[styles.startNavigationText, { color: colors.primaryForeground }]}>
-                {hasWalkingSteps ? 'Start navigation' : 'Step guidance unavailable'}
+                Start walking in Google Maps
               </Text>
             </Pressable>
           )}

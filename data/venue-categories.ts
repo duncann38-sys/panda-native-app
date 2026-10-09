@@ -28,6 +28,7 @@ export type DiscoveryCategory =
   | 'Sports'
   | 'Live Music'
   | 'Nightlife'
+  | 'Clubs'
   | 'Shops'
   | 'Places of Interest';
 
@@ -188,6 +189,7 @@ export function classifyGooglePlace(input: GooglePlaceCategoryInput): {
     || (hasFoodServiceType && /\b(?:nightlife|clubs?|live music|sports bars?|entertainment)\b/.test(sourceText))
   ) {
     categories.add('Nightlife');
+    if (placeTypes.has('night_club') || /\b(nightclub|night club|disco)\b/.test(normalized)) categories.add('Clubs');
     categories.add('Drinks');
   }
   if (input.hasMusic || /\b(?:live music|music venue|concert|karaoke)\b/.test(normalized)) categories.add('Live Music');

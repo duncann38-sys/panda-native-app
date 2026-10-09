@@ -20,16 +20,19 @@ import { getPandaTimeMode } from '@/constants/panda-time';
 import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useLiveVenues } from '@/context/live-venues';
-import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget } from '@/utils/venue-actions';
+import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget, isLateNightVenue } from '@/utils/venue-actions';
 
 export type PlannerMode = 'morning' | 'lunch' | 'night';
-const plannerRoutes = new Map<string, { durationMinutes: number; expires: number }>();
+const plannerRoutes = new Map<string, { durationMinutes: number; expires: number; mode?: 'walking' | 'transit' }>();
+const plannerProfiles = new Map<string, { value: GooglePlannerProfile; expires: number }>();
+const plannerSearches = new Map<string, { values: PlannerSearchResult[]; expires: number }>();
 
 type PlannerStop = {
   icon: string;
   label: string;
   categories: Array<Venue['category']>;
   terms?: string[];
+  lateNight?: boolean;
 };
 
 type GooglePlannerProfile = {
@@ -51,6 +54,8 @@ type GooglePlannerProfile = {
 };
 
 type PlannerSearchResult = {
+  rating?: number;
+  ratingCount?: number;
   id: string;
   name: string;
   address: string;
@@ -97,7 +102,7 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
     stops: [
       { icon: '🍽️', label: 'Dinner', categories: ['Restaurant'] },
       { icon: '🍸', label: 'Drinks', categories: ['Bar', 'Pub'] },
-      { icon: '🌙', label: 'Late night', categories: ['Bar', 'Pub'], terms: ['bar', 'pub', 'rooftop', 'cocktail'] },
+      { icon: '🪩', label: 'Late night', categories: ['Bar', 'Pub'], terms: ['nightclub', 'disco', 'late bar'], lateNight: true },
     ],
   },
 };
@@ -118,7 +123,7 @@ const AREA_SUGGESTIONS = [
 const REMOTE_SEARCH_TERMS: Record<PlannerMode, string> = {
   morning: 'coffee breakfast brunch',
   lunch: 'lunch restaurants cafes',
-  night: 'dinner restaurants bars pubs',
+  night: 'restaurants cocktail bars nightclubs late-night bars',
 };
 
 function defaultMode(): PlannerMode {
@@ -145,7 +150,7 @@ function plannerCategory(category: string): Venue['category'] {
   const normalized = category.toLowerCase();
   if (normalized.includes('coffee') || normalized.includes('cafe') || normalized.includes('bakery')) return 'Coffee';
   if (normalized.includes('pub')) return 'Pub';
-  if (normalized.includes('bar') || normalized.includes('cocktail')) return 'Bar';
+  if (normalized.includes('bar') || normalized.includes('cocktail') || normalized.includes('club') || normalized.includes('disco')) return 'Bar';
   return 'Restaurant';
 }
 
@@ -162,8 +167,8 @@ function venueFromSearchResult(
     type: result.category,
     distance: 'Live route',
     walkingTime: 'Directions available',
-    rating: '',
-    ratingCount: 0,
+    rating: result.rating != null ? result.rating.toFixed(1) : '',
+    ratingCount: result.ratingCount ?? 0,
     price: result.price || '',
     latitude: result.latitude ?? undefined,
     longitude: result.longitude ?? undefined,
@@ -240,8 +245,8 @@ function getPlan(mode: PlannerMode, price: string, location: string, offset: num
   });
 }
 
-function walkBetween(first: Venue, second: Venue, route?: { durationMinutes: number }) {
-  return route ? `${route.durationMinutes} min walk · Google route` : 'Walking route unavailable';
+function walkBetween(first: Venue, second: Venue, route?: { durationMinutes: number; mode?: 'walking' | 'transit' }) {
+  return route ? `${route.durationMinutes} min ${route.mode === 'transit' ? 'transit' : 'walk'} · Google route` : 'Journey unavailable';
 }
 
 export function PandaPlannerSheet({
@@ -296,14 +301,18 @@ export function PandaPlannerSheet({
   const { liveVenues, coordinates } = useLiveVenues();
   const config = PLAN_MODES[mode];
   const locationQuery = plannerLocationQuery(location);
+  const searchArea = locationQuery || (coordinates ? `${coordinates.latitude.toFixed(2)}, ${coordinates.longitude.toFixed(2)}` : '');
+  const sourceVenues = useMemo(() => !locationQuery && remotePlan && remoteLocation === searchArea
+    ? [...liveVenues, ...remotePlan.filter(venue => !liveVenues.some(existing => existing.id === venue.id))] : liveVenues,
+    [liveVenues, remotePlan, remoteLocation, searchArea, locationQuery]);
   const localPlan = useMemo(
-    () => choosePlanStops(config.stops, liveVenues, price, shuffle),
-    [config.stops, liveVenues, price, shuffle],
+    () => choosePlanStops(config.stops, sourceVenues, price, shuffle),
+    [config.stops, sourceVenues, price, shuffle],
   );
   const candidatePlan = remotePlan && remoteLocation === locationQuery
     ? choosePlanStops(config.stops, remotePlan, price, shuffle) : locationQuery ? [] : localPlan;
   const candidateKey = `${price}:${candidatePlan.map(venue => venue.id).join(',')}`;
-  const [verified, setVerified] = useState<{ key: string; plan: Venue[]; legs: Record<string, { durationMinutes: number }> } | null>(null);
+  const [verified, setVerified] = useState<{ key: string; plan: Venue[]; legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit' }> } | null>(null);
   const [planCheck, setPlanCheck] = useState<'loading' | 'ready' | 'error' | 'empty'>('empty');
   const plan = verified?.key === candidateKey ? verified.plan : [];
   const verifiedLegs = verified?.key === candidateKey ? verified.legs : {};
@@ -316,10 +325,14 @@ export function PandaPlannerSheet({
     setPlanCheck('loading');
     void (async () => {
       const profiles = await Promise.all(candidatePlan.map(async venue => {
+        const cached = plannerProfiles.get(venue.id);
+        if (cached && cached.expires > Date.now()) return cached.value;
         const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/profile`,
           { signal: controller.signal });
         if (!response.ok) throw new Error('Venue facts unavailable');
-        return await response.json() as GooglePlannerProfile;
+        const value = await response.json() as GooglePlannerProfile;
+        plannerProfiles.set(venue.id, { value, expires: Date.now() + 3 * 60 * 60 * 1000 });
+        return value;
       }));
       if (profiles.some(profile => !knownPriceWithinBudget(profile.price, price) ||
         !Number.isFinite(profile.latitude) || !Number.isFinite(profile.longitude))) {
@@ -331,25 +344,34 @@ export function PandaPlannerSheet({
         longitude: profiles[index].longitude!, mapsUri: profiles[index].googleMapsUrl,
         website: profiles[index].website || venue.website, photoNames: profiles[index].photoNames,
       }));
-      const legs: Record<string, { durationMinutes: number }> = {};
+      const legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit' }> = {};
+      const checks: Promise<void>[] = [];
       for (let first = 0; first < verifiedVenues.length; first++) {
         for (let second = first + 1; second < verifiedVenues.length; second++) {
+          checks.push((async () => {
           const from = verifiedVenues[first], to = verifiedVenues[second];
-          const key = `${from.id}:${to.id}`;
+          const isLateLeg = mode === 'night' && first === 1 && second === 2;
+          const isLateJourney = mode === 'night' && second === 2;
+          const key = `${from.id}:${to.id}:${isLateJourney ? 'transit' : 'walking'}`;
           let route = plannerRoutes.get(key);
           if (!route || route.expires <= Date.now()) {
-            const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(to.id)}/walking?latitude=${from.latitude}&longitude=${from.longitude}`,
+            const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(to.id)}/${isLateJourney ? 'transit' : 'walking'}?latitude=${from.latitude}&longitude=${from.longitude}&planner=1&max_minutes=${isLateLeg ? 40 : 60}`,
               { signal: controller.signal });
             if (!response.ok) throw new Error('Walking journey unavailable');
-            const payload = await response.json() as { durationMinutes: number };
-            if (!Number.isFinite(payload.durationMinutes) || payload.durationMinutes < 1) throw new Error('Invalid walking journey');
-            route = { durationMinutes: payload.durationMinutes, expires: Date.now() + 3 * 60 * 60 * 1000 };
+            const payload = await response.json() as { durationMinutes: number; recommendation?: string; directWalk?: { durationMinutes: number }; transitRoute?: { durationMinutes: number } };
+            const durationMinutes = isLateJourney
+              ? payload.recommendation === 'walk' ? payload.directWalk?.durationMinutes : payload.transitRoute?.durationMinutes
+              : payload.durationMinutes;
+            if (!Number.isFinite(durationMinutes) || durationMinutes! < 1) throw new Error('Invalid verified journey');
+            route = { durationMinutes: durationMinutes!, expires: Date.now() + 3 * 60 * 60 * 1000, mode: isLateJourney && payload.recommendation !== 'walk' ? 'transit' : 'walking' };
             plannerRoutes.set(key, route);
           }
-          if (route.durationMinutes > 60) throw new Error('Venues are more than one hour apart');
-          legs[key] = route;
+          if (route.durationMinutes > (isLateLeg ? 40 : 60)) throw new Error('Venues exceed the travel limit');
+          legs[`${from.id}:${to.id}`] = route;
+          })());
         }
       }
+      await Promise.all(checks);
       if (!active) return;
       setGoogleProfiles(current => ({ ...current, ...Object.fromEntries(profiles.map(profile => [profile.id, profile])) }));
       setVerified({ key: candidateKey, plan: verifiedVenues, legs });
@@ -366,7 +388,8 @@ export function PandaPlannerSheet({
 
   useEffect(() => {
     if (!open) return;
-    if (!locationQuery) {
+    const needsNightlife = mode === 'night' && !liveVenues.some(isLateNightVenue);
+    if (!searchArea || (!locationQuery && !needsNightlife)) {
       setRemotePlan(null);
       setRemoteLocation('');
       setRemoteSearchState('idle');
@@ -374,11 +397,19 @@ export function PandaPlannerSheet({
     }
 
     let active = true;
+    const cacheKey = `${mode}:${searchArea}`;
+    const cached = plannerSearches.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+      setRemotePlan(cached.values.map(result => venueFromSearchResult(result, searchArea)));
+      setRemoteLocation(searchArea);
+      setRemoteSearchState('ready');
+      return;
+    }
     setRemoteSearchState('loading');
     const timer = setTimeout(() => {
       void fetch(
         `${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(
-          `${REMOTE_SEARCH_TERMS[mode]} in ${locationQuery}`,
+          `${!locationQuery && needsNightlife ? 'nightclubs discos late-night bars' : REMOTE_SEARCH_TERMS[mode]} in ${searchArea}`,
         )}`,
         { headers: { Accept: 'application/json' } },
       )
@@ -388,8 +419,9 @@ export function PandaPlannerSheet({
         })
         .then((payload) => {
           if (!active) return;
-          setRemotePlan((payload.results ?? []).map(result => venueFromSearchResult(result, locationQuery)));
-          setRemoteLocation(locationQuery);
+          plannerSearches.set(cacheKey, { values: payload.results ?? [], expires: Date.now() + 3 * 60 * 60 * 1000 });
+          setRemotePlan((payload.results ?? []).map(result => venueFromSearchResult(result, searchArea)));
+          setRemoteLocation(searchArea);
           setRemoteSearchState('ready');
         })
         .catch(() => {
@@ -398,13 +430,13 @@ export function PandaPlannerSheet({
           setRemoteLocation('');
           setRemoteSearchState('error');
         });
-    }, 650);
+    }, 250);
 
     return () => {
       active = false;
       clearTimeout(timer);
     };
-  }, [locationQuery, mode, open]);
+  }, [locationQuery, searchArea, mode, open, liveVenues]);
 
   useEffect(() => {
     let active = true;
@@ -416,6 +448,8 @@ export function PandaPlannerSheet({
     void Promise.all(
       missingIds.map(async (id) => {
         try {
+          const cached = plannerProfiles.get(id);
+          if (cached && cached.expires > Date.now()) return cached.value;
           const response = await fetch(
             `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(id)}/profile?plannerVersion=1`,
             { headers: { Accept: 'application/json' } },

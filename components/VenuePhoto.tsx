@@ -1,5 +1,6 @@
 import { Image } from 'expo-image';
-import { ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { VenueGallery } from './VenueGallery';
 import { useEffect, useState } from 'react';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 import { getVenue, type Venue } from '@/data/venues';
@@ -93,6 +94,7 @@ export function VenuePhoto({
   const photos = useVenuePhotos(record);
   const [width, setWidth] = useState(0);
   const [page, setPage] = useState(0);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   useEffect(() => setPage(0), [venueId]);
   const photo = photos[Math.min(page, photos.length - 1)] ?? photos[0];
 
@@ -102,17 +104,20 @@ export function VenuePhoto({
         <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}
           onMomentumScrollEnd={event => setPage(Math.round(event.nativeEvent.contentOffset.x / Math.max(1, width)))}>
           {photos.map((item, index) => (
-            <View key={item.uri} style={{ height, width: width || 1 }}>
+            <Pressable key={item.uri} accessibilityRole="button" accessibilityLabel={`Open ${venueName} photo ${index + 1}`}
+              onPress={event => { event.stopPropagation(); setGalleryIndex(index); }} style={{ height, width: width || 1 }}>
               {Math.abs(index - page) <= 1 ? <Image source={{ uri: item.uri }} contentFit="cover"
                 transition={250} accessibilityLabel={`${venueName} photo ${index + 1} of ${photos.length}`}
                 style={{ height, width: '100%' }} /> : null}
-            </View>
+            </Pressable>
           ))}
         </ScrollView>
         {photos.length > 1 ? <Text style={{ position: 'absolute', right: 5, bottom: 5,
           color: '#fff', backgroundColor: '#0009', borderRadius: 8, paddingHorizontal: 5, fontSize: 10 }}>
           {Math.min(page + 1, photos.length)}/{photos.length}
         </Text> : null}
+        <VenueGallery visible={galleryIndex !== null} initialIndex={galleryIndex ?? 0} photos={photos}
+          venueName={venueName} onClose={() => setGalleryIndex(null)} />
       </View>
     );
   }

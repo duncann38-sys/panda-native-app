@@ -8,6 +8,9 @@ export type PandaIconName =
   | 'send'
   | 'navigate'
   | 'walk'
+  | 'train'
+  | 'bus'
+  | 'boat'
   | 'map-pin'
   | 'x'
   | 'home'
@@ -42,6 +45,17 @@ export function PandaIcon({
 
   const content = (() => {
     switch (name) {
+      case 'train':
+        return <><Rect {...strokeProps} x="5" y="3" width="14" height="15" rx="4" />
+          <Line {...strokeProps} x1="5" y1="10" x2="19" y2="10" />
+          <Circle {...strokeProps} cx="8" cy="14" r="1" /><Circle {...strokeProps} cx="16" cy="14" r="1" />
+          <Path {...strokeProps} d="M8 18l-3 4m11-4l3 4M12 3v7" /></>;
+      case 'bus':
+        return <><Rect {...strokeProps} x="4" y="3" width="16" height="16" rx="3" />
+          <Path {...strokeProps} d="M4 11h16M2 8v5m20-5v5M7 19v2m10-2v2" />
+          <Circle {...strokeProps} cx="8" cy="15" r="1" /><Circle {...strokeProps} cx="16" cy="15" r="1" /></>;
+      case 'boat':
+        return <><Path {...strokeProps} d="M3 13l9-4 9 4-3 7H6zM7 11V5h10v6M12 5V2M2 22q3-3 6 0q4-3 8 0q3-3 6 0" /></>;
       case 'arrow-left':
         return (
           <>

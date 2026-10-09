@@ -36,7 +36,7 @@ export function distanceBetween(
 }
 
 export function choosePlanStops(
-  stops: Array<{ categories: string[]; terms?: string[] }>,
+  stops: Array<{ categories: string[]; terms?: string[]; lateNight?: boolean }>,
   source: Venue[],
   budget: string,
   offset = 0,
@@ -48,15 +48,40 @@ export function choosePlanStops(
     const nearby = available.filter(venue => !chosen.some(previous => previous.id === venue.id) &&
       chosen.every(previous => {
         const distance = distanceBetween(previous, venue);
-        return distance !== null && distance <= 3500;
+        return distance !== null && distance <= (stop.lateNight ? 15000 : 3500);
       }));
-    const matches = nearby.filter(venue => stop.categories.includes(venue.category) ||
+    const matches = nearby.filter(venue => stop.lateNight ? isLateNightVenue(venue) : stop.categories.includes(venue.category) ||
       stop.terms?.some(term => `${venue.type} ${venue.feature} ${venue.name}`.toLowerCase().includes(term)));
-    const pool = (matches.length ? matches : nearby)
-      .sort((a, b) => Number(b.rating || 0) - Number(a.rating || 0));
-    const next = pool[offset % Math.max(1, Math.min(pool.length, 8))];
+    const pool = (matches.length ? matches : stop.lateNight ? [] : nearby)
+      .sort((a, b) => stop.lateNight ? nightlifeScore(b) - nightlifeScore(a) : Number(b.rating || 0) - Number(a.rating || 0));
+    const next = pool[offset % Math.max(1, Math.min(pool.length, stop.lateNight ? 4 : 8))];
     if (!next) break;
     chosen.push(next);
   }
   return chosen;
+}
+
+export function isLateNightVenue(venue: Venue) {
+  const text = `${venue.type} ${venue.feature} ${venue.description} ${venue.hours}`.toLowerCase();
+  if (/\b(night.?club|disco|late.?night|late bar|members.? club)\b/.test(text)) return true;
+  return ['Bar', 'Pub'].includes(venue.category) &&
+    /\b(?:(?:12|[1-5])(?::[0-5]\d)?\s*am|0[0-5]:[0-5]\d|midnight)\b/.test(text);
+}
+
+export function nightlifeScore(venue: Venue) {
+  const text = `${venue.type} ${venue.feature} ${venue.description}`.toLowerCase();
+  return (Number(venue.rating) || 0) * Math.log((Number(venue.ratingCount) || 0) + 10) +
+    (/\b(members|exclusive|private club)\b/.test(text) ? 8 : 0) +
+    (/night.?club|disco/.test(text) ? 4 : 0);
+}
+
+export function interleavePromotions(source: Venue[]) {
+  const organic = source.filter(venue => !venue.promoted);
+  const promoted = source.filter(venue => venue.promoted);
+  const result: Venue[] = [];
+  for (const venue of organic) {
+    result.push(venue);
+    if ((result.length + 1) % 5 === 0 && promoted.length) result.push(promoted.shift()!);
+  }
+  return result;
 }
