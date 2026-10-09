@@ -645,7 +645,7 @@ export default function MapScreen() {
   };
   const filteredVenues = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return plannerActive ? plannerVenues : discoveryVenues.slice(0, 12);
+    if (!query) return plannerActive ? plannerVenues : discoveryVenues;
     return mapVenues
       .filter((venue) =>
         [venue.name, venue.type, venue.category, venue.neighborhood, venue.fullAddress]
@@ -653,7 +653,7 @@ export default function MapScreen() {
           .toLowerCase()
           .includes(query),
       )
-      .slice(0, 12);
+      ;
   }, [discoveryVenues, mapVenues, plannerActive, plannerVenues, searchQuery]);
 
   const closeDirections = () => {
@@ -717,15 +717,15 @@ export default function MapScreen() {
     setDirectionsVenue(null);
     clearRouteParams();
     setSearchFocused(false);
-    setResultsRailVisible(clearSearch);
+    setResultsRailVisible(true);
     if (clearSearch) setSearchQuery('');
     Keyboard.dismiss();
-    const railSource = clearSearch ? mapVenues.slice(0, 12) : filteredVenues;
+    const railSource = clearSearch ? mapVenues : filteredVenues;
     const railIndex = railSource.findIndex((item) => item.id === venue.id);
     if (railIndex >= 0) {
       const scrollToVenue = () =>
         railRef.current?.scrollTo({ x: railIndex * (CARD_WIDTH + RAIL_GAP), animated: true });
-      if (clearSearch && typeof requestAnimationFrame === 'function') {
+      if (typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(scrollToVenue);
       } else {
         scrollToVenue();

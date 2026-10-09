@@ -407,16 +407,17 @@ export function PandaPlannerSheet({
     }
     setRemoteSearchState('loading');
     const timer = setTimeout(() => {
-      void fetch(
-        `${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(
-          `${!locationQuery && needsNightlife ? 'nightclubs discos late-night bars' : REMOTE_SEARCH_TERMS[mode]} in ${searchArea}`,
-        )}`,
-        { headers: { Accept: 'application/json' } },
-      )
-        .then(async (response) => {
-          if (!response.ok) throw new Error('Planner venue search failed');
-          return (await response.json()) as { results?: PlannerSearchResult[] };
-        })
+      const namedArea = locationQuery && AREA_SUGGESTIONS.some(area => area.toLowerCase() === locationQuery)
+        ? `${searchArea}, London` : searchArea;
+      const terms = !locationQuery && needsNightlife ? ['nightclubs discos late-night bars']
+        : mode === 'night' ? ['restaurants', 'bars', 'nightclubs'] : [REMOTE_SEARCH_TERMS[mode]];
+      void Promise.all(terms.map(async term => {
+        const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(`${term} in ${namedArea}`)}`,
+          { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error('Planner venue search failed');
+        return (await response.json()) as { results?: PlannerSearchResult[] };
+      })).then(payloads => ({ results: [...new Map(payloads.flatMap(payload => payload.results ?? [])
+        .map(result => [result.id, result])).values()] }))
         .then((payload) => {
           if (!active) return;
           plannerSearches.set(cacheKey, { values: payload.results ?? [], expires: Date.now() + 3 * 60 * 60 * 1000 });
@@ -834,9 +835,9 @@ const styles = StyleSheet.create({
   modeButton: { alignItems: 'center', borderRadius: 12, flex: 1, justifyContent: 'center', minHeight: 39 },
   modeDivider: { alignSelf: 'center', height: 22, width: StyleSheet.hairlineWidth },
   modeText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
-  filters: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 11 },
-  locationField: { alignItems: 'center', borderRadius: 13, borderWidth: 1, flex: 1, flexDirection: 'row', height: 43, paddingLeft: 10 },
-  locationInput: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 0 },
+  filters: { alignItems: 'stretch', flexDirection: 'column', gap: 8, marginTop: 11 },
+  locationField: { alignItems: 'center', borderRadius: 13, borderWidth: 1, minWidth: 0, flexDirection: 'row', height: 43, paddingLeft: 10 },
+  locationInput: { flex: 1, flexShrink: 1, minWidth: 0, fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 0 },
   clearLocationButton: { alignItems: 'center', height: 36, justifyContent: 'center', width: 25 },
   locateButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 34 },
   priceRow: { flexDirection: 'row', gap: 4 },

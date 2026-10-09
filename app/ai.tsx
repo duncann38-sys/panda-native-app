@@ -1502,6 +1502,8 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     fontFamily: 'Inter_400Regular',
     fontSize: 15,
     minHeight: 49,
