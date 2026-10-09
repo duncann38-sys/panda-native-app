@@ -1125,7 +1125,7 @@ function PhotoGallery({
 
   if (!visible) return null;
 
-  return <VenueGallery photos={photos} venueName={venue.name} initialIndex={active} visible={visible} onClose={onClose} />;
+  return <VenueGallery photos={photos} venueName={venue.name} initialIndex={active} visible={visible} onClose={onClose} onIndexChange={onActiveChange} />;
 }
 
 // -----------------------------------------------------------------------------
