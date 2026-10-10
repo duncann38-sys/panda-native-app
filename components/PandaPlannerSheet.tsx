@@ -334,7 +334,7 @@ export function PandaPlannerSheet({
   );
   const candidatePlan = remotePlan && remoteLocation === locationQuery
     ? choosePlanStops(config.stops, remotePlan, price, 0, { origin: coordinates, excludedIds }) : locationQuery ? [] : localPlan;
-   const candidateKey = `${mode}:${searchArea}:${price}:${candidatePlan.map(venue => venue.id).join(',')}`;
+   const candidateKey = `${mode}:${searchArea}:${price}:${coordinates?.latitude.toFixed(4)}:${coordinates?.longitude.toFixed(4)}:${candidatePlan.map(venue => venue.id).join(',')}`;
    const [verified, setVerified] = useState<{ key: string; plan: Venue[]; legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }> } | null>(null);
   const [planCheck, setPlanCheck] = useState<'loading' | 'ready' | 'error' | 'empty'>('empty');
   const plan = verified?.key === candidateKey ? verified.plan : [];
