@@ -4,6 +4,7 @@ import {
   ActivityIndicator,
   AppState,
   Alert,
+  FlatList,
   Linking,
   Platform,
   Pressable,
@@ -13,7 +14,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
+import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { PandaIcon } from '@/components/PandaIcon';
@@ -146,6 +147,41 @@ const PANDA_AI_REQUEST_TIMEOUT_MS = 18_000;
 const OPTIONAL_REQUEST_TIMEOUT_MS = 5_000;
 const TRANSIT_REQUEST_TIMEOUT_MS = 9_000;
 const REQUIRED_LOCATION_TIMEOUT_MS = 14_000;
+const PANDA_AI_HISTORY_LIMIT = 48;
+const PREFERENCE_PATTERN =
+  /\b(?:i(?:'m| am) (?:a )?(?:vegetarian|vegan|pescatarian|gluten[- ]free|teetotal|sober|allergic)|i(?:'m| am) allergic|allergic to|i (?:don['’]?t|do not|never|can['’]?t|cannot) (?:eat|drink|like|want)|i (?:prefer|love|like|hate|avoid)|please (?:don['’]?t|do not|always|never)|call me|don['’]?t call me|no (?:meat|pork|alcohol|dairy|nuts|gluten|spice|seafood|fish)|my budget|keep it (?:under|below|cheap))\b/i;
+
+// The backend owns the authoritative Panda personality prompt. The client only
+// sends a bounded slice of this session's conversation, plus any explicit
+// preference statements the user made in messages that were trimmed away.
+// Nothing here is persisted beyond the in-memory chat session.
+function buildPandaAiContents(conversation: Array<{ role: 'user' | 'model'; text: string }>) {
+  const kept = conversation.slice(-PANDA_AI_HISTORY_LIMIT);
+  const trimmed = conversation.slice(0, Math.max(0, conversation.length - kept.length));
+  const preferenceNotes = trimmed
+    .filter((message) => message.role === 'user' && PREFERENCE_PATTERN.test(message.text))
+    .map((message) => message.text.trim().slice(0, 280))
+    .slice(-12);
+  const contents = kept.map((message) => ({
+    role: message.role,
+    parts: [{ text: message.text }],
+  }));
+  if (preferenceNotes.length) {
+    const noteText = `Earlier in this chat I told you: ${preferenceNotes.join(' | ')}`;
+    if (contents[0]?.role === 'user') contents[0] = { role: 'user', parts: [{ text: noteText }, ...contents[0].parts] };
+    else contents.unshift({ role: 'user', parts: [{ text: noteText }] });
+  }
+  return contents;
+}
+
+function localTimeZone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
 const suggestions = ['Nearest station & directions', 'What’s open now?', 'Dinner tonight', 'Cocktails nearby', 'Cheap eats'];
 
 async function fetchWithTimeout(
@@ -362,7 +398,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [isListening, setIsListening] = useState(false);
-  const scrollRef = useRef<ScrollView>(null);
+  const listRef = useRef<FlatList<{ message: Message; index: number }>>(null);
+  const inputRef = useRef<TextInput>(null);
+  const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const voiceRef = useRef<VoiceRecognition | null>(null);
   const finalTranscriptRef = useRef('');
   const submittedPromptRef = useRef('');
@@ -371,11 +409,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const chatGenerationRef = useRef(0);
   const primaryPendingRef = useRef(false);
   const primaryControllerRef = useRef<AbortController | null>(null);
-
-  useEffect(() => {
-    const timer = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: false }), 50);
-    return () => clearTimeout(timer);
-  }, [messages, sending]);
 
   useEffect(() => {
     return () => {
@@ -415,15 +448,16 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
     try {
       let requestCoordinates = coordinates;
-      if (!requestCoordinates) {
+      // Pure chat never waits on GPS; only location-dependent questions refresh.
+      if (!requestCoordinates && needsCurrentLocation) {
         const locationResult = await withTimeout(
           refreshLocation(true),
-          needsCurrentLocation ? REQUIRED_LOCATION_TIMEOUT_MS : 2_200,
+          REQUIRED_LOCATION_TIMEOUT_MS,
           null,
         );
         if (!isCurrentRequest()) return;
         requestCoordinates = locationResult?.coordinates ?? null;
-        if (needsCurrentLocation && !requestCoordinates) {
+        if (!requestCoordinates) {
           const locationError =
             locationResult?.status === 'permission-denied'
               ? 'Panda needs location permission to find nearby places. Allow location access for Panda in your device settings, then try again.'
@@ -441,18 +475,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({
-            systemInstruction: {
-              parts: [
-                {
-                  text:
-                    'You are Panda, a very polite British going-out concierge with a cheeky, playful sense of humour. Be warm, witty and useful, never rude or over-familiar. Reply concisely in two or three short sentences. Recommend only real places returned by the venue search. Do not invent opening hours, addresses, station names, routes or offers. For station and directions questions, say you are checking the customer’s live location; the app will append verified Google transit data.',
-                },
-              ],
-            },
-            contents: conversation.map((message) => ({
-              role: message.role,
-              parts: [{ text: message.text }],
-            })),
+            contents: buildPandaAiContents(conversation),
+            chatContext: { timeZone: localTimeZone() },
             generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
             ...(requestCoordinates
               ? {
@@ -768,6 +792,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     }
   };
 
+  // Mirrors the absolute tab bar in (tabs)/_layout.tsx, which hides itself
+  // while the keyboard is open (tabBarHideOnKeyboard).
+  const embeddedTabBarHeight =
+    Platform.OS === 'web' ? 84 : 78 + (Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0);
+
   const clearChat = () => {
     currentRequestRef.current = ++requestSequenceRef.current;
     chatGenerationRef.current += 1;
@@ -786,7 +815,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
   return (
     <KeyboardAvoidingView
-      behavior={Platform.OS === 'android' ? 'height' : 'padding'}
+      behavior="padding"
       enabled
       keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
@@ -821,15 +850,28 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         </Pressable>
       </View>
 
-      <ScrollView
-        ref={scrollRef}
+      <FlatList
+        ref={listRef}
+        inverted
+        data={messages.map((message, index) => ({ message, index })).reverse()}
+        keyExtractor={(item) => `${item.message.role}-${item.index}`}
         style={styles.messageList}
-        contentContainerStyle={[styles.messages, { paddingBottom: 16 }]}
+        contentContainerStyle={[styles.messages, { paddingBottom: 18, paddingTop: 16 }]}
         keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         showsVerticalScrollIndicator={false}
-      >
-        {messages.map((message, index) => (
-          <View key={`${message.role}-${index}`} style={[styles.messageRow, message.role === 'user' && styles.userRow]}>
+        maintainVisibleContentPosition={{ minIndexForVisible: 1, autoscrollToTopThreshold: 80 }}
+        ListHeaderComponent={
+          sending ? (
+            <View style={styles.messageRow}>
+              <View style={[styles.bubble, { backgroundColor: colors.card }]}>
+                <ActivityIndicator color={colors.green700} />
+              </View>
+            </View>
+          ) : null
+        }
+        renderItem={({ item: { message } }) => (
+          <View style={[styles.messageRow, message.role === 'user' && styles.userRow]}>
             <View
               style={[
                 styles.bubble,
@@ -872,16 +914,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               />
             ) : null}
           </View>
-        ))}
-        {sending ? (
-          <View style={styles.messageRow}>
-            <View style={[styles.bubble, { backgroundColor: colors.card }]}>
-              <ActivityIndicator color={colors.green700} />
-            </View>
-          </View>
-        ) : null}
-      </ScrollView>
+        )}
+      />
 
+      <View style={styles.footer}>
       <ScrollView
         horizontal
         style={styles.suggestionRail}
@@ -921,11 +957,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           {
              backgroundColor: isNight ? colors.input : colors.background,
             borderTopColor: colors.border,
-            marginBottom:
-              embedded && Platform.OS === 'android'
-                ? 78 + Math.max(insets.bottom, 24)
-                : 0,
-            paddingBottom: embedded ? 12 : Math.max(12, insets.bottom + 8),
+            // Only one bottom offset at a time: the keyboard (owned by the
+            // KeyboardAvoidingView padding) OR the absolute tab bar / safe inset.
+            paddingBottom: keyboardVisible
+              ? 10
+              : embedded
+                ? 12 + embeddedTabBarHeight
+                : Math.max(12, insets.bottom + 8),
           },
         ]}
       >
@@ -933,7 +971,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           accessibilityLabel="Ask Panda a question"
           value={draft}
           onChangeText={setDraft}
-          onSubmitEditing={() => sendMessage()}
+          ref={inputRef}
+          onSubmitEditing={() => void sendMessage()}
+          submitBehavior="submit"
           placeholder="Ask Panda anything…"
           placeholderTextColor={colors.mutedForeground}
           returnKeyType="send"
@@ -963,7 +1003,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           accessibilityLabel="Send message to Panda"
           accessibilityRole="button"
           disabled={!draft.trim() || sending}
-          onPress={() => sendMessage()}
+          onPress={() => {
+            const keepFocus = inputRef.current?.isFocused() ?? false;
+            void sendMessage();
+            if (keepFocus) inputRef.current?.focus();
+          }}
           style={({ pressed }) => [
             styles.send,
             {
@@ -979,6 +1023,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             color={colors.primaryForeground}
           />
         </Pressable>
+      </View>
       </View>
     </KeyboardAvoidingView>
   );
@@ -1272,6 +1317,10 @@ const styles = StyleSheet.create({
   },
   messageList: {
     flex: 1,
+    minHeight: 0,
+  },
+  footer: {
+    flexShrink: 0,
   },
   messageRow: {
     alignItems: 'flex-start',

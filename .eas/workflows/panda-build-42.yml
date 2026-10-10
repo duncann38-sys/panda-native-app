@@ -1,0 +1,14 @@
+name: Panda Android Build 42
+
+on:
+  push:
+    branches:
+      - panda-build-42
+
+jobs:
+  build_android_preview:
+    name: Build 42 Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview
