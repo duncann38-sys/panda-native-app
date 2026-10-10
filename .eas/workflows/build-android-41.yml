@@ -1,0 +1,14 @@
+name: Panda Android Build 41
+
+on:
+  push:
+    branches:
+      - panda-build-41
+
+jobs:
+  build_android_preview:
+    name: Build 41 Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview

@@ -66,7 +66,9 @@ export function choosePlanStops(
     const pool = matches.sort((a, b) => {
       const distance = (venue: Venue) => options.origin ? distanceBetween(options.origin, venue) ?? Infinity
         : Number.isFinite(venue.distanceMeters) ? venue.distanceMeters : Infinity;
-      const ring = (venue: Venue) => Math.floor(distance(venue) / 1500);
+      // Prefer the immediate neighbourhood before a more expensive venue
+      // several streets away; price decides between similarly nearby choices.
+      const ring = (venue: Venue) => Math.floor(distance(venue) / 250);
       const target = budget.length;
       const coherence = (venue: Venue) => Math.abs(venue.price.length - target);
       return ring(a) - ring(b) || coherence(a) - coherence(b) || (stop.lateNight

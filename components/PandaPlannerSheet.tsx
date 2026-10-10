@@ -319,9 +319,15 @@ export function PandaPlannerSheet({
     ...(blockedChoices.scope === choiceScope ? blockedChoices.ids : []),
   ];
   const wide = expansion.scope === choiceScope && expansion.wide;
-  const sourceVenues = useMemo(() => !locationQuery && remotePlan && remoteLocation === searchArea
-    ? [...liveVenues, ...remotePlan.filter(venue => !liveVenues.some(existing => existing.id === venue.id))] : liveVenues,
-    [liveVenues, remotePlan, remoteLocation, searchArea, locationQuery]);
+  const sourceVenues = useMemo(() => {
+    // Reuse real Google venues already visible in Discovery, including
+    // resolved partner cards, rather than silently omitting those choices.
+    const visible = venues.filter(venue => venue.photoNames?.length &&
+      /^(ChIJ|Ei)[A-Za-z0-9_-]+$/.test(venue.id));
+    const source = [...liveVenues, ...visible,
+      ...(!locationQuery && remotePlan && remoteLocation === searchArea ? remotePlan : [])];
+    return [...new Map(source.slice().reverse().map(venue => [venue.id, venue])).values()];
+  }, [liveVenues, venues, remotePlan, remoteLocation, searchArea, locationQuery]);
   const localPlan = useMemo(
     () => choosePlanStops(config.stops, sourceVenues, price, 0, { origin: coordinates, excludedIds }),
     [config.stops, sourceVenues, price, coordinates, seenChoices, blockedChoices, choiceScope],
@@ -346,7 +352,7 @@ export function PandaPlannerSheet({
         if (cached && cached.expires > Date.now()) return cached.value;
         // Nearby discovery and planner search already contain verified provider facts.
         // Do not block every plan on three redundant detail requests.
-        if (venue.hours !== 'Loading live details' && venue.photoNames?.length &&
+        if (!venue.cached && venue.hours !== 'Loading live details' && venue.photoNames?.length &&
           plannerVenueEligible(venue, price) && Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude)) {
           return {
             id: venue.id, name: venue.name, address: venue.fullAddress, primaryType: venue.type,
@@ -452,7 +458,7 @@ export function PandaPlannerSheet({
   useEffect(() => {
     if (!open) return;
     const needsNightlife = mode === 'night' && !liveVenues.some(venue => isLateNightVenue(venue) && plannerVenueEligible(venue, price));
-    const needsMore = config.stops.some(stop => liveVenues.filter(venue =>
+    const needsMore = config.stops.some(stop => sourceVenues.filter(venue =>
       !excludedIds.includes(venue.id) && plannerVenueEligible(venue, price) &&
       (stop.lateNight ? isLateNightVenue(venue) : stop.categories.includes(venue.category))).length < 2);
     if (!searchArea || (!locationQuery && !needsNightlife && !needsMore && !shuffle && !wide)) {

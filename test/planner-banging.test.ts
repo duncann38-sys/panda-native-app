@@ -80,5 +80,9 @@ assert.equal(choosePlanStops(lunch, alternatives, '££££', 0, {
 }).length, 0);
 assert.equal(choosePlanStops(lunch, [fixture('distant', 'Restaurant', '££££', { distanceMeters: 20000 }),
   fixture('nearest', 'Restaurant', '££', { distanceMeters: 100 })], '££££')[0].id, 'nearest');
+assert.equal(choosePlanStops(lunch, [
+  fixture('Battersea dining', 'Restaurant', '££', { distanceMeters: 150 }),
+  fixture('expensive but farther', 'Restaurant', '££££', { distanceMeters: 1277 }),
+], '££££')[0].id, 'Battersea dining');
 assert.equal(choosePlanStops(lunch, alternatives, '£££').some(venue => venue.price.length > 3), false);
 console.log('Planner quality, strict stop roles, real prices, daily selection, six order windows and paid-tier separation passed.');
