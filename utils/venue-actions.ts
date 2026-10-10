@@ -40,15 +40,23 @@ export function choosePlanStops(
   source: Venue[],
   budget: string,
   offset = 0,
+  options: {
+    excludedIds?: readonly string[];
+    origin?: { latitude: number; longitude: number } | null;
+  } = {},
 ) {
   const chosen: Venue[] = [];
-  const available = source.filter(venue => plannerVenueEligible(venue, budget) &&
+  const excluded = new Set(options.excludedIds || []);
+  const available = [...new Map(source.map(venue => [venue.id, venue])).values()].filter(venue =>
+    !excluded.has(venue.id) && plannerVenueEligible(venue, budget) &&
     Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude));
   for (const stop of stops) {
     const nearby = available.filter(venue => !chosen.some(previous => previous.id === venue.id) &&
       chosen.every(previous => {
         const distance = distanceBetween(previous, venue);
-        return distance !== null && distance <= (stop.lateNight ? 15000 : 3500);
+        // Distance is only a coarse candidate bound. Google verifies the
+        // actual one-hour journey before any plan is shown.
+        return distance !== null && distance <= 60000;
       }));
     const matches = nearby.filter(venue => {
       if (stop.lateNight) return isLateNightVenue(venue);
@@ -56,14 +64,17 @@ export function choosePlanStops(
     });
     // Never replace a missing coffee/dinner/club stop with an unrelated venue.
     const pool = matches.sort((a, b) => {
-      const target = budget.length >= 3 && !stop.categories.every(category => category === 'Coffee') ? budget.length : Math.min(2, budget.length);
+      const distance = (venue: Venue) => options.origin ? distanceBetween(options.origin, venue) ?? Infinity
+        : Number.isFinite(venue.distanceMeters) ? venue.distanceMeters : Infinity;
+      const ring = (venue: Venue) => Math.floor(distance(venue) / 1500);
+      const target = budget.length;
       const coherence = (venue: Venue) => Math.abs(venue.price.length - target);
-      return coherence(a) - coherence(b) || (stop.lateNight
+      return ring(a) - ring(b) || coherence(a) - coherence(b) || (stop.lateNight
         ? nightlifeScore(b) - nightlifeScore(a)
         : Number(b.openNow) - Number(a.openNow) || Number(b.rating || 0) - Number(a.rating || 0) ||
           Math.log(b.ratingCount + 1) - Math.log(a.ratingCount + 1));
     });
-    const next = pool[offset % Math.max(1, Math.min(pool.length, stop.lateNight ? 4 : 8))];
+    const next = pool[offset % Math.max(1, pool.length)];
     if (!next) break;
     chosen.push(next);
   }
@@ -72,9 +83,10 @@ export function choosePlanStops(
 
 export function plannerVenueEligible(venue: Venue, budget: string) {
   if (!knownPriceWithinBudget(venue.price, budget) || Number(venue.rating) < 4 || !Number.isFinite(Number(venue.rating))) return false;
-  // Dining should match the upscale brief. Coffee and club/drink price bands
-  // describe different purchases; a genuine 4+ ££ club fits a ££££ spending cap.
-  return venue.category !== 'Restaurant' || budget.length < 3 || venue.price.length >= 3;
+  // The selected price is a spending ceiling, not a minimum admission price.
+  // Rank more expensive choices first nearby, but do not hide real local
+  // restaurants (including Battersea Power Station) simply because they cost less.
+  return true;
 }
 
 export function isLateNightVenue(venue: Venue) {

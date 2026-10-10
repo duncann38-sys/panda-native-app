@@ -623,12 +623,19 @@ export default function DiscoverScreen() {
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
   const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
+  const [bangingStatus, setBangingStatus] = useState('Finding luxury venues…');
+  const [bangingRefreshTick, setBangingRefreshTick] = useState(0);
+  const bangingOrigin = useRef('');
+  const [bangingPremiumJourneys, setBangingPremiumJourneys] = useState<Record<string, {
+    bangingTransitMinutes: number; bangingVerifiedAt: number;
+  }>>({});
   const [rotationWindow, setRotationWindow] = useState(() => {
     const clock = bangingClock(); return `${clock.day}:${clock.slot}`;
   });
   useEffect(() => {
     const timer = setInterval(() => {
       const clock = bangingClock(); setRotationWindow(`${clock.day}:${clock.slot}`);
+      setBangingRefreshTick(value => value + 1);
     }, 60_000);
     return () => clearInterval(timer);
   }, []);
@@ -1029,42 +1036,53 @@ export default function DiscoverScreen() {
     } : venue);
   }, [liveVenues, partners]);
   useEffect(() => {
-    if (!coordinates || !liveVenues.length) return;
+    if (!coordinates) return;
     let active = true;
-    setBangingSupplement([]);
-    const existing = liveVenues.filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue));
-    if (existing.length >= 8) return;
+    const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
+    if (bangingOrigin.current !== originKey) {
+      bangingOrigin.current = originKey;
+      setBangingSupplement([]);
+      setBangingPremiumJourneys({});
+      setBangingStatus('Finding luxury venues…');
+    }
     const origin = coordinates;
-    void getBangingAreaResults(origin).then(results => {
+    const premiumIds = partners.venues.filter(venue => venue.banging && venue.premium).map(venue => venue.id);
+    void getBangingAreaResults(origin, premiumIds).then(body => {
       if (!active) return;
-      const additional = results.flatMap(result => {
+      setBangingPremiumJourneys(body.premiumJourneys);
+      const additional = body.results.flatMap(result => {
         const venue = venueFromSearchResult(result, 'Nearby');
         const meters = distanceBetween(origin, venue);
         if (meters === null) return [];
         return [{
           ...venue,
-          neighborhood: venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
+          neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
+          luxurySource: result.luxurySource,
+          bangingTransitMinutes: result.bangingTransitMinutes,
+          bangingVerifiedAt: result.bangingVerifiedAt,
           distanceMeters: meters,
           distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
-          walkingTime: `${Math.max(1, Math.round(meters / 75))} min walk`,
+          walkingTime: `${result.bangingTransitMinutes} min by public transport`,
           banging: true,
         }];
       }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
         && Number.isFinite(venue.distanceMeters) && Boolean(venue.photoNames?.length));
       setBangingSupplement(additional);
+      setBangingStatus(body.complete ? '' : 'Limited verified luxury choices in this area');
     }).catch(error => {
-      // Preserve real loaded venues and paid placements if the wider lookup fails.
       if (active) console.warn('[Panda Banging] Wider lookup unavailable:', error.message);
+      if (active) setBangingStatus('Luxury selection temporarily unavailable · retrying shortly');
     });
     return () => { active = false; };
-  }, [coordinates?.latitude, coordinates?.longitude, liveVenues, partners.tiers]);
+  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, rotationWindow, bangingRefreshTick]);
   const bangingVenues = useMemo(() => rotateBanging([
-    ...partners.venues.filter(venue => venue.banging && venue.distanceMeters <= 20000),
-    // Reuse the nearby live directory, not an unchanged bundled editorial list.
-    ...[...liveVenues, ...bangingSupplement].filter(venue => !partners.tiers[venue.id]).map(venue => ({
+    ...partners.venues.filter(venue => venue.banging).map(venue => ({
+      ...venue, ...bangingPremiumJourneys[venue.id],
+    })),
+    ...bangingSupplement.filter(venue => !partners.tiers[venue.id]).map(venue => ({
       ...venue, promoted: false, premium: false, banging: true,
     })),
-  ]), [partners, liveVenues, bangingSupplement, rotationWindow]);
+  ]), [partners, bangingSupplement, bangingPremiumJourneys, rotationWindow, bangingRefreshTick]);
   const filteredVenues = useMemo(() => {
     const result = displayVenues.filter((venue) => {
       const matchesCategory =
@@ -1353,6 +1371,7 @@ export default function DiscoverScreen() {
         }
       />
       <BangingDrawer
+        status={bangingStatus}
         venues={bangingVenues}
         isSaved={isSaved}
         onToggleSaved={toggleSaved}

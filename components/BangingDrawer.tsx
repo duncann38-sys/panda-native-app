@@ -25,11 +25,13 @@ const DRAWER_CLOSED_OFFSET = DRAWER_OPEN_HEIGHT - DRAWER_CLOSED_HEIGHT;
 
 export function BangingDrawer({
   venues,
+  status,
   isSaved,
   onToggleSaved,
   onPress,
 }: {
   venues: Venue[];
+  status?: string;
   isSaved: (id: string) => boolean;
   onToggleSaved: (venue: Venue) => void;
   onPress: (venue: Venue) => void;
@@ -144,7 +146,7 @@ export function BangingDrawer({
               <View style={[styles.liveDot, { backgroundColor: colors.gold }]} />
             </View>
             <Text style={[styles.spotCount, !open && styles.closedSpotCount, { color: colors.goldDeep }]}>
-              {bangingVenues.length} curated spots
+              {bangingVenues.length ? `${bangingVenues.length} curated cards` : status || 'Finding luxury venues…'}
             </Text>
           </View>
           <Feather name={open ? 'chevron-down' : 'chevron-up'} size={open ? 22 : 18} color={colors.goldDeep} />
@@ -155,7 +157,7 @@ export function BangingDrawer({
           data={bangingVenues}
           horizontal
           decelerationRate="fast"
-          keyExtractor={(venue) => venue.id}
+          keyExtractor={(venue, index) => `${venue.id}:${index}`}
           snapToInterval={cardWidth + cardGap}
           snapToAlignment="start"
           showsHorizontalScrollIndicator={false}

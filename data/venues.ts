@@ -23,6 +23,9 @@ export type Venue = {
   photoNames?: Array<{ name: string; attribution: string }>;
   openNow: boolean;
   cached?: boolean;
+  luxurySource?: string;
+  bangingTransitMinutes?: number;
+  bangingVerifiedAt?: number;
   website: string;
   mapsUri: string;
   phone: string;
