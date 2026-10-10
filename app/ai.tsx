@@ -974,6 +974,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           ref={inputRef}
           onSubmitEditing={() => void sendMessage()}
           submitBehavior="submit"
+          blurOnSubmit={false}
           placeholder="Ask Panda anything…"
           placeholderTextColor={colors.mutedForeground}
           returnKeyType="send"
