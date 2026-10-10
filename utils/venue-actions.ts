@@ -72,8 +72,9 @@ export function choosePlanStops(
 
 export function plannerVenueEligible(venue: Venue, budget: string) {
   if (!knownPriceWithinBudget(venue.price, budget) || Number(venue.rating) < 4 || !Number.isFinite(Number(venue.rating))) return false;
-  // A high-end dining plan must not silently fall back to a budget cafe.
-  return venue.category === 'Coffee' || budget.length < 3 || venue.price.length >= 3;
+  // Dining should match the upscale brief. Coffee and club/drink price bands
+  // describe different purchases; a genuine 4+ ££ club fits a ££££ spending cap.
+  return venue.category !== 'Restaurant' || budget.length < 3 || venue.price.length >= 3;
 }
 
 export function isLateNightVenue(venue: Venue) {

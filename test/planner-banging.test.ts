@@ -27,7 +27,7 @@ assert.equal(plannerVenueEligible(fixture('budget', 'Restaurant', '££'), '££
 const night = [{ categories: ['Restaurant'] }, { categories: ['Bar', 'Pub'] },
   { categories: ['Bar', 'Pub'], lateNight: true }];
 assert.equal(choosePlanStops(night, source, '££££').length, 2);
-const club = fixture('club', 'Bar', '£££', { type: 'Night club' });
+const club = fixture('club', 'Bar', '££', { type: 'Night club' });
 assert.deepEqual(choosePlanStops(night, [...source, club], '££££').map(venue => venue.id), ['dining', 'bar', 'club']);
 const pool = Array.from({ length: 50 }, (_, index) => fixture(`organic-${index}`, 'Restaurant', '£££', { banging: true }));
 const paid = Array.from({ length: 10 }, (_, index) => fixture(`paid-${index}`, 'Pub', '££', { banging: true, premium: true, promoted: true }));
