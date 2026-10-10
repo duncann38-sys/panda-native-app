@@ -1005,9 +1005,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           accessibilityRole="button"
           disabled={!draft.trim() || sending}
           onPress={() => {
-            const keepFocus = inputRef.current?.isFocused() ?? false;
             void sendMessage();
-            if (keepFocus) inputRef.current?.focus();
+            inputRef.current?.focus();
           }}
           style={({ pressed }) => [
             styles.send,
