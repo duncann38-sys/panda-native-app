@@ -1,4 +1,5 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
@@ -11,6 +12,7 @@ type VenueCardProps = {
   onToggleSaved: () => void;
   compact?: boolean;
   featured?: boolean;
+  presentation?: 'banging';
 };
 
 export function VenueCard({
@@ -20,9 +22,12 @@ export function VenueCard({
   onToggleSaved,
   compact = false,
   featured = false,
+  presentation,
 }: VenueCardProps) {
   const colors = useColors();
+  const editorial = presentation === 'banging';
   const premiumCard = venue.premium;
+  const tierLabel = venue.premium ? (editorial && venue.banging ? 'Premium' : 'Promoted') : null;
   const premiumFeatured = featured && venue.premium;
 
   return (
@@ -32,8 +37,8 @@ export function VenueCard({
       style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: premiumCard ? colors.green800 : colors.card,
-          borderColor: premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
+          backgroundColor: editorial ? '#FFF8E6' : premiumCard ? colors.green800 : colors.card,
+          borderColor: editorial || premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
         },
         pressed && styles.pressed,
         premiumFeatured && styles.featuredCard,
@@ -45,12 +50,19 @@ export function VenueCard({
           venue={venue}
           venueId={venue.id}
           venueName={venue.name}
-          height={compact ? 100 : premiumFeatured ? 148 : 136}
+          height={editorial ? 108 : compact ? 100 : premiumFeatured ? 148 : 136}
         />
-        {venue.premium ? (
+        {editorial ? (
+          <LinearGradient
+            colors={['transparent', 'rgba(20,12,2,0.72)']}
+            pointerEvents="none"
+            style={styles.editorialShade}
+          />
+        ) : null}
+        {tierLabel ? (
           <View style={[styles.premiumBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
             <Text style={[styles.premiumStar, { color: colors.goldDeep }]}>✦</Text>
-            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>Promoted</Text>
+            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>{tierLabel}</Text>
           </View>
         ) : null}
         <View style={styles.topRow}>
@@ -100,7 +112,7 @@ export function VenueCard({
           style={[
             styles.name,
             compact && styles.compactName,
-            { color: premiumCard ? colors.primaryForeground : colors.foreground },
+            { color: premiumCard && !editorial ? colors.primaryForeground : colors.foreground },
           ]}
         >
           {venue.name}
@@ -112,7 +124,7 @@ export function VenueCard({
               style={[
                 styles.metaText,
                 compact && styles.compactMetaText,
-                { color: premiumCard ? colors.primaryForeground : colors.foreground },
+                { color: premiumCard && !editorial ? colors.primaryForeground : colors.foreground },
               ]}
             >
               {venue.rating}
@@ -120,30 +132,30 @@ export function VenueCard({
           </View>
           {venue.price ? (
             <>
-              <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+              <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard && !editorial ? colors.mint300 : colors.mutedForeground }]}>·</Text>
               <Text
                 style={[
                   styles.metaText,
                   compact && styles.compactMetaText,
-                  { color: premiumCard ? colors.mint300 : colors.mutedForeground },
+                  { color: premiumCard && !editorial ? colors.mint300 : colors.mutedForeground },
                 ]}
               >
                 {venue.price}
               </Text>
             </>
           ) : null}
-          <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+          <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard && !editorial ? colors.mint300 : colors.mutedForeground }]}>·</Text>
           <Text
             style={[
               styles.metaText,
               compact && styles.compactMetaText,
-              { color: premiumCard ? colors.mint300 : colors.mutedForeground },
+              { color: premiumCard && !editorial ? colors.mint300 : colors.mutedForeground },
             ]}
           >
             {venue.walkingTime}
           </Text>
         </View>
-        <Text style={[styles.openText, { color: venue.cached ? colors.mutedForeground : premiumCard ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
+        <Text style={[styles.openText, { color: venue.cached ? colors.mutedForeground : premiumCard && !editorial ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
           {venue.cached ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
         </Text>
       </View>
@@ -194,6 +206,13 @@ const styles = StyleSheet.create({
   photo: {
     overflow: 'hidden',
     position: 'relative',
+  },
+  editorialShade: {
+    bottom: 0,
+    height: 70,
+    left: 0,
+    position: 'absolute',
+    right: 0,
   },
   premiumBadge: {
     alignItems: 'center',

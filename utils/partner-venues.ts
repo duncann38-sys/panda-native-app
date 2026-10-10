@@ -1,6 +1,7 @@
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 import type { Venue } from '@/data/venues';
 import { distanceBetween } from './venue-actions';
+import { bangingClock } from './banging-rotation';
 
 type Placement = { name: string; place_id: string; tier: 'banging' | 'discovery' };
 type Profile = {
@@ -18,7 +19,9 @@ export function getPartnerTier(placeId: string) { return activeTiers[placeId]; }
 
 function cohort(pool: Placement[]) {
   if (pool.length <= 10) return pool;
-  const group = (sessionSeed + Math.floor(Date.now() / 86400000)) % Math.ceil(pool.length / 10);
+  const clock = bangingClock();
+  const day = Math.floor(Date.parse(`${clock.day}T12:00:00Z`) / 86400000);
+  const group = (sessionSeed + day * 6 + clock.slot) % Math.ceil(pool.length / 10);
   return Array.from({ length: 10 }, (_, index) => pool[(group * 10 + index) % pool.length]);
 }
 
@@ -30,11 +33,18 @@ export async function loadPartnerVenues(
   if (!response.ok) throw new Error('Current partner placements unavailable');
   const body = await response.json() as { venues?: Placement[] };
   const placements = (body.venues ?? []).filter(placement => placement.place_id &&
+    !placement.place_id.startsWith('place-') &&
     ['banging', 'discovery'].includes(placement.tier));
   const tiers = Object.fromEntries(placements.map(placement => [placement.place_id, placement.tier]));
   activeTiers = tiers;
-  const selected = [...cohort(placements.filter(item => item.tier === 'banging')),
-    ...cohort(placements.filter(item => item.tier === 'discovery'))];
+  const locallyRanked = placements.slice().sort((a, b) => {
+    const first = profileCache.get(a.place_id)?.profile;
+    const second = profileCache.get(b.place_id)?.profile;
+    return (first ? distanceBetween(origin, first) ?? Infinity : Infinity) -
+      (second ? distanceBetween(origin, second) ?? Infinity : Infinity);
+  });
+  const selected = [...cohort(locallyRanked.filter(item => item.tier === 'banging')),
+    ...cohort(locallyRanked.filter(item => item.tier === 'discovery'))];
   const venues: Venue[] = [];
   // Resolve a bounded cohort, never every paid venue, with at most three requests at once.
   for (let offset = 0; offset < selected.length && !signal.aborted; offset += 3) {

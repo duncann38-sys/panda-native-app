@@ -19,7 +19,7 @@ import { VenueCard } from '@/components/VenueCard';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 
-const DRAWER_OPEN_HEIGHT = 270;
+const DRAWER_OPEN_HEIGHT = 314;
 const DRAWER_CLOSED_HEIGHT = 48;
 const DRAWER_CLOSED_OFFSET = DRAWER_OPEN_HEIGHT - DRAWER_CLOSED_HEIGHT;
 
@@ -43,17 +43,8 @@ export function BangingDrawer({
   const settledOffset = useRef(DRAWER_CLOSED_OFFSET);
   const gestureStartOffset = useRef(DRAWER_CLOSED_OFFSET);
   const [activeIndex, setActiveIndex] = useState(0);
-  const normalVenues = venues.filter((venue) => venue.banging && !venue.premium);
-  const premiumVenues = venues.filter((venue) => venue.banging && venue.premium);
-  const bangingVenues = normalVenues.reduce<Venue[]>((ordered, venue, index) => {
-    ordered.push(venue);
-    const nextPosition = index + 1;
-    if (nextPosition % 4 === 0 && premiumVenues[nextPosition / 4 - 1]) {
-      ordered.push(premiumVenues[nextPosition / 4 - 1]);
-    }
-    return ordered;
-  }, []);
-  premiumVenues.slice(Math.ceil(normalVenues.length / 4)).forEach((venue) => bangingVenues.push(venue));
+  // The parent owns daily selection and timed ordering; do not reorder it here.
+  const bangingVenues = venues.filter(venue => venue.banging);
   const cardWidth = Math.min(194, Math.max(174, width - 156));
   const cardGap = 10;
   const sidePadding = 16;
@@ -183,6 +174,7 @@ export function BangingDrawer({
                 onToggleSaved={() => onToggleSaved(venue)}
                 onPress={() => onPress(venue)}
                 compact
+                presentation="banging"
                 featured={index === activeIndex}
               />
             </View>
@@ -287,7 +279,7 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
   },
   carouselViewport: {
-    height: 208,
+    height: 252,
     position: 'relative',
   },
   frostedEdge: {

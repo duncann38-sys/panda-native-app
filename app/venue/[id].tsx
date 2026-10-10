@@ -385,10 +385,11 @@ export default function VenueDetailScreen() {
       pathname: '/' as const,
       params: {
         openPlanner: plannerMode || 'night',
+        plannerReturn: String(Date.now()),
         plannerIds: plannerIds || '',
         plannerVenues: String(plannerVenueData || ''),
         plannerLocation: plannerLocation || 'Current location',
-        plannerPrice: plannerPrice || '££',
+        plannerPrice: plannerPrice || '££££',
       },
     };
     if (router.canDismiss()) {
@@ -496,7 +497,7 @@ export default function VenueDetailScreen() {
             <View style={[styles.grip, { backgroundColor: colors.border }]} />
           </View>
 
-          {venue.premium && (
+          {(venue.premium || venue.promoted) && (
             <View
               style={[
                 styles.premiumLabel,
@@ -508,7 +509,7 @@ export default function VenueDetailScreen() {
               ]}
             >
               <PandaIcon name="award" size={13} color={colors.goldDeep} />
-              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>Promoted</Text>
+              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>{venue.premium && venue.banging ? 'Premium' : 'Promoted'}</Text>
             </View>
           )}
 
@@ -741,7 +742,7 @@ function PlannerVenuePreview({
   width: number;
 }) {
   const [photoIndex, setPhotoIndex] = useState(0);
-  const previewWidth = Math.max(280, width * 0.94);
+  const previewWidth = Math.max(280, width - 24);
 
   return (
     <View style={[styles.plannerPreviewScreen, { backgroundColor: colors.mint100 }]}>
@@ -759,10 +760,10 @@ function PlannerVenuePreview({
             </View>
           </View>
           <View style={[styles.plannerBackdropModes, { backgroundColor: colors.card }]}>
-            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>🌅 Morning</Text>
-            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>🍽️ Lunch</Text>
+            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>Morning</Text>
+            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>Lunch</Text>
             <Text style={[styles.plannerBackdropModeActive, { backgroundColor: colors.green800 }]}>
-              {plannerMode === 'morning' ? '🌅 Morning' : plannerMode === 'lunch' ? '🍽️ Lunch' : '🌙 Night'}
+              {plannerMode === 'morning' ? 'Morning' : plannerMode === 'lunch' ? 'Lunch' : 'Night'}
             </Text>
           </View>
           {plannerVenues.map((plannerVenue, index) => (
@@ -772,7 +773,7 @@ function PlannerVenuePreview({
               </View>
               <View style={styles.plannerBackdropStopCopy}>
                 <Text style={[styles.plannerBackdropStopLabel, { color: colors.green700 }]}>
-                  {index + 1}. {index === 0 ? 'Dinner' : index === 1 ? 'Drinks' : 'Late night'}
+                  {index + 1}. {(plannerMode === 'morning' ? ['Coffee', 'Breakfast', 'Brunch'] : plannerMode === 'lunch' ? ['Lunch', 'Coffee', 'Something sweet'] : ['Dinner', 'Drinks', 'Late night'])[index] ?? `Stop ${index + 1}`}
                 </Text>
                 <Text numberOfLines={1} style={[styles.plannerBackdropStopName, { color: colors.foreground }]}>
                   {plannerVenue.name}
@@ -793,8 +794,8 @@ function PlannerVenuePreview({
           {
             backgroundColor: '#FFFBF1',
             borderColor: colors.goldLine,
-            marginBottom: Math.max(16, insets.bottom + 10),
-            marginTop: Math.max(18, insets.top + 12),
+            marginBottom: Math.max(12, insets.bottom + 8),
+            marginTop: Math.max(12, insets.top + 8),
           },
         ]}
       >
@@ -802,19 +803,38 @@ function PlannerVenuePreview({
           {photos.length > 0 ? (
             <UniversalSwiper
               activeIndex={photoIndex}
-              height={245}
+              height={300}
               onIndexChange={setPhotoIndex}
               photos={photos}
               width={previewWidth}
             />
           ) : (
-            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={245} />
+            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={300} />
           )}
           <LinearGradient
             colors={['rgba(5,26,20,0.02)', 'rgba(5,26,20,0.62)']}
             pointerEvents="none"
             style={StyleSheet.absoluteFill}
           />
+          <View style={styles.plannerHeroBar}>
+            <Pressable
+              accessibilityLabel="Back to Planner"
+              accessibilityRole="button"
+              onPress={onBack}
+              style={styles.plannerHeroBtn}
+            >
+              <PandaIcon name="arrow-left" size={16} color="#FFFFFF" />
+              <Text style={styles.plannerHeroBtnText}>Back</Text>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Close"
+              accessibilityRole="button"
+              onPress={onBack}
+              style={styles.plannerHeroBtn}
+            >
+              <PandaIcon name="x" size={16} color="#FFFFFF" />
+            </Pressable>
+          </View>
           <View pointerEvents="none" style={styles.plannerHeroCopy}>
             <Text style={styles.plannerHeroEyebrow}>FROM YOUR PANDA PLAN</Text>
             <Text numberOfLines={2} style={styles.plannerHeroTitle}>
@@ -1497,17 +1517,42 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     borderWidth: 1,
     elevation: 18,
-    height: '72%',
-    maxHeight: 640,
+    flex: 1,
+    maxHeight: 820,
     overflow: 'hidden',
     shadowColor: '#062E22',
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.24,
     shadowRadius: 26,
-    width: '94%',
+    width: '100%',
+  },
+  plannerHeroBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 12,
+    position: 'absolute',
+    right: 12,
+    top: 12,
+    zIndex: 5,
+  },
+  plannerHeroBtn: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(5,26,20,0.55)',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 38,
+    minWidth: 38,
+    justifyContent: 'center',
+    paddingHorizontal: 12,
+  },
+  plannerHeroBtnText: {
+    color: '#FFFFFF',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
   },
   plannerPreviewHero: {
-    height: 190,
+    height: 300,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -1520,14 +1565,14 @@ const styles = StyleSheet.create({
   plannerHeroEyebrow: {
     color: '#F5D98C',
     fontFamily: 'Inter_700Bold',
-    fontSize: 8,
+    fontSize: 10,
     letterSpacing: 1.2,
   },
   plannerHeroTitle: {
     color: '#FFFFFF',
     fontFamily: 'Inter_700Bold',
-    fontSize: 22,
-    letterSpacing: -0.4,
+    fontSize: 26,
+    letterSpacing: -0.5,
     marginTop: 4,
   },
   plannerPreviewPagination: {
@@ -1546,9 +1591,9 @@ const styles = StyleSheet.create({
     width: 17,
   },
   plannerPreviewContent: {
-    paddingBottom: 18,
-    paddingHorizontal: 18,
-    paddingTop: 15,
+    paddingBottom: 28,
+    paddingHorizontal: 20,
+    paddingTop: 18,
   },
   plannerPreviewChips: {
     flexDirection: 'row',
@@ -1557,13 +1602,13 @@ const styles = StyleSheet.create({
   },
   plannerPreviewType: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 11,
-    marginTop: 13,
+    fontSize: 13,
+    marginTop: 15,
   },
   plannerPreviewDescription: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 12,
-    lineHeight: 18,
+    fontSize: 14,
+    lineHeight: 21,
     marginTop: 6,
   },
   plannerPreviewAddress: {
@@ -1580,12 +1625,12 @@ const styles = StyleSheet.create({
   },
   plannerPreviewAddressText: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 11,
-    lineHeight: 16,
+    fontSize: 13,
+    lineHeight: 19,
   },
   plannerPreviewWalk: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 10,
+    fontSize: 12,
     marginTop: 5,
   },
   plannerPreviewActions: {

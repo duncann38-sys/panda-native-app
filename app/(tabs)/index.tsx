@@ -25,6 +25,7 @@ import { PandaWordmark } from '@/components/PandaWordmark';
 import { SuggestionRow } from '@/components/SuggestionRow';
 import { loadPartnerVenues } from '@/utils/partner-venues';
 import { interleavePromotions } from '@/utils/venue-actions';
+import { bangingClock, rotateBanging } from '@/utils/banging-rotation';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -592,11 +593,12 @@ export default function DiscoverScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { openPlanner, plannerIds, plannerLocation, plannerPrice } = useLocalSearchParams<{
+  const { openPlanner, plannerIds, plannerLocation, plannerPrice, plannerReturn } = useLocalSearchParams<{
     openPlanner?: string;
     plannerIds?: string;
     plannerLocation?: string;
     plannerPrice?: string;
+    plannerReturn?: string;
   }>();
   const plannerMode =
     openPlanner === 'morning' || openPlanner === 'lunch' || openPlanner === 'night' ? openPlanner : undefined;
@@ -619,12 +621,21 @@ export default function DiscoverScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
+  const [rotationWindow, setRotationWindow] = useState(() => {
+    const clock = bangingClock(); return `${clock.day}:${clock.slot}`;
+  });
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const clock = bangingClock(); setRotationWindow(`${clock.day}:${clock.slot}`);
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, []);
   useEffect(() => {
     if (!coordinates) return;
     const controller = new AbortController();
     void loadPartnerVenues(coordinates, controller.signal).then(setPartners).catch(() => {});
     return () => controller.abort();
-  }, [coordinates?.latitude, coordinates?.longitude]);
+  }, [coordinates?.latitude, coordinates?.longitude, rotationWindow]);
   const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
   const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
@@ -1015,14 +1026,13 @@ export default function DiscoverScreen() {
       premium: partners.tiers[venue.id] === 'banging',
     } : venue);
   }, [liveVenues, partners]);
-  const bangingVenues = useMemo(() => [
-    ...partners.venues.filter(venue => venue.banging),
-    ...venues.filter(venue => !partners.venues.some(partner => partner.id === venue.id) &&
-      !partners.tiers[venue.id]).map(venue => ({
-        ...venue, promoted: false,
-        premium: false, banging: venue.banging,
-      })),
-  ], [partners]);
+  const bangingVenues = useMemo(() => rotateBanging([
+    ...partners.venues.filter(venue => venue.banging && venue.distanceMeters <= 20000),
+    // Reuse the nearby live directory, not an unchanged bundled editorial list.
+    ...liveVenues.filter(venue => !partners.tiers[venue.id]).map(venue => ({
+      ...venue, promoted: false, premium: false, banging: true,
+    })),
+  ]), [partners, liveVenues, rotationWindow]);
   const filteredVenues = useMemo(() => {
     const result = displayVenues.filter((venue) => {
       const matchesCategory =
@@ -1066,7 +1076,7 @@ export default function DiscoverScreen() {
             testID="time-planner-shortcut"
             accessibilityLabel={`Plan my ${currentTimeMode}`}
             accessibilityRole="button"
-            onPress={() => router.push({ pathname: '/', params: { openPlanner: currentTimeMode } })}
+            onPress={() => router.push({ pathname: '/', params: { openPlanner: currentTimeMode, plannerReturn: String(Date.now()), plannerPrice: '££££' } })}
             style={({ pressed }) => [
               styles.modePill,
               { backgroundColor: colors.honeySoft, borderColor: colors.goldLine },
@@ -1331,6 +1341,9 @@ export default function DiscoverScreen() {
               plannerVenues: JSON.stringify(plan),
               plannerLocation: context.location,
               plannerPrice: context.price,
+              plannerRouteSegments: JSON.stringify(context.routeSegments),
+              directionsVenueId: '',
+              directionsVenueData: '',
             },
           })
         }
@@ -1363,7 +1376,7 @@ export default function DiscoverScreen() {
             },
           })
         }
-        openRequest={openPlanner}
+        openRequest={openPlanner ? `${openPlanner}:${plannerReturn || ''}` : undefined}
       />
     </View>
   );

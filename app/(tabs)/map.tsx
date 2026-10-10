@@ -222,6 +222,7 @@ export default function MapScreen() {
     plannerLocation,
     plannerMode,
     plannerPrice,
+    plannerRouteSegments,
     transitOriginName,
     transitDestinationName,
     transitOriginCoordinates,
@@ -247,6 +248,7 @@ export default function MapScreen() {
     plannerLocation?: string;
     plannerMode?: string;
     plannerPrice?: string;
+    plannerRouteSegments?: string;
     transitOriginName?: string;
     transitDestinationName?: string;
     transitOriginCoordinates?: string;
@@ -282,6 +284,13 @@ export default function MapScreen() {
   }, [dynamicPlannerVenues, plannerIds]);
   const plannerContextAvailable = plannerVenues.length > 0;
   const plannerActive = plannerContextAvailable && !directionsVenueId;
+  const plannedSegments = useMemo(() => {
+    try {
+      const value = JSON.parse(String(plannerRouteSegments || '[]'));
+      return Array.isArray(value) ? value.filter((segment): segment is { encoded: string; mode: 'walking' | 'transit' } =>
+        typeof segment?.encoded === 'string' && ['walking', 'transit'].includes(segment.mode)) : [];
+    } catch { return []; }
+  }, [plannerRouteSegments]);
   const baseDiscoveryVenues = listedVenues ?? liveVenues;
   const discoveryVenues = useMemo(
     () => dynamicDirectionsVenue && !baseDiscoveryVenues.some((venue) => venue.id === dynamicDirectionsVenue.id)
@@ -303,6 +312,13 @@ export default function MapScreen() {
     ?? mapVenues.find((venue) => venue.id === String(directionsVenueId || ''))
     ?? null,
   );
+  useEffect(() => {
+    if (!plannerActive) return;
+    setDirectionsVenue(null);
+    setSearchQuery('');
+    setSelectedIndex(0);
+    setResultsRailVisible(true);
+  }, [plannerActive, plannerIds, plannerVenueData]);
   const [routeMode, setRouteMode] = useState<'walking' | 'transit'>(
     requestedRouteMode === 'transit' || (transitOriginName && transitDestinationName) ? 'transit' : 'walking',
   );
@@ -382,6 +398,7 @@ export default function MapScreen() {
   }, [freshTransit, directionsVenue?.id, transitOriginCoordinates, transitDestinationCoordinates,
     transitRoute?.originName, transitRoute?.destinationName]);
   const routeSegments = useMemo(() => {
+    if (plannerActive) return plannedSegments;
     if (!directionsVenue) return [];
     if (routeMode === 'walking') {
       return walkingRoute?.polyline
@@ -398,7 +415,7 @@ export default function MapScreen() {
       { encoded: transitRoute.polyline, mode: 'transit' as const },
       { encoded: transitRoute.destinationPolyline, mode: 'walking' as const },
     ].filter((segment) => Boolean(segment.encoded));
-  }, [directionsVenue?.id, routeMode, walkingRoute?.polyline,
+  }, [plannerActive, plannedSegments, directionsVenue?.id, routeMode, walkingRoute?.polyline,
     transitRoute?.originPolyline, transitRoute?.polyline, transitRoute?.destinationPolyline, transitRoute?.steps]);
   const hasMappedRoute = Platform.OS !== 'web'
     && routeSegments.some((segment) => decodeRoutePolyline(segment.encoded).length > 1);
@@ -695,10 +712,11 @@ export default function MapScreen() {
       pathname: '/' as const,
       params: {
         openPlanner: String(plannerMode || 'night'),
+        plannerReturn: String(Date.now()),
         plannerIds: String(plannerIds || ''),
         plannerVenues: String(plannerVenueData || ''),
         plannerLocation: String(plannerLocation || 'Current location'),
-        plannerPrice: String(plannerPrice || '££'),
+        plannerPrice: String(plannerPrice || '££££'),
       },
     };
     if (router.canDismiss()) {
@@ -1042,7 +1060,7 @@ export default function MapScreen() {
                                   plannerVenues: String(plannerVenueData || ''),
                                   plannerMode: String(plannerMode || 'night'),
                                   plannerLocation: String(plannerLocation || 'Current location'),
-                                  plannerPrice: String(plannerPrice || '££'),
+                                  plannerPrice: String(plannerPrice || '££££'),
                                 }
                               : liveVenues.some((item) => item.id === venue.id)
                                 ? {

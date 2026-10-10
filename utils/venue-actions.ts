@@ -42,7 +42,7 @@ export function choosePlanStops(
   offset = 0,
 ) {
   const chosen: Venue[] = [];
-  const available = source.filter(venue => knownPriceWithinBudget(venue.price, budget) &&
+  const available = source.filter(venue => plannerVenueEligible(venue, budget) &&
     Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude));
   for (const stop of stops) {
     const nearby = available.filter(venue => !chosen.some(previous => previous.id === venue.id) &&
@@ -50,15 +50,30 @@ export function choosePlanStops(
         const distance = distanceBetween(previous, venue);
         return distance !== null && distance <= (stop.lateNight ? 15000 : 3500);
       }));
-    const matches = nearby.filter(venue => stop.lateNight ? isLateNightVenue(venue) : stop.categories.includes(venue.category) ||
-      stop.terms?.some(term => `${venue.type} ${venue.feature} ${venue.name}`.toLowerCase().includes(term)));
-    const pool = (matches.length ? matches : stop.lateNight ? [] : nearby)
-      .sort((a, b) => stop.lateNight ? nightlifeScore(b) - nightlifeScore(a) : Number(b.rating || 0) - Number(a.rating || 0));
+    const matches = nearby.filter(venue => {
+      if (stop.lateNight) return isLateNightVenue(venue);
+      return stop.categories.includes(venue.category);
+    });
+    // Never replace a missing coffee/dinner/club stop with an unrelated venue.
+    const pool = matches.sort((a, b) => {
+      const target = budget.length >= 3 && !stop.categories.every(category => category === 'Coffee') ? budget.length : Math.min(2, budget.length);
+      const coherence = (venue: Venue) => Math.abs(venue.price.length - target);
+      return coherence(a) - coherence(b) || (stop.lateNight
+        ? nightlifeScore(b) - nightlifeScore(a)
+        : Number(b.openNow) - Number(a.openNow) || Number(b.rating || 0) - Number(a.rating || 0) ||
+          Math.log(b.ratingCount + 1) - Math.log(a.ratingCount + 1));
+    });
     const next = pool[offset % Math.max(1, Math.min(pool.length, stop.lateNight ? 4 : 8))];
     if (!next) break;
     chosen.push(next);
   }
   return chosen;
+}
+
+export function plannerVenueEligible(venue: Venue, budget: string) {
+  if (!knownPriceWithinBudget(venue.price, budget) || Number(venue.rating) < 4 || !Number.isFinite(Number(venue.rating))) return false;
+  // A high-end dining plan must not silently fall back to a budget cafe.
+  return venue.category === 'Coffee' || budget.length < 3 || venue.price.length >= 3;
 }
 
 export function isLateNightVenue(venue: Venue) {
