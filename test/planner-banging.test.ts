@@ -43,4 +43,12 @@ const tomorrow = rotateBanging([...pool, ...paid], new Date('2026-10-11T00:00:00
 assert.notDeepEqual(first.filter(venue => !venue.premium).map(venue => venue.id).sort(),
   tomorrow.filter(venue => !venue.premium).map(venue => venue.id).sort());
 assert.equal(bangingClock(new Date('2026-10-10T23:30:00Z')).day, '2026-10-11');
+const small = pool.slice(0, 3);
+const smallOrders = Array.from({ length: 6 }, (_, slot) =>
+  rotateBanging(small, new Date(`2026-10-10T${String(slot * 4).padStart(2, '0')}:00:00Z`))
+    .map(venue => venue.id).join(','));
+assert.equal(smallOrders.filter((value, i) => i && value !== smallOrders[i - 1]).length, 5);
+assert.notDeepEqual(
+  rotateBanging(small, new Date('2026-10-10T00:00:00Z')).map(v => v.id).sort(),
+  rotateBanging(small, new Date('2026-10-11T00:00:00Z')).map(v => v.id).sort());
 console.log('Planner quality, strict stop roles, real prices, daily selection, six order windows and paid-tier separation passed.');

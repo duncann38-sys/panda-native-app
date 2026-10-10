@@ -15,21 +15,26 @@ function hash(value: string) {
   return result >>> 0;
 }
 
+export function isOrganicBangingVenue(venue: Venue) {
+  return !venue.promoted && !venue.premium &&
+    Number(venue.rating) >= 4 && venue.price.length >= 3 && venue.distanceMeters <= 20000 &&
+    ['Restaurant', 'Bar', 'Pub'].includes(venue.category);
+}
+
 export function rotateBanging(source: Venue[], now = new Date(), identity = 'panda') {
   const { day, slot } = bangingClock(now);
   const unique = [...new Map(source.map(venue => [venue.id, venue])).values()];
   const premium = unique.filter(venue => venue.banging && venue.premium);
-  const eligible = unique.filter(venue => !venue.promoted && !venue.premium &&
-    Number(venue.rating) >= 4 && venue.price.length >= 3 && venue.distanceMeters <= 20000 &&
-    ['Restaurant', 'Bar', 'Pub'].includes(venue.category));
+  const eligible = unique.filter(isOrganicBangingVenue);
   const stable = eligible.sort((a, b) => hash(`${identity}:${a.id}`) - hash(`${identity}:${b.id}`));
   const start = stable.length ? Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) % stable.length : 0;
   const daily = [...stable.slice(start), ...stable.slice(0, start)];
-  const count = Math.min(Math.max(0, 40 - Math.min(10, premium.length)), Math.ceil(daily.length * 0.75));
+  const count = Math.min(Math.max(0, 40 - Math.min(10, premium.length)),
+    daily.length, Math.max(2, Math.floor(daily.length * 0.75)));
   const organic = daily.slice(0, count);
   // Daily selection is stable; advance the order in six four-hour London windows.
   const rotate = (pool: Venue[]) => {
-    const shift = pool.length ? Math.floor(slot * pool.length / 6) % pool.length : 0;
+    const shift = pool.length ? slot % pool.length : 0;
     return [...pool.slice(shift), ...pool.slice(0, shift)];
   };
   const paid = rotate(premium.slice(0, 10));

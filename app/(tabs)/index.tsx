@@ -20,12 +20,13 @@ import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BangingDrawer } from '@/components/BangingDrawer';
 import { FilterDropdown } from '@/components/FilterDropdown';
-import { PandaPlannerSheet, type PlannerMode } from '@/components/PandaPlannerSheet';
+import { PandaPlannerSheet, type PlannerMode, venueFromSearchResult } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
 import { SuggestionRow } from '@/components/SuggestionRow';
 import { loadPartnerVenues } from '@/utils/partner-venues';
-import { interleavePromotions } from '@/utils/venue-actions';
-import { bangingClock, rotateBanging } from '@/utils/banging-rotation';
+import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
+import { bangingClock, rotateBanging, isOrganicBangingVenue } from '@/utils/banging-rotation';
+import { getBangingAreaResults } from '@/utils/banging-area-search';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -621,6 +622,7 @@ export default function DiscoverScreen() {
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
+  const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
   const [rotationWindow, setRotationWindow] = useState(() => {
     const clock = bangingClock(); return `${clock.day}:${clock.slot}`;
   });
@@ -1026,13 +1028,43 @@ export default function DiscoverScreen() {
       premium: partners.tiers[venue.id] === 'banging',
     } : venue);
   }, [liveVenues, partners]);
+  useEffect(() => {
+    if (!coordinates || !liveVenues.length) return;
+    let active = true;
+    setBangingSupplement([]);
+    const existing = liveVenues.filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue));
+    if (existing.length >= 8) return;
+    const origin = coordinates;
+    void getBangingAreaResults(origin).then(results => {
+      if (!active) return;
+      const additional = results.flatMap(result => {
+        const venue = venueFromSearchResult(result, 'Nearby');
+        const meters = distanceBetween(origin, venue);
+        if (meters === null) return [];
+        return [{
+          ...venue,
+          neighborhood: venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
+          distanceMeters: meters,
+          distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
+          walkingTime: `${Math.max(1, Math.round(meters / 75))} min walk`,
+          banging: true,
+        }];
+      }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
+        && Number.isFinite(venue.distanceMeters) && Boolean(venue.photoNames?.length));
+      setBangingSupplement(additional);
+    }).catch(error => {
+      // Preserve real loaded venues and paid placements if the wider lookup fails.
+      if (active) console.warn('[Panda Banging] Wider lookup unavailable:', error.message);
+    });
+    return () => { active = false; };
+  }, [coordinates?.latitude, coordinates?.longitude, liveVenues, partners.tiers]);
   const bangingVenues = useMemo(() => rotateBanging([
     ...partners.venues.filter(venue => venue.banging && venue.distanceMeters <= 20000),
     // Reuse the nearby live directory, not an unchanged bundled editorial list.
-    ...liveVenues.filter(venue => !partners.tiers[venue.id]).map(venue => ({
+    ...[...liveVenues, ...bangingSupplement].filter(venue => !partners.tiers[venue.id]).map(venue => ({
       ...venue, promoted: false, premium: false, banging: true,
     })),
-  ]), [partners, liveVenues, rotationWindow]);
+  ]), [partners, liveVenues, bangingSupplement, rotationWindow]);
   const filteredVenues = useMemo(() => {
     const result = displayVenues.filter((venue) => {
       const matchesCategory =

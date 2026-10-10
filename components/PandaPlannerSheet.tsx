@@ -21,6 +21,7 @@ import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useLiveVenues } from '@/context/live-venues';
 import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget, plannerVenueEligible, isLateNightVenue } from '@/utils/venue-actions';
+import { fetchWithDeadline } from '@/utils/banging-area-search';
 
 export type PlannerMode = 'morning' | 'lunch' | 'night';
 const plannerRoutes = new Map<string, { durationMinutes: number; expires: number; mode?: 'walking' | 'transit'; polyline?: string }>();
@@ -54,7 +55,7 @@ type GooglePlannerProfile = {
   photoNames?: Array<{ name: string; attribution: string }>;
 };
 
-type PlannerSearchResult = {
+export type PlannerSearchResult = {
   rating?: number;
   ratingCount?: number;
   id: string;
@@ -158,7 +159,7 @@ function plannerCategory(category: string): Venue['category'] {
   return 'Restaurant';
 }
 
-function venueFromSearchResult(
+export function venueFromSearchResult(
   result: PlannerSearchResult,
   location: string,
 ): Venue {
@@ -440,8 +441,8 @@ export function PandaPlannerSheet({
         request = Promise.all(terms.map(async term => {
         const query = locationQuery ? `${term} in ${namedArea}` : term;
         const bias = !locationQuery && coordinates ? `&latitude=${coordinates.latitude}&longitude=${coordinates.longitude}` : '';
-        const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(query)}${bias}`,
-          { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
+        const response = await fetchWithDeadline(`${PANDA_RUNTIME_API}/api/partner/venues?query=${encodeURIComponent(query)}${bias}`,
+          { headers: { Accept: 'application/json' } });
         if (!response.ok) throw new Error('Planner venue search failed');
         return (await response.json()) as { results?: PlannerSearchResult[] };
         })).then(payloads => [...new Map(payloads.flatMap(payload => payload.results ?? [])
