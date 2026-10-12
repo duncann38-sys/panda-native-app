@@ -354,6 +354,7 @@ export default function VenueDetailScreen() {
     const links = officialLinks ?? await officialLinksRequest.current;
     const pageUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
     if (!pageUrl) {
+      recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
       Alert.alert('Verified venue link unavailable',
         `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
       return;

@@ -16,6 +16,7 @@ export function createVenueActivityRecorder(options: {
 }) {
   let pending: ActivityEvent[] | null = null;
   let chain = Promise.resolve();
+  let delivery: Promise<void> | null = null;
   const persist = () => options.storage.setItem(KEY, JSON.stringify(pending));
   async function load() {
     if (pending !== null) return;
@@ -29,8 +30,14 @@ export function createVenueActivityRecorder(options: {
     await persist();
   }
   async function deliver() {
-    while (pending?.length) {
-      const batch = pending.slice(0, 100);
+    if (delivery) return delivery;
+    delivery = (async () => {
+    while (true) {
+      const batch = await run(async () => {
+        await load();
+        return pending!.slice(0, 100);
+      });
+      if (!batch.length) return;
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 10_000);
       let response: Response;
@@ -48,13 +55,17 @@ export function createVenueActivityRecorder(options: {
       if (result.ok !== true || result.stored !== batch.length) {
         throw new Error('Venue activity storage was not confirmed');
       }
-      pending.splice(0, batch.length);
-      await persist();
+      await run(async () => {
+        pending!.splice(0, batch.length);
+        await persist();
+      });
     }
+    })().finally(() => { delivery = null; });
+    return delivery;
   }
-  function run(operation: () => Promise<void>) {
+  function run<T>(operation: () => Promise<T>) {
     const result = chain.then(operation);
-    chain = result.catch(() => {});
+    chain = result.then(() => {}, () => {});
     return result;
   }
   return {
@@ -68,9 +79,8 @@ export function createVenueActivityRecorder(options: {
         await load();
         pending!.push(event);
         await persist();
-        await deliver();
-      });
+      }).then(deliver);
     },
-    flush: () => run(async () => { await load(); await deliver(); }),
+    flush: () => run(load).then(deliver),
   };
 }

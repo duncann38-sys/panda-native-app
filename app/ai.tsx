@@ -790,6 +790,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!record) throw new Error('Venue unavailable');
       router.push({ pathname: '/venue/[id]/menu', params: { id: record.id, venueData: JSON.stringify(record), pageUrl: links.menuUrl } });
     } catch {
+      const record = aiVenueToVenue(venue);
+      if (record) recordVenueActivity('menu_click', record);
       Alert.alert('Menu link unavailable', 'A correct official menu link could not be verified. No homepage or search link has been substituted.');
     }
   };
