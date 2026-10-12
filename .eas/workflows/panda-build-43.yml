@@ -1,0 +1,14 @@
+name: Panda Android Activity Tracking
+
+on:
+  push:
+    branches:
+      - panda-build-43
+
+jobs:
+  build_android_preview:
+    name: Build Android APK with venue activity recording
+    type: build
+    params:
+      platform: android
+      profile: preview

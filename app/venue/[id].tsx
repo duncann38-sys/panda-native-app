@@ -31,6 +31,7 @@ import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 
 type GoogleVenueProfile = {
   rating: number | null;
@@ -190,6 +191,12 @@ export default function VenueDetailScreen() {
     [plannerVenueData],
   );
   const venue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
+  const openedVenueId = useRef<string | null>(null);
+  useEffect(() => {
+    if (!venue?.id || openedVenueId.current === venue.id) return;
+    openedVenueId.current = venue.id;
+    recordVenueActivity('detail_open', venue);
+  }, [venue?.id, venue?.name]);
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
   const photos = useVenuePhotos(venue);
@@ -339,6 +346,7 @@ export default function VenueDetailScreen() {
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
   const openWalkingDirections = () => {
+    recordVenueActivity('directions_click', venue);
     router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
       directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };
@@ -354,6 +362,7 @@ export default function VenueDetailScreen() {
       params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl } });
   };
   const openTransitRoute = () => {
+    recordVenueActivity('directions_click', venue);
     router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
       directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'transit' } });
   };
@@ -666,7 +675,10 @@ export default function VenueDetailScreen() {
                 icon="phone"
                 background={colors.muted}
                 foreground={colors.green800}
-                onPress={() => openExternal(`tel:${venue.phone.replace(/\\s/g, '')}`)}
+                onPress={() => {
+                  recordVenueActivity('call_click', venue);
+                  openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
+                }}
               />
             ) : null}
             </View>

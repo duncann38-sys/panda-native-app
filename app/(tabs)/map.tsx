@@ -24,6 +24,7 @@ import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { decodeRoutePolyline, distanceBetweenCoordinates, distanceFromCoordinateToSegment } from '@/utils/route-geometry';
 
 type Percentage = `${number}%`;
@@ -756,6 +757,7 @@ export default function MapScreen() {
   };
 
   const openDirections = (venue: Venue) => {
+    recordVenueActivity('directions_click', venue);
     stopNavigation();
     setFreshTransit(null);
     clearRouteParams();
@@ -965,6 +967,7 @@ export default function MapScreen() {
           navigationStepIndex={navigationStepIndex}
           navigationError={routeUpdateError ?? navigationError}
           onStartNavigation={() => {
+            recordVenueActivity('directions_click', directionsVenue);
             void Linking.openURL(googleDirectionsUrl(directionsVenue, routeMode))
               .catch(() => setNavigationError('Google Maps could not open. Please check your maps app.'));
           }}

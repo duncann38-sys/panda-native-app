@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { createElement } from 'react';
+import { createElement, useEffect, useRef } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { WebView } from 'react-native-webview';
@@ -7,6 +7,7 @@ import { PandaIcon } from '@/components/PandaIcon';
 import { getVenue } from '@/data/venues';
 import { useLiveVenues } from '@/context/live-venues';
 import { useColors } from '@/hooks/useColors';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 
 type VenueBrowserKind = 'menu' | 'reservation';
 
@@ -19,6 +20,14 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
   let passedVenue: ReturnType<typeof getVenue>;
   try { passedVenue = venueData ? JSON.parse(venueData) : undefined; } catch { passedVenue = undefined; }
   const venue = passedVenue?.id === id ? passedVenue : liveVenues.find(item => item.id === id) ?? getVenue(id ?? '');
+  const recordedPage = useRef<string | null>(null);
+  useEffect(() => {
+    if (!venue) return;
+    const key = `${venue.id}:${kind}`;
+    if (recordedPage.current === key) return;
+    recordedPage.current = key;
+    recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
+  }, [venue?.id, venue?.name, kind]);
   const isMenu = kind === 'menu';
   const eyebrow = isMenu ? 'PANDA MENU' : 'PANDA RESERVATIONS';
   const title = isMenu ? 'View menu' : 'Reserve a table';

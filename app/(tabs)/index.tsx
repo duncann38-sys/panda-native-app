@@ -34,6 +34,7 @@ import { useSavedVenues } from '@/context/saved-venues';
 import { venues, type Venue } from '@/data/venues';
 import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { loadProgressiveDiscovery } from '@/utils/discovery-loading';
 
 type TopCategory = 'All' | DiscoveryCategory;
@@ -1398,7 +1399,8 @@ export default function DiscoverScreen() {
             },
           })
         }
-        onOpenDirections={(venue, context) =>
+        onOpenDirections={(venue, context) => {
+          recordVenueActivity('directions_click', venue);
           router.push({
             pathname: '/map',
             params: {
@@ -1412,7 +1414,7 @@ export default function DiscoverScreen() {
               plannerLocation: context.location,
             },
           })
-        }
+        }}
         onOpenVenue={(venue, context) =>
           router.push({
             pathname: '/venue/[id]',

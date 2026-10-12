@@ -23,6 +23,7 @@ import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { getPartnerTier } from '@/utils/partner-venues';
@@ -774,6 +775,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const openAiVenueDirections = async (aiVenue: AiVenue) => {
     const venue = aiVenueToVenue(aiVenue);
     if (!venue) return;
+    recordVenueActivity('directions_click', venue);
     router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
       directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };

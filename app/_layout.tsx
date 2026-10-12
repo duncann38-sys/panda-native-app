@@ -17,6 +17,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
 import { SavedVenuesProvider } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
+import { startVenueActivityDelivery } from '@/utils/record-venue-activity';
 
 // Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
@@ -45,6 +46,7 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  useEffect(startVenueActivityDelivery, []);
   const colors = useColors();
   const [fontsLoaded, fontError] = useFonts({
     Inter_400Regular,
