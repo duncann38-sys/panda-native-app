@@ -72,13 +72,13 @@ export function SuggestionRow({
             />
           </Pressable>
         </View>
-        <View style={styles.addressRow}>
+        {!venue.detailsDeferred && <View style={styles.addressRow}>
           <Feather name="map-pin" size={13} color={colors.mutedForeground} />
           <Text numberOfLines={1} style={[styles.address, { color: colors.mutedForeground }]}>
             {venue.fullAddress}
           </Text>
-        </View>
-        <View style={styles.metaRow}>
+        </View>}
+        {!venue.detailsDeferred && <View style={styles.metaRow}>
           <Text
             style={[
               styles.open,
@@ -93,7 +93,10 @@ export function SuggestionRow({
           <Text numberOfLines={1} style={[styles.meta, styles.type, { color: colors.mutedForeground }]}>
             {venue.type}
           </Text>
-        </View>
+        </View>}
+        {venue.sourceAttribution ? <Text style={[styles.meta, { color: colors.mutedForeground }]}>
+          {venue.sourceAttribution}
+        </Text> : null}
       </View>
     </Pressable>
   );

@@ -108,6 +108,8 @@ type LiveVenueResult = {
   photoAttribution?: string;
   photoName?: string;
   photoCount?: number;
+  detailsDeferred?: boolean;
+  source?: 'openstreetmap';
   photoNames?: Array<{ name: string; attribution: string }>;
   distanceMeters?: number;
   types?: string[];
@@ -169,6 +171,8 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
     directionsLink: stringValue(record.directionsLink) || undefined,
     photoAttribution: stringValue(record.photoAttribution) || undefined,
     photoName: stringValue(record.photoName) || undefined,
+    detailsDeferred: record.detailsDeferred === true || id.startsWith('osm:'),
+    source: id.startsWith('osm:') ? 'openstreetmap' : undefined,
     photoCount,
     photoNames: Array.isArray(record.photoNames) ? record.photoNames.flatMap(photo => {
       if (!photo || typeof photo !== 'object') return [];
@@ -384,6 +388,7 @@ async function fetchDiscoveryPage(
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         venuesOnly: true,
+        discoveryMode: 'cover',
         query,
         location,
         ...(pageToken ? { pageToken } : {}),
@@ -450,7 +455,7 @@ async function fetchDiscoveryBatch(
           'Content-Type': 'application/json',
           Accept: 'application/json',
         },
-        body: JSON.stringify({ venuesOnly: true, queries, location }),
+        body: JSON.stringify({ venuesOnly: true, discoveryMode: 'cover', queries, location }),
         signal: controller.signal,
       },
     );
@@ -538,7 +543,9 @@ function liveVenueFromResult(
     ? todayHoursValue.replace(/^[^:]+:\s*/, '')
     : undefined;
   const mapsUri =
-    result.directionsLink
+    result.source === 'openstreetmap'
+    ? `https://www.google.com/maps/search/?api=1&query=${result.lat},${result.lng}`
+    : result.directionsLink
     || result.mapsUri
     || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`;
   const classification = classifyGooglePlace({
@@ -564,7 +571,7 @@ function liveVenueFromResult(
     walkingTime: distanceMeters ? `≈ ${Math.max(1, Math.round(distanceMeters / 80))} min walk` : 'Directions available',
     rating: Number.isFinite(result.rating) ? result.rating!.toFixed(1) : '',
     ratingCount: Number.isFinite(result.ratingCount) ? result.ratingCount! : 0,
-    price: poundPrice(result.price),
+    price: result.detailsDeferred && !result.price ? '' : poundPrice(result.price),
     distanceMeters,
     description: `${result.type} near ${area}.`,
     hours: result.cachedAt ? 'Saved place · hours may have changed' : todayHours ?? 'Live hours unavailable',
@@ -582,6 +589,9 @@ function liveVenueFromResult(
     promoted: false,
     photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
     photoName: result.photoName,
+    detailsDeferred: result.detailsDeferred,
+    source: result.source,
+    sourceAttribution: result.source === 'openstreetmap' ? '© OpenStreetMap contributors' : undefined,
     photoNames: result.photoNames,
     photoCount: Number.isFinite(result.photoCount) ? result.photoCount! : 0,
     discoveryCategories: [...new Set([
@@ -790,8 +800,8 @@ export default function DiscoverScreen() {
         if (
           !result.id
           || !result.name
-          || !result.photoName
-          || (result.photoCount ?? 0) < 5
+          || (!result.photoName && result.source !== 'openstreetmap')
+          || (result.source !== 'openstreetmap' && (result.photoCount ?? 0) < (result.detailsDeferred ? 1 : 5))
           || !Number.isFinite(result.lat)
           || !Number.isFinite(result.lng)
         ) {

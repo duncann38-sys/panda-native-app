@@ -15,11 +15,12 @@ export type VenuePhotoItem = {
 const photoLists = new Map<string, { expires: number; photos: VenuePhotoItem[] }>();
 const pendingPhotos = new Map<string, Promise<VenuePhotoItem[]>>();
 
-export function useVenuePhotos(venue?: Venue | null) {
+export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
   const limit = venue?.promoted || venue?.banging || venue?.premium ? 10 : 5;
   const [loaded, setLoaded] = useState<{ id: string; photos: VenuePhotoItem[] } | null>(null);
   useEffect(() => {
     if (!venue?.id) return;
+    if (venue.id.startsWith('osm:') || (venue.detailsDeferred && !allowDetails)) return;
     if (venue.photoNames?.length && venue.photoNames.length >= Math.min(limit, venue.photoCount || limit)) {
       setLoaded(null);
       return;
@@ -47,7 +48,7 @@ export function useVenuePhotos(venue?: Venue | null) {
     }
     request.then(photos => { if (active) setLoaded({ id, photos }); }).catch(() => {});
     return () => { active = false; };
-  }, [venue?.id, venue?.photoNames, venue?.photoCount, limit]);
+  }, [venue?.id, venue?.photoNames, venue?.photoCount, venue?.detailsDeferred, allowDetails, limit]);
   const initial = venue ? venuePhotosFor(venue) : [];
   const candidates = loaded && loaded.id === venue?.id && loaded.photos.length ? loaded.photos : initial;
   return [...new Map(candidates.map(photo => [photo.uri, photo])).values()].slice(0, limit);
@@ -91,10 +92,10 @@ export function VenuePhoto({
   const colors = useColors();
   const { liveVenues } = useLiveVenues();
   const record = venue ?? liveVenues.find((item) => item.id === venueId) ?? getVenue(venueId);
-  const photos = useVenuePhotos(record);
+  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
+  const photos = useVenuePhotos(record, galleryIndex !== null);
   const [width, setWidth] = useState(0);
   const [page, setPage] = useState(0);
-  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   useEffect(() => setPage(0), [venueId]);
   const photo = photos[Math.min(page, photos.length - 1)] ?? photos[0];
 

@@ -32,8 +32,14 @@ import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
+import { fullCardOpenStatus, hydrateVenueDetails } from '@/utils/venue-detail-hydration';
 
 type GoogleVenueProfile = {
+  id: string;
+  price?: string;
+  todayHours?: string | null;
+  phone?: string | null;
+  photoNames?: Array<{ name: string; attribution: string }>;
   rating: number | null;
   ratingCount: number | null;
   openNow: boolean | null;
@@ -190,7 +196,11 @@ export default function VenueDetailScreen() {
     () => parsePlannerVenueData(String(plannerVenueData || '')),
     [plannerVenueData],
   );
-  const venue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
+  const baseVenue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
+  const [loadedGoogleProfile, setGoogleProfile] = useState<GoogleVenueProfile | null>(null);
+  const googleProfile = loadedGoogleProfile?.id === baseVenue?.id ? loadedGoogleProfile : null;
+  const venue = useMemo(() => baseVenue ? hydrateVenueDetails(baseVenue, googleProfile) : undefined,
+    [baseVenue, googleProfile]);
   const openedVenueId = useRef<string | null>(null);
   useEffect(() => {
     if (!venue?.id || openedVenueId.current === venue.id) return;
@@ -199,7 +209,7 @@ export default function VenueDetailScreen() {
   }, [venue?.id, venue?.name]);
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
-  const photos = useVenuePhotos(venue);
+  const photos = useVenuePhotos(venue, true);
   const [officialLinks, setOfficialLinks] = useState<{ menuUrl?: string; reservationUrl?: string } | null>(null);
   const officialLinksRequest = useRef<Promise<{ menuUrl?: string; reservationUrl?: string } | null> | null>(null);
   useEffect(() => {
@@ -218,7 +228,6 @@ export default function VenueDetailScreen() {
   const [heroActive, setHeroActive] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryActive, setGalleryActive] = useState(0);
-  const [googleProfile, setGoogleProfile] = useState<GoogleVenueProfile | null>(null);
   const [transitContext, setTransitContext] = useState<TransitContext | null>(null);
   const [transitStatus, setTransitStatus] = useState<TransitStatus>('idle');
   const [transitRetryKey, setTransitRetryKey] = useState(0);
@@ -257,7 +266,7 @@ export default function VenueDetailScreen() {
 
   useEffect(() => {
     const placeId = venue?.id;
-    if (!placeId || !placeId.startsWith('ChIJ')) {
+    if (!placeId || !/^(ChIJ|Ei)[A-Za-z0-9_-]+$/.test(placeId)) {
       setGoogleProfile(null);
       return;
     }
@@ -271,7 +280,9 @@ export default function VenueDetailScreen() {
         if (!response.ok) throw new Error('Google venue profile unavailable');
         return response.json() as Promise<GoogleVenueProfile>;
       })
-      .then((profile) => setGoogleProfile(profile))
+      .then((profile) => setGoogleProfile({ ...profile,
+        highlights: Array.isArray(profile.highlights) ? profile.highlights : [],
+      }))
       .catch((error: unknown) => {
         if (error instanceof Error && error.name === 'AbortError') return;
         setGoogleProfile(null);
@@ -341,7 +352,7 @@ export default function VenueDetailScreen() {
     googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : venue.rating;
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;
   const displayedType = googleProfile?.primaryType || venue.type;
-  const displayedOpenNow = googleProfile?.openNow ?? venue.openNow;
+  const displayedOpenNow = fullCardOpenStatus(venue, googleProfile);
   const displayedAddress = googleProfile?.address || venue.fullAddress;
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
@@ -541,9 +552,9 @@ export default function VenueDetailScreen() {
             <MetaChip label={displayedType} background={colors.muted} foreground={colors.green800} />
             <MetaChip
               icon="clock"
-              label={displayedOpenNow ? 'Open now' : 'Closed'}
-              background={displayedOpenNow ? colors.openBackground : colors.closedBackground}
-              foreground={displayedOpenNow ? colors.openForeground : colors.closedForeground}
+              label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
+              background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
+              foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
             />
             <MetaChip
               icon="map"
@@ -735,7 +746,7 @@ function PlannerVenuePreview({
 }: {
   colors: ReturnType<typeof useColors>;
   displayedAddress: string;
-  displayedOpenNow: boolean;
+  displayedOpenNow: boolean | null;
   displayedRating: string;
   displayedRatingCount: number;
   displayedType: string;
@@ -889,9 +900,9 @@ function PlannerVenuePreview({
             />
             <MetaChip
               icon="clock"
-              label={displayedOpenNow ? 'Open now' : 'Closed'}
-              background={displayedOpenNow ? colors.openBackground : colors.closedBackground}
-              foreground={displayedOpenNow ? colors.openForeground : colors.closedForeground}
+              label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
+              background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
+              foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
             />
           </View>
 

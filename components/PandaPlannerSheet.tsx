@@ -322,9 +322,9 @@ export function PandaPlannerSheet({
   const sourceVenues = useMemo(() => {
     // Reuse real Google venues already visible in Discovery, including
     // resolved partner cards, rather than silently omitting those choices.
-    const visible = venues.filter(venue => venue.photoNames?.length &&
+    const visible = venues.filter(venue => !venue.detailsDeferred && venue.photoNames?.length &&
       /^(ChIJ|Ei)[A-Za-z0-9_-]+$/.test(venue.id));
-    const source = [...liveVenues, ...visible,
+    const source = [...liveVenues.filter(venue => !venue.detailsDeferred), ...visible,
       ...(!locationQuery && remotePlan && remoteLocation === searchArea ? remotePlan : [])];
     return [...new Map(source.slice().reverse().map(venue => [venue.id, venue])).values()];
   }, [liveVenues, venues, remotePlan, remoteLocation, searchArea, locationQuery]);

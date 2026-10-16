@@ -1,0 +1,14 @@
+name: Panda Photo-Led Discovery
+
+on:
+  push:
+    branches:
+      - panda-build-44
+
+jobs:
+  build_android_preview:
+    name: Build Android APK with on-demand venue details
+    type: build
+    params:
+      platform: android
+      profile: preview

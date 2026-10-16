@@ -21,6 +21,9 @@ export type Venue = {
   photoName?: string;
   photoCount?: number;
   photoNames?: Array<{ name: string; attribution: string }>;
+  detailsDeferred?: boolean;
+  source?: 'openstreetmap';
+  sourceAttribution?: string;
   openNow: boolean;
   cached?: boolean;
   luxurySource?: string;
