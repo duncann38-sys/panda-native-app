@@ -16,7 +16,7 @@ const photoLists = new Map<string, { expires: number; verifiedAt: number; photos
 const pendingPhotos = new Map<string, Promise<VenuePhotoItem[]>>();
 
 export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
-  const limit = venue?.promoted || venue?.banging || venue?.premium ? 10 : 5;
+  const limit = allowDetails || venue?.promoted || venue?.banging || venue?.premium ? 10 : 5;
   const [loaded, setLoaded] = useState<{ id: string; photos: VenuePhotoItem[] } | null>(null);
   useEffect(() => {
     if (!venue?.id) return;
