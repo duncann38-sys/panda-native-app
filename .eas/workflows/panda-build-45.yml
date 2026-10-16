@@ -1,0 +1,14 @@
+name: Panda Google Photos and Banging Recovery
+
+on:
+  push:
+    branches:
+      - panda-build-45
+
+jobs:
+  build_android_preview:
+    name: Build Android APK with Google-only cards and refreshed galleries
+    type: build
+    params:
+      platform: android
+      profile: preview

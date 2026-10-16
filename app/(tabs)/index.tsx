@@ -267,7 +267,8 @@ async function readNearbyCache(): Promise<NearbyCacheEntry | null> {
     if (!Array.isArray(value.venues) || !value.venues.length || !value.area
       || !Number.isFinite(value.origin?.latitude) || !Number.isFinite(value.origin?.longitude)
       || !Number.isFinite(value.savedAt) || Date.now() - value.savedAt > DISCOVERY_CACHE_TTL_MS) return null;
-    return value;
+    value.venues = value.venues.filter(venue => !venue.id.startsWith('osm:'));
+    return value.venues.length ? value : null;
   } catch {
     return null;
   }
@@ -800,8 +801,9 @@ export default function DiscoverScreen() {
         if (
           !result.id
           || !result.name
-          || (!result.photoName && result.source !== 'openstreetmap')
-          || (result.source !== 'openstreetmap' && (result.photoCount ?? 0) < (result.detailsDeferred ? 1 : 5))
+          || result.id.startsWith('osm:')
+          || !result.photoName
+          || (result.photoCount ?? 0) < (result.detailsDeferred ? 1 : 5)
           || !Number.isFinite(result.lat)
           || !Number.isFinite(result.lng)
         ) {
@@ -1049,6 +1051,7 @@ export default function DiscoverScreen() {
   useEffect(() => {
     if (!coordinates) return;
     let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
     if (bangingOrigin.current !== originKey) {
       bangingOrigin.current = originKey;
@@ -1083,8 +1086,9 @@ export default function DiscoverScreen() {
     }).catch(error => {
       if (active) console.warn('[Panda Banging] Wider lookup unavailable:', error.message);
       if (active) setBangingStatus('Luxury selection temporarily unavailable · retrying shortly');
+      if (active) retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
     });
-    return () => { active = false; };
+    return () => { active = false; if (retryTimer) clearTimeout(retryTimer); };
   }, [coordinates?.latitude, coordinates?.longitude, partners.venues, rotationWindow, bangingRefreshTick]);
   const bangingVenues = useMemo(() => rotateBanging([
     ...partners.venues.filter(venue => venue.banging).map(venue => ({

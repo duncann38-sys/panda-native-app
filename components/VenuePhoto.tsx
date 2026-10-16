@@ -12,7 +12,7 @@ export type VenuePhotoItem = {
   attribution: string;
 };
 
-const photoLists = new Map<string, { expires: number; photos: VenuePhotoItem[] }>();
+const photoLists = new Map<string, { expires: number; verifiedAt: number; photos: VenuePhotoItem[] }>();
 const pendingPhotos = new Map<string, Promise<VenuePhotoItem[]>>();
 
 export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
@@ -21,27 +21,32 @@ export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
   useEffect(() => {
     if (!venue?.id) return;
     if (venue.id.startsWith('osm:') || (venue.detailsDeferred && !allowDetails)) return;
-    if (venue.photoNames?.length && venue.photoNames.length >= Math.min(limit, venue.photoCount || limit)) {
+    if (!allowDetails && venue.photoNames?.length && venue.photoNames.length >= Math.min(limit, venue.photoCount || limit)) {
       setLoaded(null);
       return;
     }
     let active = true;
     const id = venue.id;
     const cached = photoLists.get(id);
-    if (cached && cached.expires > Date.now()) {
+    if (cached && cached.expires > Date.now() && (!allowDetails || Date.now() - cached.verifiedAt < 60_000)) {
       setLoaded({ id, photos: cached.photos });
       return;
     }
     let request = pendingPhotos.get(id);
     if (!request) {
-      request = fetch(`${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(id)}/photos`)
+      request = fetch(`${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(id)}/photos${allowDetails ? '?refresh=1' : ''}`)
         .then(async response => {
           if (!response.ok) throw new Error('Venue gallery unavailable');
-          const body = await response.json() as { photos?: Array<{ path: string; attribution: string }> };
+          const body = await response.json() as { photos?: Array<{
+            path: string; attribution: string | Array<{ displayName?: string }>;
+          }> };
           const photos = (body.photos ?? []).filter(photo =>
             photo.path.startsWith(`/api/partner/venues/${encodeURIComponent(id)}/photos/`),
-          ).map(photo => ({ uri: PANDA_PRODUCTION_API + photo.path, attribution: photo.attribution }));
-          photoLists.set(id, { expires: Date.now() + 3 * 60 * 60 * 1000, photos });
+          ).map(photo => ({ uri: PANDA_PRODUCTION_API + photo.path,
+            attribution: typeof photo.attribution === 'string' ? photo.attribution
+              : (Array.isArray(photo.attribution) ? photo.attribution : [])
+                .map(author => author.displayName).filter(Boolean).join(' · ') }));
+          photoLists.set(id, { expires: Date.now() + 3 * 60 * 60 * 1000, verifiedAt: Date.now(), photos });
           return photos;
         }).finally(() => pendingPhotos.delete(id));
       pendingPhotos.set(id, request);
@@ -61,8 +66,8 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
   if (venue.photoNames?.length) {
-    return venue.photoNames.map(photo => ({
-      uri: `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(photo.name)}&max=900`,
+    return venue.photoNames.map((photo, index) => ({
+      uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`,
       attribution: photo.attribution,
     }));
   }
