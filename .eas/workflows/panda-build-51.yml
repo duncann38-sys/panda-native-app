@@ -1,0 +1,14 @@
+name: Panda Android Build 51 - 200-Card Discovery
+
+on:
+  push:
+    branches:
+      - panda-build-51
+
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 51
+    type: build
+    params:
+      platform: android
+      profile: preview

@@ -255,7 +255,7 @@ const CATEGORY_MINIMUM = 100;
 const CATEGORY_DISCOVERY_LIMIT = 300;
 const MAX_WALK_DISTANCE_METERS = 4_000;
 const MAX_DISCOVERY_DISTANCE_METERS = 20_000;
-const MAX_CATEGORY_DISTANCE_METERS = 20_000;
+const MAX_CATEGORY_DISTANCE_METERS = 4_800;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
 const CACHE_REUSE_DISTANCE_METERS = 2_000;
@@ -537,7 +537,7 @@ async function fetchIndexedFeedPage(
         discoveryMode: 'indexed-feed',
         category,
         location,
-        radiusMeters: category === 'All' ? 6000 : MAX_CATEGORY_DISTANCE_METERS,
+        radiusMeters: category === 'All' ? 4_800 : MAX_CATEGORY_DISTANCE_METERS,
         pageSize: 200,
         ...(cursor ? { cursor } : {}),
       }),
