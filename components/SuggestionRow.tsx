@@ -7,6 +7,10 @@ import { useColors } from '@/hooks/useColors';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 
 let nextProfileRequestAt = 0;
+let profileQueue: Promise<void> = Promise.resolve();
+let blockedProfileMessage: string | null = null;
+const profileCache = new Map<string, Record<string, unknown>>();
+const pendingProfiles = new Map<string, Promise<Record<string, unknown>>>();
 
 function pause(ms: number, signal: AbortSignal) {
   return new Promise<void>((resolve) => {
@@ -21,54 +25,89 @@ function pause(ms: number, signal: AbortSignal) {
   });
 }
 
-async function fetchLiveProfile(placeId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
-  for (let attempt = 0; attempt < 4; attempt += 1) {
-    const now = Date.now();
-    const waitForSlot = Math.max(0, nextProfileRequestAt - now);
-    nextProfileRequestAt = Math.max(now, nextProfileRequestAt) + 100;
+function fetchLiveProfile(placeId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+  if (blockedProfileMessage) return Promise.reject(new Error(blockedProfileMessage));
+  const cached = profileCache.get(placeId);
+  if (cached) return Promise.resolve(cached);
+  const pending = pendingProfiles.get(placeId);
+  if (pending) return pending;
+
+  const request = profileQueue.then(async () => {
+    if (blockedProfileMessage) throw new Error(blockedProfileMessage);
+    if (signal.aborted) throw new Error('Profile request cancelled');
+    const waitForSlot = Math.max(0, nextProfileRequestAt - Date.now());
     if (waitForSlot) await pause(waitForSlot, signal);
     if (signal.aborted) throw new Error('Profile request cancelled');
+    nextProfileRequestAt = Date.now() + 400;
+
     const response = await fetch(
       `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`,
       { headers: { Accept: 'application/json' }, signal },
     );
-    if (response.status === 429 && attempt < 3) {
-      const retryAfter = Number(response.headers.get('retry-after'));
-      const backoff = Number.isFinite(retryAfter) && retryAfter > 0
-        ? Math.min(5_000, retryAfter * 1_000) : 250 * 2 ** attempt;
-      await pause(backoff, signal);
-      continue;
+    const profile = await response.json().catch(() => ({})) as Record<string, unknown>;
+    const providerMessage = typeof profile.error === 'string' ? profile.error : '';
+    const dailyQuotaExceeded = response.status === 429
+      && /GetPlaceRequest.*per day|per day.*GetPlaceRequest|quota exceeded.*per day/i.test(providerMessage);
+    if (dailyQuotaExceeded) {
+      blockedProfileMessage = 'Google daily venue-details quota reached. Raise Places API (New) “GetPlaceRequest per day” or wait for its reset.';
+      throw new Error(blockedProfileMessage);
     }
-    if (!response.ok) throw new Error(`Venue profile request failed: ${response.status}`);
-    return await response.json() as Record<string, unknown>;
-  }
-  throw new Error('Venue profile is temporarily unavailable');
+    if (response.status === 429 || profile.limited === true || profile.dataMode === 'independent_baseline') {
+      blockedProfileMessage = typeof profile.availabilityMessage === 'string'
+        ? profile.availabilityMessage
+        : 'Google venue details are temporarily unavailable. The saved 200-ID category feed is still intact.';
+      throw new Error(blockedProfileMessage);
+    }
+    if (!response.ok) {
+      if (response.status >= 500) {
+        blockedProfileMessage = 'Google venue details are temporarily unavailable. The saved 200-ID category feed is still intact.';
+      }
+      throw new Error(`Venue profile request failed: ${response.status}`);
+    }
+    if (typeof profile.name !== 'string' || !profile.name.trim()) {
+      throw new Error('Google did not return venue details for this place.');
+    }
+    if (profileCache.size >= 400) profileCache.delete(profileCache.keys().next().value as string);
+    profileCache.set(placeId, profile);
+    return profile;
+  });
+  profileQueue = request.then(() => undefined, () => undefined);
+  pendingProfiles.set(placeId, request);
+  void request.finally(() => {
+    if (pendingProfiles.get(placeId) === request) pendingProfiles.delete(placeId);
+  }).catch(() => {});
+  return request;
 }
 
 export function SuggestionRow({
   venue,
   saved,
+  isVisible = true,
   onPress,
   onToggleSaved,
 }: {
   venue: Venue;
   saved: boolean;
+  isVisible?: boolean;
   onPress: () => void;
   onToggleSaved: () => void;
 }) {
   const colors = useColors();
   const [hydratedVenue, setHydratedVenue] = useState<Venue | null>(null);
-  const [profileFailed, setProfileFailed] = useState(false);
+  const [profileFailureMessage, setProfileFailureMessage] = useState<string | null>(null);
 
   useEffect(() => {
     setHydratedVenue(null);
-    setProfileFailed(false);
-    if (!venue.detailsDeferred || venue.id.startsWith('osm:')) return;
+    setProfileFailureMessage(null);
+    const hasNameAndCover = Boolean(venue.name.trim() && venue.photoName?.trim());
+    if (!isVisible || !venue.detailsDeferred || venue.id.startsWith('osm:') || hasNameAndCover) return;
     const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 15_000);
     void fetchLiveProfile(venue.id, controller.signal).then((profile) => {
-      if (typeof profile.name !== 'string' || !profile.name.trim()) {
-        throw new Error('Google did not return a venue name');
-      }
       const photos = Array.isArray(profile.photoNames) ? profile.photoNames.flatMap((item) => {
         if (!item || typeof item !== 'object') return [];
         const photo = item as Record<string, unknown>;
@@ -98,16 +137,25 @@ export function SuggestionRow({
         cached: false,
       } as Venue;
       setHydratedVenue(display);
-    }).catch(() => {
-      if (!controller.signal.aborted) setProfileFailed(true);
+    }).catch((error: unknown) => {
+      if (timedOut) {
+        setProfileFailureMessage('Google venue details took too long to load. Try again after the details quota is available.');
+      } else if (!controller.signal.aborted) {
+        setProfileFailureMessage(error instanceof Error ? error.message : 'Google venue details are unavailable.');
+      }
     });
-    return () => controller.abort();
-  }, [venue.id, venue.detailsDeferred]);
+    return () => {
+      clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [venue.id, venue.detailsDeferred, isVisible]);
 
   const card = hydratedVenue ?? venue;
-  const cardTitle = card.detailsDeferred
-    ? profileFailed ? 'Live details unavailable' : 'Loading venue…'
-    : card.name;
+  const cardTitle = card.name.trim()
+    ? card.name
+    : card.detailsDeferred
+      ? profileFailureMessage ? 'Venue details paused' : 'Loading venue…'
+      : card.name;
 
   return (
     <Pressable
@@ -156,6 +204,11 @@ export function SuggestionRow({
               color={saved ? colors.destructive : card.promoted ? colors.goldDeep : colors.mutedForeground} />
           </Pressable>
         </View>
+        {profileFailureMessage ? (
+          <Text numberOfLines={2} style={[styles.address, { color: colors.mutedForeground }]}>
+            {profileFailureMessage}
+          </Text>
+        ) : null}
         {!card.detailsDeferred && <View style={styles.addressRow}>
           <Feather name="map-pin" size={13} color={colors.mutedForeground} />
           <Text numberOfLines={1} style={[styles.address, { color: colors.mutedForeground }]}>{card.fullAddress}</Text>

@@ -14,6 +14,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  type ViewToken,
   View,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
@@ -533,7 +534,7 @@ async function fetchIndexedFeedPage(
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         venuesOnly: true,
-        discoveryMode: 'indexed-id-page',
+        discoveryMode: 'indexed-feed',
         category,
         location,
         radiusMeters: category === 'All' ? 6000 : MAX_CATEGORY_DISTANCE_METERS,
@@ -543,11 +544,14 @@ async function fetchIndexedFeedPage(
       signal: controller.signal,
     });
     if (!response.ok) {
+      const errorPayload = await response.json().catch(() => ({})) as { error?: unknown };
+      const googleCardLookupFailed = errorPayload.error === 'places_card_lookup_failed';
       return {
         venues: [], nextCursor: cursor ?? null, indexExhausted: false,
         failure: {
-          code: response.status === 503 ? 'API-QUOTA'
+          code: googleCardLookupFailed && response.status === 429 ? 'API-QUOTA'
             : response.status === 429 ? 'API-RATE-LIMIT'
+            : response.status === 503 ? 'API-RESPONSE'
             : response.status === 401 || response.status === 403 ? 'API-FORBIDDEN' : 'API-RESPONSE',
           status: response.status,
         },
@@ -559,17 +563,24 @@ async function fetchIndexedFeedPage(
       indexExhausted?: unknown;
       dataMode?: unknown;
     };
-    if (payload.dataMode !== 'indexed_feed_id_candidates' || !Array.isArray(payload.venues)) {
+    if (payload.dataMode !== 'indexed_feed_live_google_card_fields' || !Array.isArray(payload.venues)) {
       return {
         venues: [], nextCursor: cursor ?? null, indexExhausted: false,
         failure: { code: 'API-RESPONSE', status: response.status },
       };
     }
+    const normalizedVenues = payload.venues.flatMap(venue => {
+      const normalized = normalizeLiveVenueResult(venue, `indexed:${category}`);
+      return normalized?.name.trim() && normalized.photoName?.trim() ? [normalized] : [];
+    });
+    if (category !== 'All' && normalizedVenues.length !== 200) {
+      return {
+        venues: [], nextCursor: cursor ?? null, indexExhausted: false,
+        failure: { code: 'API-RESPONSE', status: 502 },
+      };
+    }
     return {
-      venues: payload.venues.flatMap(venue => {
-        const normalized = normalizeLiveVenueResult(venue, `indexed:${category}`);
-        return normalized ? [normalized] : [];
-      }),
+      venues: normalizedVenues,
       nextCursor: typeof payload.nextCursor === 'string' ? payload.nextCursor : null,
       indexExhausted: payload.indexExhausted === true,
     };
@@ -718,6 +729,11 @@ export default function DiscoverScreen() {
   const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
   const [feedPageLoading, setFeedPageLoading] = useState(false);
+  const [visibleVenueIds, setVisibleVenueIds] = useState<Set<string>>(() => new Set());
+  const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
+  const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<ViewToken<Venue>> }) => {
+    setVisibleVenueIds(new Set(viewableItems.map(({ item }) => item.id)));
+  }).current;
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
   const indexedFeedCursors = useRef(new Map<TopCategory, string | null>());
   const indexedFeedExhausted = useRef(new Set<TopCategory>());
@@ -1448,6 +1464,8 @@ export default function DiscoverScreen() {
         keyExtractor={(item) => item.id}
         numColumns={1}
         showsVerticalScrollIndicator={false}
+        viewabilityConfig={viewabilityConfig}
+        onViewableItemsChanged={onViewableItemsChanged}
         onEndReached={() => void loadMoreFeed()}
         onEndReachedThreshold={0.35}
         refreshControl={
@@ -1545,6 +1563,7 @@ export default function DiscoverScreen() {
             <SuggestionRow
               venue={item}
               saved={isSaved(item.id)}
+              isVisible={visibleVenueIds.has(item.id)}
               onToggleSaved={() => toggleSaved(item)}
               onPress={() => {
                 router.push({
@@ -1576,7 +1595,9 @@ export default function DiscoverScreen() {
                   Live venues did not load · B24 · {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
                 </Text>
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
-                  Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
+                  {liveDiscoveryFailure === 'API-QUOTA'
+                    ? 'The stored 200-ID index is intact, but Google blocked the required venue names and cover photos. Check the Places API (New) GetPlaceRequest quota and its daily limit.'
+                    : 'Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.'}
                 </Text>
                 <Text style={[styles.emptyDiagnostic, { color: colors.mutedForeground }]}>
                   Diagnostic: {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
@@ -1591,7 +1612,9 @@ export default function DiscoverScreen() {
                     pressed && styles.pressed,
                   ]}
                 >
-                  <Text style={[styles.emptyRetryText, { color: colors.honeyInk }]}>Retry live venues</Text>
+                  <Text style={[styles.emptyRetryText, { color: colors.honeyInk }]}>
+                    {liveDiscoveryFailure === 'API-QUOTA' ? 'Retry Google venue details' : 'Retry live venues'}
+                  </Text>
                 </Pressable>
               </>
             ) : (

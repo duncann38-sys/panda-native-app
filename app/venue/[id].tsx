@@ -57,6 +57,30 @@ type GoogleVenueProfile = {
   source: 'google_places';
 };
 
+type VenueWeather = {
+  observedAt: string;
+  condition: string;
+  temperatureC: number;
+  source: 'Google Weather';
+};
+
+type VenueWeatherState = 'idle' | 'loading' | 'ready' | 'unavailable' | 'budget-exhausted';
+
+const venueWeatherCache = new Map<string, { expiresAt: number; weather: VenueWeather }>();
+
+function weatherEmoji(condition: string) {
+  const value = condition.toLowerCase();
+  if (/snow|sleet|ice/.test(value)) return '❄️';
+  if (/rain|drizzle|shower|storm|thunder/.test(value)) return '🌧️';
+  if (/sun|clear/.test(value)) return '☀️';
+  if (/cloud|overcast|fog|mist/.test(value)) return '☁️';
+  return '🌤️';
+}
+
+function isGooglePlaceId(value: string | undefined): value is string {
+  return Boolean(value && /^[A-Za-z0-9_-]{8,256}$/.test(value));
+}
+
 type TransitStation = {
   id?: string;
   name: string;
@@ -231,6 +255,70 @@ export default function VenueDetailScreen() {
   const [transitContext, setTransitContext] = useState<TransitContext | null>(null);
   const [transitStatus, setTransitStatus] = useState<TransitStatus>('idle');
   const [transitRetryKey, setTransitRetryKey] = useState(0);
+  const [venueWeather, setVenueWeather] = useState<VenueWeather | null>(null);
+  const [weatherStatus, setWeatherStatus] = useState<VenueWeatherState>('idle');
+  useEffect(() => {
+    setVenueWeather(null);
+    if (!venue?.id) {
+      setWeatherStatus('idle');
+      return;
+    }
+
+    const cached = venueWeatherCache.get(venue.id);
+    if (cached && cached.expiresAt > Date.now()) {
+      setVenueWeather(cached.weather);
+      setWeatherStatus('ready');
+      return;
+    }
+
+    const latitude = venue.latitude ?? googleProfile?.latitude;
+    const longitude = venue.longitude ?? googleProfile?.longitude;
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      setWeatherStatus('unavailable');
+      return;
+    }
+
+    let active = true;
+    const controller = new AbortController();
+    setWeatherStatus('loading');
+    void fetch(`${PANDA_RUNTIME_API}/api/panda-ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        weatherOnly: true,
+        location: { lat: latitude, lng: longitude },
+      }),
+    }).then(async response => {
+      const payload = await response.json().catch(() => ({})) as {
+        error?: string;
+        weather?: VenueWeather;
+      };
+      if (!response.ok) {
+        const error = new Error(payload.error || 'weather_unavailable');
+        throw error;
+      }
+      if (!payload.weather || !Number.isFinite(payload.weather.temperatureC) || !payload.weather.condition) {
+        throw new Error('weather_unavailable');
+      }
+      return payload.weather;
+    }).then(weather => {
+      if (!active) return;
+      venueWeatherCache.set(venue.id, { expiresAt: Date.now() + 10 * 60 * 1000, weather });
+      setVenueWeather(weather);
+      setWeatherStatus('ready');
+    }).catch((error: unknown) => {
+      if (!active || (error instanceof Error && error.name === 'AbortError')) return;
+      setWeatherStatus(error instanceof Error && error.message === 'weather_daily_limit_reached'
+        ? 'budget-exhausted'
+        : 'unavailable');
+    });
+
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [venue?.id, venue?.latitude, venue?.longitude, googleProfile?.latitude, googleProfile?.longitude]);
   useEffect(() => {
     setTransitContext(null);
     setTransitStatus('idle');
@@ -266,7 +354,7 @@ export default function VenueDetailScreen() {
 
   useEffect(() => {
     const placeId = venue?.id;
-    if (!placeId || !/^(ChIJ|Ei)[A-Za-z0-9_-]+$/.test(placeId)) {
+    if (!isGooglePlaceId(placeId)) {
       setGoogleProfile(null);
       return;
     }
@@ -293,7 +381,7 @@ export default function VenueDetailScreen() {
 
   useEffect(() => {
     const placeId = venue?.id;
-    if (!placeId?.startsWith('ChIJ')) {
+    if (!isGooglePlaceId(placeId)) {
       setTransitContext(null);
       setTransitStatus('unavailable');
       return;
@@ -609,6 +697,48 @@ export default function VenueDetailScreen() {
                 </View>
               </View>
             </View>
+
+            {weatherStatus !== 'idle' ? (
+              <View
+                style={[
+                  styles.weatherCard,
+                  {
+                    backgroundColor: colors.secondary,
+                    borderColor: colors.border,
+                  },
+                ]}
+                accessibilityLabel={
+                  venueWeather
+                    ? `Current weather near ${venue.name}: ${venueWeather.condition}, ${Math.round(venueWeather.temperatureC)} degrees Celsius`
+                    : 'Current weather is unavailable'
+                }
+              >
+                <Text style={styles.weatherIcon}>
+                  {venueWeather ? weatherEmoji(venueWeather.condition) : '☁️'}
+                </Text>
+                <View style={styles.weatherCopy}>
+                  <Text style={[styles.weatherTemperature, { color: colors.green950 }]}>
+                    {weatherStatus === 'loading'
+                      ? 'Checking nearby weather…'
+                      : venueWeather
+                        ? `${Math.round(venueWeather.temperatureC)}°C`
+                        : 'Weather unavailable'}
+                  </Text>
+                  <Text style={[styles.weatherCondition, { color: colors.green800 }]}>
+                    {venueWeather?.condition ?? (
+                      weatherStatus === 'budget-exhausted'
+                        ? 'Today’s weather testing allowance has been used'
+                        : 'Live conditions could not be verified'
+                    )}
+                  </Text>
+                  {venueWeather ? (
+                    <Text style={[styles.weatherSource, { color: colors.mutedForeground }]}>
+                      Google Weather · Current conditions
+                    </Text>
+                  ) : null}
+                </View>
+              </View>
+            ) : null}
 
             <ConciergeTransitCard
               colors={colors}
@@ -1989,6 +2119,38 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 2,
     marginBottom: 6,
+  },
+  weatherCard: {
+    alignItems: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 11,
+  },
+  weatherIcon: {
+    fontSize: 30,
+    lineHeight: 36,
+  },
+  weatherCopy: {
+    flex: 1,
+  },
+  weatherTemperature: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 17,
+  },
+  weatherCondition: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 13,
+    marginTop: 2,
+  },
+  weatherSource: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 10,
+    letterSpacing: 0.4,
+    marginTop: 3,
   },
   conciergeStack: {
     marginBottom: 0,

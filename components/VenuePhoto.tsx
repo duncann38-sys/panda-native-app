@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { VenueGallery } from './VenueGallery';
 import { useEffect, useState } from 'react';
@@ -165,8 +166,8 @@ export function VenuePhoto({
   }
 
   return (
-    <View style={[styles.fallback, { height, backgroundColor: colors.green700 }]}>
-      <Text style={[styles.initial, { color: colors.primaryForeground }]}>{venueName.charAt(0)}</Text>
+    <View style={[styles.fallback, { height, backgroundColor: colors.secondary }]}>
+      <MaterialCommunityIcons name="image-outline" size={26} color={colors.green700} />
     </View>
   );
 }
@@ -176,9 +177,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
-  },
-  initial: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 48,
   },
 });
