@@ -1,0 +1,14 @@
+name: Panda Android Build 49 - Indexed Discovery
+
+on:
+  push:
+    branches:
+      - panda-build-49
+
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 49
+    type: build
+    params:
+      platform: android
+      profile: preview
