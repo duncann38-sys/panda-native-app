@@ -111,7 +111,7 @@ export function SuggestionRow({
 
   return (
     <Pressable
-      testID={`suggestion-${venue.id}`
+      testID={`suggestion-${venue.id}`}
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
@@ -145,7 +145,7 @@ export function SuggestionRow({
             <Text numberOfLines={1} style={[styles.name, { color: card.promoted ? colors.green800 : colors.foreground }]}>{cardTitle}</Text>
           </View>
           <Pressable
-            testID={`suggestion-save-${venue.id}`
+            testID={`suggestion-save-${venue.id}`}
             accessibilityLabel={saved ? `Remove ${cardTitle} from saved venues` : `Save ${cardTitle}`}
             accessibilityRole="button"
             hitSlop={10}
