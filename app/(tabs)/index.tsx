@@ -391,7 +391,7 @@ async function fetchDiscoveryPage(
       : await expoFetch(PANDA_DISCOVERY_API + '/api/panda-ai', requestInit);
     if (response.ok) {
       const payload = await response.json() as { venues?: unknown; nextPageToken?: unknown };
-      if (payload.dataMode !== 'indexed_feed_id_candidates' || !Array.isArray(payload.venues)) {
+      if (!Array.isArray(payload.venues)) {
         return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
       }
       return {
@@ -559,7 +559,7 @@ async function fetchIndexedFeedPage(
       indexExhausted?: unknown;
       dataMode?: unknown;
     };
-    if (!Array.isArray(payload.venues)) {
+    if (payload.dataMode !== 'indexed_feed_id_candidates' || !Array.isArray(payload.venues)) {
       return {
         venues: [], nextCursor: cursor ?? null, indexExhausted: false,
         failure: { code: 'API-RESPONSE', status: response.status },
