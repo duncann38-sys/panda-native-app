@@ -65,13 +65,6 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   if (cached && cached.expires > Date.now()) return cached.photos;
   const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
-  const expectedPhotoPath = `/api/partner/venues/${encodeURIComponent(venue.id)}/photos/0/image`;
-  if (venue.primaryPhotoPath === expectedPhotoPath) {
-    return [{
-      uri: `${PANDA_PRODUCTION_API}${venue.primaryPhotoPath}`,
-      attribution: venue.photoAttributions[0] || '',
-    }];
-  }
   if (venue.photoNames?.length) {
     return venue.photoNames.map((photo, index) => ({
       uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`,
@@ -82,6 +75,13 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
     return [{
       uri: `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(venue.photoName)}&max=900`,
       attribution: venue.photoAttributions.join(' · '),
+    }];
+  }
+  const expectedPhotoPath = `/api/partner/venues/${encodeURIComponent(venue.id)}/photos/0/image`;
+  if (venue.primaryPhotoPath === expectedPhotoPath) {
+    return [{
+      uri: `${PANDA_PRODUCTION_API}${venue.primaryPhotoPath}`,
+      attribution: venue.photoAttributions[0] || '',
     }];
   }
   return venue.photoAttributions.length ? [{
@@ -108,8 +108,18 @@ export function VenuePhoto({
   const photos = useVenuePhotos(record, galleryIndex !== null);
   const [width, setWidth] = useState(0);
   const [page, setPage] = useState(0);
-  useEffect(() => setPage(0), [venueId]);
+  const [coverFallbackIndex, setCoverFallbackIndex] = useState(0);
+  useEffect(() => {
+    setPage(0);
+    setCoverFallbackIndex(0);
+  }, [venueId, photos[0]?.uri]);
   const photo = photos[Math.min(page, photos.length - 1)] ?? photos[0];
+  const coverFallbackUris = [
+    record?.photoName
+      ? `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(record.photoName)}&max=900`
+      : undefined,
+    record?.primaryPhotoPath ? `${PANDA_PRODUCTION_API}${record.primaryPhotoPath}` : undefined,
+  ].filter((uri): uri is string => Boolean(uri && uri !== photos[0]?.uri));
 
   if (photo) {
     return (
@@ -119,9 +129,23 @@ export function VenuePhoto({
           {photos.map((item, index) => (
             <Pressable key={item.uri} accessibilityRole="button" accessibilityLabel={`Open ${venueName} photo ${index + 1}`}
               onPress={event => { event.stopPropagation(); setGalleryIndex(index); }} style={{ height, width: width || 1 }}>
-              {Math.abs(index - page) <= 1 ? <Image source={{ uri: item.uri }} contentFit="cover"
-                transition={250} accessibilityLabel={`${venueName} photo ${index + 1} of ${photos.length}`}
-                style={{ height, width: '100%' }} /> : null}
+              {Math.abs(index - page) <= 1 ? <Image
+                source={{
+                  uri: index === 0 && coverFallbackIndex > 0
+                    ? coverFallbackUris[Math.min(coverFallbackIndex - 1, coverFallbackUris.length - 1)] || item.uri
+                    : item.uri,
+                }}
+                contentFit="cover"
+                cachePolicy="memory"
+                transition={180}
+                onError={() => {
+                  if (index === 0 && coverFallbackIndex < coverFallbackUris.length) {
+                    setCoverFallbackIndex(current => Math.min(current + 1, coverFallbackUris.length));
+                  }
+                }}
+                accessibilityLabel={`${venueName} photo ${index + 1} of ${photos.length}`}
+                style={{ height, width: '100%', backgroundColor: colors.secondary }}
+              /> : null}
             </Pressable>
           ))}
         </ScrollView>

@@ -25,6 +25,7 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const colors = useColors();
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -34,7 +35,7 @@ function RootLayoutNav() {
           headerShown: false,
           presentation: 'transparentModal',
           animation: 'slide_from_bottom',
-          contentStyle: { backgroundColor: 'transparent' },
+          contentStyle: { backgroundColor: colors.ivory },
         }}
       />
       <Stack.Screen name="venue/[id]/directions" options={{ headerShown: false }} />

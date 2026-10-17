@@ -257,9 +257,61 @@ const MAX_DISCOVERY_DISTANCE_METERS = 20_000;
 const MAX_CATEGORY_DISTANCE_METERS = 20_000;
 const EXPANSION_RING_KM = [2, 4, 7, 10, 15, 20] as const;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
-const DISCOVERY_CACHE_PREFIX = 'panda-live-discovery-v2';
 const CACHE_REUSE_DISTANCE_METERS = 2_000;
 const NEARBY_CACHE_KEY = 'panda-live-nearby-v1';
+type CategoryFeedCacheEntry = {
+  venues: Venue[];
+  nextCursor: string | null;
+  indexExhausted: boolean;
+  loaded: boolean;
+};
+const categoryFeedCache = new Map<string, CategoryFeedCacheEntry>();
+
+function categoryFeedCacheKey(
+  coordinates: { latitude: number; longitude: number },
+  category: TopCategory,
+) {
+  return `${coordinates.latitude.toFixed(3)}:${coordinates.longitude.toFixed(3)}:${category}`;
+}
+
+function readCategoryFeedCache(
+  coordinates: { latitude: number; longitude: number },
+  category: TopCategory,
+) {
+  const key = categoryFeedCacheKey(coordinates, category);
+  const cached = categoryFeedCache.get(key);
+  if (!cached) return null;
+  categoryFeedCache.delete(key);
+  categoryFeedCache.set(key, cached);
+  return cached;
+}
+
+function writeCategoryFeedCache(
+  coordinates: { latitude: number; longitude: number },
+  category: TopCategory,
+  venues: Venue[],
+  nextCursor: string | null,
+  indexExhausted: boolean,
+  loaded: boolean,
+) {
+  const key = categoryFeedCacheKey(coordinates, category);
+  const previous = categoryFeedCache.get(key);
+  const merged = new Map((previous?.venues ?? []).map(venue => [venue.id, venue]));
+  venues.forEach(venue => merged.set(venue.id, { ...merged.get(venue.id), ...venue }));
+  categoryFeedCache.delete(key);
+  categoryFeedCache.set(key, {
+    venues: [...merged.values()],
+    nextCursor,
+    indexExhausted,
+    loaded: loaded || previous?.loaded === true,
+  });
+  while (categoryFeedCache.size > 80) {
+    const oldestKey = categoryFeedCache.keys().next().value;
+    if (!oldestKey) break;
+    categoryFeedCache.delete(oldestKey);
+  }
+}
+
 type NearbyCacheEntry = {
   savedAt: number;
   area: string;
@@ -331,52 +383,6 @@ const CATEGORY_SEARCH_QUERIES: Partial<Record<DiscoveryCategory, string>> = {
   Shops: 'shops off licences and food stores',
   'Places of Interest': 'museums parks landmarks and tourist attractions',
 };
-
-type DiscoveryCacheEntry = {
-  savedAt: number;
-  venues: Venue[];
-};
-
-function discoveryCacheKey(
-  coordinates: { latitude: number; longitude: number },
-  category: TopCategory,
-) {
-  const latitude = coordinates.latitude.toFixed(2);
-  const longitude = coordinates.longitude.toFixed(2);
-  return `${DISCOVERY_CACHE_PREFIX}:${latitude}:${longitude}:${category}`;
-}
-
-async function readDiscoveryCache(
-  coordinates: { latitude: number; longitude: number },
-  category: TopCategory,
-) {
-  try {
-    const raw = await AsyncStorage.getItem(discoveryCacheKey(coordinates, category));
-    if (!raw) return null;
-    const cached = JSON.parse(raw) as DiscoveryCacheEntry;
-    if (!Array.isArray(cached.venues) || Date.now() - cached.savedAt > DISCOVERY_CACHE_TTL_MS) {
-      return null;
-    }
-    return cached.venues;
-  } catch {
-    return null;
-  }
-}
-
-async function writeDiscoveryCache(
-  coordinates: { latitude: number; longitude: number },
-  category: TopCategory,
-  cachedVenues: Venue[],
-) {
-  try {
-    await AsyncStorage.setItem(
-      discoveryCacheKey(coordinates, category),
-      JSON.stringify({ savedAt: Date.now(), venues: cachedVenues } satisfies DiscoveryCacheEntry),
-    );
-  } catch {
-    // A full or unavailable device cache must never block live discovery.
-  }
-}
 
 async function fetchDiscoveryPage(
   query: string,
@@ -556,7 +562,7 @@ async function fetchIndexedFeedPage(
         category,
         location,
         radiusMeters: category === 'All' ? 6000 : MAX_CATEGORY_DISTANCE_METERS,
-        pageSize: 6,
+        pageSize: 30,
         ...(cursor ? { cursor } : {}),
       }),
       signal: controller.signal,
@@ -962,6 +968,23 @@ export default function DiscoverScreen() {
   }, [coordinates, refreshLocation, reserveDiscoveryRequest, setLiveArea, setLiveVenues]);
 
   const loadExpandedCategory = useCallback(async (selectedCategory: DiscoveryCategory, skipIndex = false) => {
+    if (coordinates && !skipIndex) {
+      const cached = readCategoryFeedCache(coordinates, selectedCategory);
+      if (cached) {
+        indexedFeedCursors.current.set(selectedCategory, cached.nextCursor);
+        if (cached.indexExhausted) indexedFeedExhausted.current.add(selectedCategory);
+        else indexedFeedExhausted.current.delete(selectedCategory);
+        if (cached.loaded) loadedCategories.current.add(selectedCategory);
+        if (cached.venues.length) {
+          setLiveVenues((current) => {
+            const merged = new Map(current.map((venue) => [venue.id, venue]));
+            cached.venues.forEach((venue) => merged.set(venue.id, venue));
+            return [...merged.values()];
+          });
+        }
+        return;
+      }
+    }
     if (
       !coordinates
       || !liveArea
@@ -981,17 +1004,6 @@ export default function DiscoverScreen() {
     setCategoryLoading(selectedCategory);
     try {
       const origin = coordinates;
-      const cached = await readDiscoveryCache(origin, selectedCategory);
-      if (discoveryGeneration.current !== generation) return;
-      if (cached?.length) {
-        setLiveVenues((current) => {
-          const merged = new Map(current.map((venue) => [venue.id, venue]));
-          cached.forEach((venue) => merged.set(venue.id, venue));
-          return [...merged.values()];
-        });
-        loadedCategories.current.add(selectedCategory);
-        return;
-      }
       if (!skipIndex) {
         const indexed = await fetchIndexedFeedPage(
           selectedCategory,
@@ -1006,10 +1018,14 @@ export default function DiscoverScreen() {
         }
         indexedFeedCursors.current.set(selectedCategory, indexed.nextCursor);
         if (indexed.indexExhausted || !indexed.nextCursor) indexedFeedExhausted.current.add(selectedCategory);
+        else indexedFeedExhausted.current.delete(selectedCategory);
         const indexedVenues = indexed.venues.map((result) => liveVenueFromResult(result, origin, liveArea))
-          .filter((venue) => venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
-            && venueDiscoveryCategories(venue).includes(selectedCategory));
+          .filter((venue) => venueDiscoveryCategories(venue).includes(selectedCategory));
         if (indexedVenues.length) {
+          writeCategoryFeedCache(
+            origin, selectedCategory, indexedVenues, indexed.nextCursor,
+            indexed.indexExhausted, false,
+          );
           setLiveVenues((current) => {
             const merged = new Map(current.map((venue) => [venue.id, venue]));
             indexedVenues.forEach((venue) => merged.set(venue.id, venue));
@@ -1017,6 +1033,10 @@ export default function DiscoverScreen() {
           });
           return;
         }
+        writeCategoryFeedCache(
+          origin, selectedCategory, [], indexed.nextCursor,
+          indexed.indexExhausted, false,
+        );
         if (indexed.nextCursor) return;
       }
       const collected = new Map<string, LiveVenueResult>();
@@ -1048,8 +1068,7 @@ export default function DiscoverScreen() {
           return [];
         }
         const venue = liveVenueFromResult(result, origin, liveArea);
-        return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
-          && venueDiscoveryCategories(venue).includes(selectedCategory)
+        return venueDiscoveryCategories(venue).includes(selectedCategory)
           ? [venue]
           : [];
       });
@@ -1080,7 +1099,7 @@ export default function DiscoverScreen() {
       const expanded = eligibleVenues()
         .sort((a, b) => a.distanceMeters - b.distanceMeters)
         .slice(0, CATEGORY_DISCOVERY_LIMIT);
-      void writeDiscoveryCache(origin, selectedCategory, expanded);
+      writeCategoryFeedCache(origin, selectedCategory, expanded, null, true, true);
       setLiveVenues((current) => {
         const merged = new Map(current.map((venue) => [venue.id, venue]));
         expanded.forEach((venue) => {
@@ -1183,9 +1202,12 @@ export default function DiscoverScreen() {
             && !venueCategories.includes('Shops') && !venueCategories.includes('Places of Interest')
             ? [venue] : [];
         }
-        return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS && venueCategories.includes(category)
+        return venueCategories.includes(category)
           ? [venue] : [];
       });
+      writeCategoryFeedCache(
+        origin, category, additions, page.nextCursor, page.indexExhausted, false,
+      );
       if (additions.length) {
         setLiveVenues((current) => {
           const merged = new Map(current.map((venue) => [venue.id, venue]));
