@@ -1,8 +1,49 @@
 import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { PANDA_PRODUCTION_API } from '@/constants/services';
+
+let nextProfileRequestAt = 0;
+
+function pause(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve) => {
+    if (signal.aborted) return resolve();
+    const timer = setTimeout(done, ms);
+    function done() {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    }
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
+async function fetchLiveProfile(placeId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const now = Date.now();
+    const waitForSlot = Math.max(0, nextProfileRequestAt - now);
+    nextProfileRequestAt = Math.max(now, nextProfileRequestAt) + 100;
+    if (waitForSlot) await pause(waitForSlot, signal);
+    if (signal.aborted) throw new Error('Profile request cancelled');
+    const response = await fetch(
+      `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`,
+      { headers: { Accept: 'application/json' }, signal },
+    );
+    if (response.status === 429 && attempt < 3) {
+      const retryAfter = Number(response.headers.get('retry-after'));
+      const backoff = Number.isFinite(retryAfter) && retryAfter > 0
+        ? Math.min(5_000, retryAfter * 1_000) : 250 * 2 ** attempt;
+      await pause(backoff, signal);
+      continue;
+    }
+    if (!response.ok) throw new Error(`Venue profile request failed: ${response.status}`);
+    return await response.json() as Record<string, unknown>;
+  }
+  throw new Error('Venue profile is temporarily unavailable');
+}
 
 export function SuggestionRow({
   venue,
@@ -16,87 +57,119 @@ export function SuggestionRow({
   onToggleSaved: () => void;
 }) {
   const colors = useColors();
+  const [hydratedVenue, setHydratedVenue] = useState<Venue | null>(null);
+  const [profileFailed, setProfileFailed] = useState(false);
+
+  useEffect(() => {
+    setHydratedVenue(null);
+    setProfileFailed(false);
+    if (!venue.detailsDeferred || venue.id.startsWith('osm:')) return;
+    const controller = new AbortController();
+    void fetchLiveProfile(venue.id, controller.signal).then((profile) => {
+      if (typeof profile.name !== 'string' || !profile.name.trim()) {
+        throw new Error('Google did not return a venue name');
+      }
+      const photos = Array.isArray(profile.photoNames) ? profile.photoNames.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const photo = item as Record<string, unknown>;
+        return typeof photo.name === 'string'
+          ? [{ name: photo.name, attribution: typeof photo.attribution === 'string' ? photo.attribution : '' }]
+          : [];
+      }) : [];
+      const display = {
+        ...venue,
+        name: profile.name,
+        fullAddress: typeof profile.address === 'string' ? profile.address : venue.fullAddress,
+        type: typeof profile.primaryType === 'string' ? profile.primaryType : venue.type,
+        rating: typeof profile.rating === 'number' ? profile.rating.toFixed(1) : venue.rating,
+        ratingCount: typeof profile.ratingCount === 'number' ? profile.ratingCount : venue.ratingCount,
+        price: typeof profile.price === 'string' ? profile.price : venue.price,
+        openNow: typeof profile.openNow === 'boolean' ? profile.openNow : venue.openNow,
+        hours: typeof profile.todayHours === 'string' ? profile.todayHours : venue.hours,
+        phone: typeof profile.phone === 'string' ? profile.phone : venue.phone,
+        website: typeof profile.website === 'string' ? profile.website : venue.website,
+        latitude: typeof profile.latitude === 'number' ? profile.latitude : venue.latitude,
+        longitude: typeof profile.longitude === 'number' ? profile.longitude : venue.longitude,
+        photoNames: photos,
+        photoName: photos[0]?.name,
+        photoAttributions: photos[0]?.attribution ? [photos[0].attribution] : [],
+        photoCount: photos.length,
+        detailsDeferred: false,
+        cached: false,
+      } as Venue;
+      setHydratedVenue(display);
+    }).catch(() => {
+      if (!controller.signal.aborted) setProfileFailed(true);
+    });
+    return () => controller.abort();
+  }, [venue.id, venue.detailsDeferred]);
+
+  const card = hydratedVenue ?? venue;
+  const cardTitle = card.detailsDeferred
+    ? profileFailed ? 'Live details unavailable' : 'Loading venue…'
+    : card.name;
 
   return (
     <Pressable
-      testID={`suggestion-${venue.id}`}
+      testID={`suggestion-${venue.id}`
       onPress={onPress}
       style={({ pressed }) => [
         styles.row,
         {
-          backgroundColor: venue.promoted ? colors.ivory : colors.card,
-          borderColor: venue.promoted ? colors.gold : colors.border,
-          shadowColor: venue.promoted ? colors.goldDeep : colors.green900,
+          backgroundColor: card.promoted ? colors.ivory : colors.card,
+          borderColor: card.promoted ? colors.gold : colors.border,
+          shadowColor: card.promoted ? colors.goldDeep : colors.green900,
         },
-        venue.promoted && styles.promoted,
+        card.promoted && styles.promoted,
         pressed && styles.pressed,
       ]}
     >
-      {venue.promoted ? (
+      {card.promoted ? (
         <>
           <View style={[styles.goldRail, { backgroundColor: colors.gold }]} />
           <View style={[styles.goldGlow, { backgroundColor: colors.honeySoft }]} />
         </>
       ) : null}
       <View style={styles.photo}>
-        <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={76} />
+        <VenuePhoto venue={card} venueId={card.id} venueName={cardTitle} height={76} />
       </View>
       <View style={styles.copy}>
         <View style={styles.titleRow}>
           <View style={styles.titleWrap}>
-            {venue.promoted ? (
+            {card.promoted ? (
               <View style={[styles.promotedLabel, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
                 <MaterialCommunityIcons name="star-four-points" size={9} color={colors.goldDeep} />
                 <Text style={[styles.promotedLabelText, { color: colors.goldDeep }]}>Promoted</Text>
               </View>
             ) : null}
-            <Text
-              numberOfLines={1}
-              style={[styles.name, { color: venue.promoted ? colors.green800 : colors.foreground }]}
-            >
-              {venue.name}
-            </Text>
+            <Text numberOfLines={1} style={[styles.name, { color: card.promoted ? colors.green800 : colors.foreground }]}>{cardTitle}</Text>
           </View>
           <Pressable
-            testID={`suggestion-save-${venue.id}`}
-            accessibilityLabel={saved ? `Remove ${venue.name} from saved venues` : `Save ${venue.name}`}
+            testID={`suggestion-save-${venue.id}`
+            accessibilityLabel={saved ? `Remove ${cardTitle} from saved venues` : `Save ${cardTitle}`}
             accessibilityRole="button"
             hitSlop={10}
             onPress={onToggleSaved}
             style={({ pressed }) => [styles.heart, pressed && styles.iconPressed]}
           >
-            <Ionicons
-              name={saved ? 'heart' : 'heart-outline'}
-              size={20}
-              color={saved ? colors.destructive : venue.promoted ? colors.goldDeep : colors.mutedForeground}
-            />
+            <Ionicons name={saved ? 'heart' : 'heart-outline'} size={20}
+              color={saved ? colors.destructive : card.promoted ? colors.goldDeep : colors.mutedForeground} />
           </Pressable>
         </View>
-        {!venue.detailsDeferred && <View style={styles.addressRow}>
+        {!card.detailsDeferred && <View style={styles.addressRow}>
           <Feather name="map-pin" size={13} color={colors.mutedForeground} />
-          <Text numberOfLines={1} style={[styles.address, { color: colors.mutedForeground }]}>
-            {venue.fullAddress}
-          </Text>
+          <Text numberOfLines={1} style={[styles.address, { color: colors.mutedForeground }]}>{card.fullAddress}</Text>
         </View>}
-        {!venue.detailsDeferred && <View style={styles.metaRow}>
-          <Text
-            style={[
-              styles.open,
-              { color: venue.cached ? colors.green700 : venue.openNow ? colors.openForeground : colors.closedForeground },
-            ]}
-          >
-            {venue.cached ? 'Saved · check hours' : venue.openNow ? 'Open' : 'Closed'}
+        {!card.detailsDeferred && <View style={styles.metaRow}>
+          <Text style={[styles.open, { color: card.cached ? colors.green700 : card.openNow ? colors.openForeground : colors.closedForeground }]}>
+            {card.cached ? 'Saved · check hours' : card.openNow ? 'Open' : 'Closed'}
           </Text>
-          <Text style={[styles.meta, { color: colors.foreground }]}>{venue.distance}</Text>
-          <Text style={[styles.meta, { color: colors.foreground }]}>{venue.walkingTime}</Text>
-          <Text style={[styles.meta, { color: colors.mutedForeground }]}>{venue.price}</Text>
-          <Text numberOfLines={1} style={[styles.meta, styles.type, { color: colors.mutedForeground }]}>
-            {venue.type}
-          </Text>
+          <Text style={[styles.meta, { color: colors.foreground }]}>{card.distance}</Text>
+          <Text style={[styles.meta, { color: colors.foreground }]}>{card.walkingTime}</Text>
+          <Text style={[styles.meta, { color: colors.foreground }]}>{card.price}</Text>
+          <Text numberOfLines={1} style={[styles.meta, styles.type, { color: colors.mutedForeground }]}>{card.type}</Text>
         </View>}
-        {venue.sourceAttribution ? <Text style={[styles.meta, { color: colors.mutedForeground }]}>
-          {venue.sourceAttribution}
-        </Text> : null}
+        {card.sourceAttribution ? <Text style={[styles.meta, { color: colors.mutedForeground }]}>{card.sourceAttribution}</Text> : null}
       </View>
     </Pressable>
   );

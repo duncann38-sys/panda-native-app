@@ -142,7 +142,7 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
   const name = stringValue(record.name);
   const lat = finiteNumber(record.lat);
   const lng = finiteNumber(record.lng);
-  if (!id || !name || lat === undefined || lng === undefined) return null;
+  if (!id || (!name && record.detailsDeferred !== true) || lat === undefined || lng === undefined) return null;
 
   const rating = finiteNumber(record.rating);
   const ratingCount = finiteNumber(record.ratingCount);
@@ -319,36 +319,11 @@ type NearbyCacheEntry = {
   venues: Venue[];
 };
 
-async function readNearbyCache(): Promise<NearbyCacheEntry | null> {
-  try {
-    const raw = await AsyncStorage.getItem(NEARBY_CACHE_KEY);
-    if (!raw) return null;
-    const value = JSON.parse(raw) as NearbyCacheEntry;
-    if (!Array.isArray(value.venues) || !value.venues.length || !value.area
-      || !Number.isFinite(value.origin?.latitude) || !Number.isFinite(value.origin?.longitude)
-      || !Number.isFinite(value.savedAt) || Date.now() - value.savedAt > DISCOVERY_CACHE_TTL_MS) return null;
-    value.venues = value.venues.filter(venue => !venue.id.startsWith('osm:'));
-    return value.venues.length ? value : null;
-  } catch {
-    return null;
-  }
-}
+async function readNearbyCache(): Promise<NearbyCacheEntry | null> { return null; }
 
-async function writeNearbyCache(value: NearbyCacheEntry) {
-  try {
-    await AsyncStorage.setItem(NEARBY_CACHE_KEY, JSON.stringify(value));
-  } catch {
-    // An unavailable device cache must never prevent live results.
-  }
-}
+async function writeNearbyCache(value: NearbyCacheEntry) { return; }
 
-async function clearNearbyCache() {
-  try {
-    await AsyncStorage.removeItem(NEARBY_CACHE_KEY);
-  } catch {
-    // An unavailable device cache must never prevent live results.
-  }
-}
+async function clearNearbyCache() { return; }
 const CATEGORY_SEARCH_QUERIES: Partial<Record<DiscoveryCategory, string>> = {
   Indian: 'indian restaurants',
   Italian: 'italian restaurants',
@@ -416,7 +391,7 @@ async function fetchDiscoveryPage(
       : await expoFetch(PANDA_DISCOVERY_API + '/api/panda-ai', requestInit);
     if (response.ok) {
       const payload = await response.json() as { venues?: unknown; nextPageToken?: unknown };
-      if (!Array.isArray(payload.venues)) {
+      if (payload.dataMode !== 'indexed_feed_id_candidates' || !Array.isArray(payload.venues)) {
         return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
       }
       return {
@@ -558,11 +533,11 @@ async function fetchIndexedFeedPage(
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         venuesOnly: true,
-        discoveryMode: 'indexed-feed',
+        discoveryMode: 'indexed-id-page',
         category,
         location,
         radiusMeters: category === 'All' ? 6000 : MAX_CATEGORY_DISTANCE_METERS,
-        pageSize: 30,
+        pageSize: 200,
         ...(cursor ? { cursor } : {}),
       }),
       signal: controller.signal,
@@ -582,6 +557,7 @@ async function fetchIndexedFeedPage(
       venues?: unknown;
       nextCursor?: unknown;
       indexExhausted?: unknown;
+      dataMode?: unknown;
     };
     if (!Array.isArray(payload.venues)) {
       return {
@@ -889,10 +865,8 @@ export default function DiscoverScreen() {
       const eligibleResults = [...uniqueResults.values()].flatMap((result) => {
         if (
           !result.id
-          || !result.name
           || result.id.startsWith('osm:')
-          || !result.photoName
-          || (result.photoCount ?? 0) < (result.detailsDeferred ? 1 : 5)
+          || (!result.detailsDeferred && (!result.name || !result.photoName || (result.photoCount ?? 0) < 5))
           || !Number.isFinite(result.lat)
           || !Number.isFinite(result.lng)
         ) {

@@ -21,6 +21,8 @@ export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
   useEffect(() => {
     if (!venue?.id) return;
     if (venue.id.startsWith('osm:') || (venue.detailsDeferred && !allowDetails)) return;
+    const firstPartyGallery = Boolean(venue.promoted || venue.banging || venue.premium);
+    if (!firstPartyGallery) { setLoaded(null); return; }
     if (!allowDetails && venue.photoNames?.length && venue.photoNames.length >= Math.min(limit, venue.photoCount || limit)) {
       setLoaded(null);
       return;
@@ -66,8 +68,11 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
   if (venue.photoNames?.length) {
+    const firstPartyGallery = Boolean(venue.promoted || venue.banging || venue.premium);
     return venue.photoNames.map((photo, index) => ({
-      uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`,
+      uri: firstPartyGallery
+        ? `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`
+        : `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(photo.name)}&max=900`,
       attribution: photo.attribution,
     }));
   }
