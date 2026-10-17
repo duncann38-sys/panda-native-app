@@ -65,6 +65,13 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   if (cached && cached.expires > Date.now()) return cached.photos;
   const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
+  const expectedPhotoPath = `/api/partner/venues/${encodeURIComponent(venue.id)}/photos/0/image`;
+  if (venue.primaryPhotoPath === expectedPhotoPath) {
+    return [{
+      uri: `${PANDA_PRODUCTION_API}${venue.primaryPhotoPath}`,
+      attribution: venue.photoAttributions[0] || '',
+    }];
+  }
   if (venue.photoNames?.length) {
     return venue.photoNames.map((photo, index) => ({
       uri: `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`,

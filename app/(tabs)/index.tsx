@@ -107,6 +107,7 @@ type LiveVenueResult = {
   directionsLink?: string;
   photoAttribution?: string;
   photoName?: string;
+  primaryPhotoPath?: string;
   photoCount?: number;
   detailsDeferred?: boolean;
   source?: 'openstreetmap';
@@ -171,6 +172,7 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
     directionsLink: stringValue(record.directionsLink) || undefined,
     photoAttribution: stringValue(record.photoAttribution) || undefined,
     photoName: stringValue(record.photoName) || undefined,
+    primaryPhotoPath: stringValue(record.primaryPhotoPath) || undefined,
     detailsDeferred: record.detailsDeferred === true || id.startsWith('osm:'),
     source: id.startsWith('osm:') ? 'openstreetmap' : undefined,
     photoCount,
@@ -221,6 +223,12 @@ type DiscoveryPageFailure = {
 type DiscoveryPage = {
   venues: LiveVenueResult[];
   nextPageToken?: string;
+  failure?: DiscoveryPageFailure;
+};
+type IndexedFeedPage = {
+  venues: LiveVenueResult[];
+  nextCursor: string | null;
+  indexExhausted: boolean;
   failure?: DiscoveryPageFailure;
 };
 const LIVE_DISCOVERY_QUERIES = [
@@ -527,6 +535,72 @@ function poundPrice(value: unknown): '' | '£' | '££' | '£££' | '££££' 
   return Number.isFinite(numeric) ? poundPrice(numeric) : '';
 }
 
+async function fetchIndexedFeedPage(
+  category: TopCategory,
+  location: { lat: number; lng: number },
+  cursor?: string | null,
+  reserveRequest?: () => boolean,
+): Promise<IndexedFeedPage> {
+  if (reserveRequest && !reserveRequest()) {
+    return { venues: [], nextCursor: cursor ?? null, indexExhausted: false, failure: { code: 'API-RATE-LIMIT' } };
+  }
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(PANDA_DISCOVERY_API + '/api/panda-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        venuesOnly: true,
+        discoveryMode: 'indexed-feed',
+        category,
+        location,
+        radiusMeters: category === 'All' ? 6000 : MAX_CATEGORY_DISTANCE_METERS,
+        pageSize: 6,
+        ...(cursor ? { cursor } : {}),
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return {
+        venues: [], nextCursor: cursor ?? null, indexExhausted: false,
+        failure: {
+          code: response.status === 503 ? 'API-QUOTA'
+            : response.status === 429 ? 'API-RATE-LIMIT'
+            : response.status === 401 || response.status === 403 ? 'API-FORBIDDEN' : 'API-RESPONSE',
+          status: response.status,
+        },
+      };
+    }
+    const payload = await response.json() as {
+      venues?: unknown;
+      nextCursor?: unknown;
+      indexExhausted?: unknown;
+    };
+    if (!Array.isArray(payload.venues)) {
+      return {
+        venues: [], nextCursor: cursor ?? null, indexExhausted: false,
+        failure: { code: 'API-RESPONSE', status: response.status },
+      };
+    }
+    return {
+      venues: payload.venues.flatMap(venue => {
+        const normalized = normalizeLiveVenueResult(venue, `indexed:${category}`);
+        return normalized ? [normalized] : [];
+      }),
+      nextCursor: typeof payload.nextCursor === 'string' ? payload.nextCursor : null,
+      indexExhausted: payload.indexExhausted === true,
+    };
+  } catch (error) {
+    return {
+      venues: [], nextCursor: cursor ?? null, indexExhausted: false,
+      failure: { code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK' },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function liveVenueFromResult(
   result: LiveVenueResult,
   origin: { latitude: number; longitude: number },
@@ -590,6 +664,7 @@ function liveVenueFromResult(
     promoted: false,
     photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
     photoName: result.photoName,
+    primaryPhotoPath: result.primaryPhotoPath,
     detailsDeferred: result.detailsDeferred,
     source: result.source,
     sourceAttribution: result.source === 'openstreetmap' ? '© OpenStreetMap contributors' : undefined,
@@ -660,7 +735,12 @@ export default function DiscoverScreen() {
   const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
   const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
+  const [feedPageLoading, setFeedPageLoading] = useState(false);
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
+  const indexedFeedCursors = useRef(new Map<TopCategory, string | null>());
+  const indexedFeedExhausted = useRef(new Set<TopCategory>());
+  const indexedFeedInFlight = useRef(false);
+  const allLiveFallbackLoaded = useRef(false);
   const liveLoadInFlight = useRef(false);
   const freshResultsLoaded = useRef(false);
   const displayedOrigin = useRef<{ latitude: number; longitude: number } | null>(null);
@@ -723,6 +803,9 @@ export default function DiscoverScreen() {
       setLiveVenues((current) => current.map((venue) => ({ ...venue, cached: true })));
     }
     loadedCategories.current.clear();
+    indexedFeedCursors.current.clear();
+    indexedFeedExhausted.current.clear();
+    allLiveFallbackLoaded.current = false;
     try {
       const location = requestPermission || !coordinates
         ? await refreshLocation(requestPermission)
@@ -847,6 +930,19 @@ export default function DiscoverScreen() {
       published = true;
       void writeNearbyCache({ savedAt: providerCachedAt ?? Date.now(), area, origin, venues: nextVenues });
       };
+      const indexed = await fetchIndexedFeedPage('All', locationPayload, null, reserveDiscoveryRequest);
+      if (discoveryGeneration.current !== generation) return;
+      if (indexed.failure) {
+        setLiveDiscoveryFailure(indexed.failure.code);
+        setLiveDiscoveryState('error');
+        return;
+      }
+      indexedFeedCursors.current.set('All', indexed.nextCursor);
+      if (indexed.indexExhausted || !indexed.nextCursor) indexedFeedExhausted.current.add('All');
+      if (indexed.venues.length) {
+        publishPages([{ venues: indexed.venues }], true);
+        return;
+      }
       await loadProgressiveDiscovery({
         queries: LIVE_DISCOVERY_QUERIES,
         loadFirst: (query) => fetchDiscoveryPage(
@@ -856,6 +952,7 @@ export default function DiscoverScreen() {
         onResults: publishPages,
         isCurrent: () => discoveryGeneration.current === generation,
       });
+      allLiveFallbackLoaded.current = true;
     } catch {
       setLiveDiscoveryFailure('API-RESPONSE');
       setLiveDiscoveryState('error');
@@ -864,11 +961,12 @@ export default function DiscoverScreen() {
     }
   }, [coordinates, refreshLocation, reserveDiscoveryRequest, setLiveArea, setLiveVenues]);
 
-  const loadExpandedCategory = useCallback(async (selectedCategory: DiscoveryCategory) => {
+  const loadExpandedCategory = useCallback(async (selectedCategory: DiscoveryCategory, skipIndex = false) => {
     if (
       !coordinates
       || !liveArea
       || loadedCategories.current.has(selectedCategory)
+      || (!skipIndex && indexedFeedCursors.current.has(selectedCategory))
       || categoryLoading === selectedCategory
       || categoryLoadInFlight.current
       || liveLoadInFlight.current
@@ -893,6 +991,33 @@ export default function DiscoverScreen() {
         });
         loadedCategories.current.add(selectedCategory);
         return;
+      }
+      if (!skipIndex) {
+        const indexed = await fetchIndexedFeedPage(
+          selectedCategory,
+          { lat: origin.latitude, lng: origin.longitude },
+          null,
+          reserveDiscoveryRequest,
+        );
+        if (discoveryGeneration.current !== generation) return;
+        if (indexed.failure) {
+          setLiveDiscoveryFailure(indexed.failure.code);
+          return;
+        }
+        indexedFeedCursors.current.set(selectedCategory, indexed.nextCursor);
+        if (indexed.indexExhausted || !indexed.nextCursor) indexedFeedExhausted.current.add(selectedCategory);
+        const indexedVenues = indexed.venues.map((result) => liveVenueFromResult(result, origin, liveArea))
+          .filter((venue) => venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS
+            && venueDiscoveryCategories(venue).includes(selectedCategory));
+        if (indexedVenues.length) {
+          setLiveVenues((current) => {
+            const merged = new Map(current.map((venue) => [venue.id, venue]));
+            indexedVenues.forEach((venue) => merged.set(venue.id, venue));
+            return [...merged.values()];
+          });
+          return;
+        }
+        if (indexed.nextCursor) return;
       }
       const collected = new Map<string, LiveVenueResult>();
       const mergeResults = (results: LiveVenueResult[]) => {
@@ -984,6 +1109,99 @@ export default function DiscoverScreen() {
     setCategory(nextCategory);
     if (nextCategory !== 'All') void loadExpandedCategory(nextCategory);
   }, [loadExpandedCategory]);
+
+  const loadMoreAllFromGoogle = useCallback(async () => {
+    if (!coordinates || allLiveFallbackLoaded.current || liveLoadInFlight.current) return;
+    allLiveFallbackLoaded.current = true;
+    setFeedPageLoading(true);
+    try {
+      const origin = { latitude: coordinates.latitude, longitude: coordinates.longitude };
+      const page = await fetchDiscoveryBatch(
+        LIVE_DISCOVERY_QUERIES,
+        { lat: origin.latitude, lng: origin.longitude },
+        reserveDiscoveryRequest,
+      );
+      if (!page.venues.length) {
+        allLiveFallbackLoaded.current = false;
+        return;
+      }
+      const additions = page.venues.flatMap((result) => {
+        if (!result.name || !result.photoName || !Number.isFinite(result.lat) || !Number.isFinite(result.lng)) return [];
+        const venue = liveVenueFromResult(result, origin, liveArea || 'your location');
+        const categories = venueDiscoveryCategories(venue);
+        return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS
+          && !categories.includes('Shops') && !categories.includes('Places of Interest') ? [venue] : [];
+      });
+      setLiveVenues((current) => {
+        const merged = new Map(current.map((venue) => [venue.id, venue]));
+        additions.forEach((venue) => merged.set(venue.id, venue));
+        return [...merged.values()];
+      });
+    } finally {
+      setFeedPageLoading(false);
+    }
+  }, [coordinates, liveArea, reserveDiscoveryRequest, setLiveVenues]);
+
+  const loadMoreFeed = useCallback(async () => {
+    if (indexedFeedInFlight.current || feedPageLoading || categoryLoading === category) return;
+    if (!indexedFeedCursors.current.has(category)) {
+      if (category !== 'All') void loadExpandedCategory(category);
+      return;
+    }
+    const cursor = indexedFeedCursors.current.get(category);
+    if (!cursor) {
+      if (category === 'All') {
+        void loadMoreAllFromGoogle();
+      } else if (indexedFeedExhausted.current.has(category) && !loadedCategories.current.has(category)) {
+        void loadExpandedCategory(category, true);
+      }
+      return;
+    }
+    if (!coordinates) return;
+    indexedFeedInFlight.current = true;
+    setFeedPageLoading(true);
+    try {
+      const page = await fetchIndexedFeedPage(
+        category,
+        { lat: coordinates.latitude, lng: coordinates.longitude },
+        cursor,
+        reserveDiscoveryRequest,
+      );
+      if (page.failure) {
+        setLiveDiscoveryFailure(page.failure.code);
+        return;
+      }
+      indexedFeedCursors.current.set(category, page.nextCursor);
+      if (page.indexExhausted || !page.nextCursor) indexedFeedExhausted.current.add(category);
+      const origin = { latitude: coordinates.latitude, longitude: coordinates.longitude };
+      const additions = page.venues.flatMap((result) => {
+        if (!result.name || !result.photoName || !Number.isFinite(result.lat) || !Number.isFinite(result.lng)) return [];
+        const venue = liveVenueFromResult(result, origin, liveArea || 'your location');
+        const venueCategories = venueDiscoveryCategories(venue);
+        if (category === 'All') {
+          return venue.distanceMeters <= MAX_WALK_DISTANCE_METERS
+            && !venueCategories.includes('Shops') && !venueCategories.includes('Places of Interest')
+            ? [venue] : [];
+        }
+        return venue.distanceMeters <= MAX_CATEGORY_DISTANCE_METERS && venueCategories.includes(category)
+          ? [venue] : [];
+      });
+      if (additions.length) {
+        setLiveVenues((current) => {
+          const merged = new Map(current.map((venue) => [venue.id, venue]));
+          additions.forEach((venue) => merged.set(venue.id, venue));
+          return [...merged.values()];
+        });
+        setLiveDiscoveryFailure(null);
+      }
+    } finally {
+      indexedFeedInFlight.current = false;
+      setFeedPageLoading(false);
+    }
+  }, [
+    category, categoryLoading, coordinates, feedPageLoading, liveArea, loadExpandedCategory,
+    loadMoreAllFromGoogle, reserveDiscoveryRequest, setLiveVenues,
+  ]);
 
   useEffect(() => {
     if (locationStatus === 'ready') {
@@ -1234,6 +1452,8 @@ export default function DiscoverScreen() {
         keyExtractor={(item) => item.id}
         numColumns={1}
         showsVerticalScrollIndicator={false}
+        onEndReached={() => void loadMoreFeed()}
+        onEndReachedThreshold={0.35}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -1243,6 +1463,11 @@ export default function DiscoverScreen() {
           />
         }
         contentContainerStyle={styles.feedContent}
+        ListFooterComponent={feedPageLoading ? (
+          <View style={{ paddingVertical: 18 }}>
+            <ActivityIndicator color={colors.green700} />
+          </View>
+        ) : null}
         ListHeaderComponent={
           <View style={styles.suggestionsHeader}>
             <View style={styles.liveStatusRow}>

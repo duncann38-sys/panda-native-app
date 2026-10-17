@@ -158,8 +158,8 @@ export function VenueCard({
             {venue.walkingTime}
           </Text>
         </View>
-        <Text style={[styles.openText, { color: venue.cached ? colors.mutedForeground : onGreen ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
-          {venue.cached ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
+        <Text style={[styles.openText, { color: venue.cached || venue.detailsDeferred ? colors.mutedForeground : onGreen ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
+          {venue.cached || venue.detailsDeferred ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
         </Text>
       </View>
     </Pressable>

@@ -19,6 +19,7 @@ export type Venue = {
   latitude?: number;
   longitude?: number;
   photoName?: string;
+  primaryPhotoPath?: string;
   photoCount?: number;
   photoNames?: Array<{ name: string; attribution: string }>;
   detailsDeferred?: boolean;
