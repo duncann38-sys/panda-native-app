@@ -53,6 +53,7 @@ type AiVenue = {
   openNow?: boolean;
   todayHours?: string;
   nearest_station?: string;
+  stopLabel?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -568,14 +569,24 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         PANDA_AI_REQUEST_TIMEOUT_MS,
         controller.signal,
       );
-      const data = (await response.json()) as { text?: string; venues?: AiVenue[] };
+      const data = (await response.json()) as {
+        text?: string;
+        venues?: AiVenue[];
+        customItinerary?: boolean;
+        customPubCrawl?: boolean;
+      };
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
-      const eligibleVenues = (data.venues ?? [])
-        .filter((venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5)
-        .sort((left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity))
-        .slice(0, PANDA_AI_VENUE_LIMIT);
+      const eligibleVenues = (data.venues ?? []).filter(
+        (venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5,
+      );
+      if (!data.customItinerary && !data.customPubCrawl) {
+        eligibleVenues.sort(
+          (left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
+        );
+      }
+      eligibleVenues.splice(PANDA_AI_VENUE_LIMIT);
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
       const baseReply =
         data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
@@ -1179,6 +1190,11 @@ function AiVenueCard({
           </View>
         )}
         <View style={styles.resultBody}>
+          {venue.stopLabel ? (
+            <Text style={[styles.resultStopLabel, { color: colors.honeyInk }]} numberOfLines={1}>
+              {venue.stopLabel}
+            </Text>
+          ) : null}
           <Text numberOfLines={1} style={[styles.resultName, { color: colors.foreground }]}>
             {venue.name ?? 'Panda pick'}
           </Text>
@@ -1557,6 +1573,13 @@ const styles = StyleSheet.create({
   },
   resultBody: {
     padding: 10,
+  },
+  resultStopLabel: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 8,
+    letterSpacing: 0.8,
+    marginBottom: 3,
+    textTransform: 'uppercase',
   },
   resultName: {
     fontFamily: 'Inter_700Bold',
