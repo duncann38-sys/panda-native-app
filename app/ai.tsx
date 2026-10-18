@@ -27,6 +27,12 @@ import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { getPartnerTier } from '@/utils/partner-venues';
+import {
+  buildSessionVenueContext,
+  isGooglePlaceSessionVenue,
+  resolveSessionVenueReference,
+  type SessionVenueCard,
+} from '@/utils/ai-session-context';
 
 type AiVenue = {
   id?: string;
@@ -46,6 +52,7 @@ type AiVenue = {
   photoCount?: number;
   openNow?: boolean;
   todayHours?: string;
+  nearest_station?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -247,8 +254,44 @@ function isNearestStationOnly(text: string) {
     && !/\b(?:to|for)\s+[a-z0-9]/i.test(text);
 }
 
+function asksForVenueStation(text: string) {
+  return /\b(?:nearest|closest|local)\s+(?:(?:tube|underground|train|rail)\s+)?station\b/i.test(text)
+    || /\b(?:nearest|closest)\s+(?:tube|underground)\b/i.test(text);
+}
+
+function sameSessionVenue(left: SessionVenueCard, right: SessionVenueCard) {
+  if (left.id && right.id) return left.id === right.id;
+  return Boolean(left.name && right.name && left.name.toLocaleLowerCase('en-GB') === right.name.toLocaleLowerCase('en-GB'));
+}
+
+function findOriginalSessionVenue(
+  messages: Message[],
+  target: SessionVenueCard,
+  preferredVenue?: AiVenue | null,
+): AiVenue {
+  if (preferredVenue && sameSessionVenue(preferredVenue, target)) {
+    return { ...preferredVenue, nearest_station: target.nearest_station ?? preferredVenue.nearest_station };
+  }
+
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const candidates = [
+      ...(message.transit?.venue ? [message.transit.venue] : []),
+      ...(message.venues ?? []),
+    ];
+    const match = candidates.find((candidate) => sameSessionVenue(candidate, target));
+    if (!match) continue;
+    const transit = message.transit;
+    const station = target.nearest_station
+      ?? (transit && transit.venueId === match.id ? transit.destinationStation?.name : undefined);
+    return { ...match, ...(station ? { nearest_station: station } : {}) };
+  }
+
+  return target as AiVenue;
+}
+
 async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
-  const aiVenue = candidates.find((venue) => venue.id?.startsWith('ChI') && venue.name);
+  const aiVenue = candidates.find((venue) => isGooglePlaceSessionVenue(venue) && venue.name);
   if (aiVenue) return aiVenue;
 
   const normalizedText = text.toLocaleLowerCase('en-GB');
@@ -410,6 +453,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const chatGenerationRef = useRef(0);
   const primaryPendingRef = useRef(false);
   const primaryControllerRef = useRef<AbortController | null>(null);
+  const activeAiVenueRef = useRef<AiVenue | null>(null);
 
   useEffect(() => {
     return () => {
@@ -423,6 +467,37 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const sendMessage = async (text = draft) => {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
+
+    const isTransit = isTransitQuestion(trimmed);
+    const sessionVenueContext = buildSessionVenueContext(messages, activeAiVenueRef.current);
+    const sessionVenueResolution = resolveSessionVenueReference(trimmed, sessionVenueContext);
+    const referencedVenue = sessionVenueResolution.venue
+      ? findOriginalSessionVenue(messages, sessionVenueResolution.venue, activeAiVenueRef.current)
+      : null;
+    if (isTransit && sessionVenueResolution.isReference && sessionVenueResolution.ambiguous) {
+      setMessages([
+        ...messages,
+        { role: 'user', text: trimmed },
+        {
+          role: 'model',
+          text: 'There are a couple of fine places in our chat, and I’d rather not send you to the wrong one. Tap the venue card you mean or tell me its name, and I’ll find the nearest station.',
+        },
+      ]);
+      setDraft('');
+      return;
+    }
+    if (isTransit && sessionVenueResolution.isReference && referencedVenue && !isGooglePlaceSessionVenue(referencedVenue)) {
+      setMessages([
+        ...messages,
+        { role: 'user', text: trimmed },
+        {
+          role: 'model',
+          text: `I’ve got ${referencedVenue.name ?? 'that venue'} in our chat, but its card is missing the Google ID needed for a proper live route check. Open the full venue card and I’ll take another look.`,
+        },
+      ]);
+      setDraft('');
+      return;
+    }
 
     const requestId = ++requestSequenceRef.current;
     currentRequestRef.current = requestId;
@@ -478,6 +553,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           body: JSON.stringify({
             contents: buildPandaAiContents(conversation),
             chatContext: { timeZone: localTimeZone() },
+            ...(sessionVenueContext.recentVenues.length ? { sessionVenueContext } : {}),
             generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
             ...(requestCoordinates
               ? {
@@ -496,7 +572,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
-      const isTransit = isTransitQuestion(trimmed);
       const eligibleVenues = (data.venues ?? [])
         .filter((venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5)
         .sort((left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity))
@@ -504,6 +579,16 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
       const baseReply =
         data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
+      if (referencedVenue) {
+        activeAiVenueRef.current = referencedVenue;
+      } else if (initialVenues.length) {
+        const inferredContext = buildSessionVenueContext([
+          { role: 'model', text: baseReply, venues: initialVenues },
+        ]);
+        activeAiVenueRef.current = inferredContext.activeVenueId
+          ? inferredContext.recentVenues.find((venue) => venue.id === inferredContext.activeVenueId) ?? null
+          : null;
+      }
 
       // Show the primary answer and venue results before any optional live-data lookups.
       if (needsCurrentLocation) {
@@ -571,7 +656,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             const { latitude, longitude } = currentLocation.coordinates;
             const venue = isNearestStationOnly(trimmed)
               ? null
-              : await resolveTransitVenue(trimmed, initialVenues);
+              : referencedVenue ?? await resolveTransitVenue(trimmed, initialVenues);
             if (!isCurrentRequest()) return;
 
             if (venue?.id && venue.name) {
@@ -602,10 +687,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 }));
                 return;
               }
+              const venueWithStation = { ...venue, nearest_station: liveTransit.destinationStation.name };
+              activeAiVenueRef.current = venueWithStation;
               const transit: AiTransitContext = {
                 venueId: venue.id,
                 venueName: venue.name,
-                venue,
+                venue: venueWithStation,
                 originStation: liveTransit.originStation,
                 destinationStation: liveTransit.destinationStation,
                 originWalk: liveTransit.originWalk,
@@ -618,12 +705,15 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               const transitText = liveTransit.transitRoute
                 ? `The live station-to-station journey is about ${liveTransit.transitRoute.durationMinutes} minutes.`
                 : 'I’ll show the verified station context while live route details are unavailable.';
+              const venueStationText = asksForVenueStation(trimmed)
+                ? `For ${venue.name}, the nearest station is ${liveTransit.destinationStation.name}—a rather good place to start. ${transitText} ${walkText}`
+                : `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`;
               updateResult((message) => ({
                 ...message,
-                text: `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`,
+                text: venueStationText,
                 venues: message.venues?.some((item) => item.id === venue.id)
-                  ? message.venues
-                  : [venue, ...(message.venues ?? [])].slice(0, PANDA_AI_VENUE_LIMIT),
+                  ? message.venues.map((item) => item.id === venue.id ? venueWithStation : item)
+                  : [venueWithStation, ...(message.venues ?? [])].slice(0, PANDA_AI_VENUE_LIMIT),
                 transit,
               }));
               return;
@@ -760,6 +850,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   };
 
   const openAiVenue = (aiVenue: AiVenue) => {
+    activeAiVenueRef.current = aiVenue;
     const venue = aiVenueToVenue(aiVenue);
     if (!venue) return;
     router.push({
@@ -773,6 +864,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   };
 
   const openAiVenueDirections = async (aiVenue: AiVenue) => {
+    activeAiVenueRef.current = aiVenue;
     const venue = aiVenueToVenue(aiVenue);
     if (!venue) return;
     recordVenueActivity('directions_click', venue);
@@ -807,6 +899,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     primaryPendingRef.current = false;
     primaryControllerRef.current?.abort();
     primaryControllerRef.current = null;
+    activeAiVenueRef.current = null;
     setSending(false);
     setDraft('');
     setMessages([

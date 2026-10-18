@@ -1,0 +1,14 @@
+name: Panda Android Build 54 - Session-aware Panda AI
+
+on:
+  push:
+    branches:
+      - panda-build-54
+
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 54
+    type: build
+    params:
+      platform: android
+      profile: preview
