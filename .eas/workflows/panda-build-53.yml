@@ -1,0 +1,14 @@
+name: Panda Android Build 53 - Live Search Feed
+
+on:
+  push:
+    branches:
+      - panda-build-53
+
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 53
+    type: build
+    params:
+      platform: android
+      profile: preview

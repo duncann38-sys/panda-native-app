@@ -39,6 +39,7 @@ import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { loadProgressiveDiscovery } from '@/utils/discovery-loading';
 import {
   advanceLiveSearchCursor,
+  liveDiscoveryNearbyTypes,
   liveDiscoverySearchQuery,
   liveSearchRequest,
   type LiveSearchCursor,
@@ -491,7 +492,7 @@ async function fetchIndexedFeedPage(
   if (cursor) {
     try {
       const parsed = JSON.parse(cursor) as { pageToken?: unknown; ringIndex?: unknown };
-      if (!Number.isInteger(parsed.ringIndex) || (parsed.ringIndex as number) < 0
+      if (!Number.isInteger(parsed.ringIndex) || (parsed.ringIndex as number) < -1
         || (parsed.pageToken !== undefined && typeof parsed.pageToken !== 'string')) {
         throw new Error('Invalid live search cursor');
       }
@@ -517,7 +518,7 @@ async function fetchIndexedFeedPage(
       body: JSON.stringify({
         venuesOnly: true,
         discoveryMode: 'cover',
-        query: liveDiscoverySearchQuery(category),
+        query,
         location,
         ...request,
       }),
@@ -545,7 +546,7 @@ async function fetchIndexedFeedPage(
         || !Number.isFinite(normalized.lat) || !Number.isFinite(normalized.lng)) return [];
       return [normalized];
     });
-    const state = searchCursor ?? { ringIndex: 0 };
+    const state = searchCursor ?? { ringIndex: -1 };
     const nextSearchCursor = advanceLiveSearchCursor(
       state,
       typeof payload.nextPageToken === 'string' ? payload.nextPageToken : undefined,
@@ -562,6 +563,69 @@ async function fetchIndexedFeedPage(
     clearTimeout(timeout);
   }
 }
+
+async function fetchNearbyTypePage(
+  category: DiscoveryCategory,
+  location: { lat: number; lng: number },
+  reserveRequest?: () => boolean,
+): Promise<IndexedFeedPage> {
+  const includedTypes = liveDiscoveryNearbyTypes(category);
+  if (!includedTypes.length) return { venues: [], nextCursor: null, indexExhausted: true };
+  if (reserveRequest && !reserveRequest()) {
+    return { venues: [], nextCursor: null, indexExhausted: false, failure: { code: 'API-RATE-LIMIT' } };
+  }
+  const query = liveDiscoverySearchQuery(category);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20_000);
+  try {
+    const response = await fetch(PANDA_DISCOVERY_API + '/api/panda-ai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({
+        venuesOnly: true,
+        discoveryMode: 'cover',
+        searchMode: 'nearby',
+        includedTypes,
+        query,
+        location,
+        radius_meters: 6000,
+      }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return {
+        venues: [], nextCursor: null, indexExhausted: false,
+        failure: {
+          code: response.status === 503 ? 'API-QUOTA'
+            : response.status === 429 ? 'API-RATE-LIMIT'
+            : response.status === 401 || response.status === 403 ? 'API-FORBIDDEN' : 'API-RESPONSE',
+          status: response.status,
+        },
+      };
+    }
+    const payload = await response.json() as { venues?: unknown };
+    if (!Array.isArray(payload.venues)) {
+      return { venues: [], nextCursor: null, indexExhausted: false, failure: { code: 'API-RESPONSE', status: response.status } };
+    }
+    const venues = payload.venues.flatMap((venue) => {
+      const normalized = normalizeLiveVenueResult(venue, query);
+      if (!normalized || !normalized.id || normalized.id.startsWith('osm:')
+        || !normalized.name.trim() || !normalized.photoName?.trim()
+        || !Number.isFinite(normalized.lat) || !Number.isFinite(normalized.lng)) return [];
+      return [normalized];
+    });
+    return { venues, nextCursor: null, indexExhausted: true };
+  } catch (error) {
+    return {
+      venues: [], nextCursor: null, indexExhausted: false,
+      failure: { code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK' },
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+
 function liveVenueFromResult(
   result: LiveVenueResult,
   origin: { latitude: number; longitude: number },
@@ -947,55 +1011,72 @@ export default function DiscoverScreen() {
     setCategoryLoading(selectedCategory);
     try {
       const origin = { latitude: coordinates.latitude, longitude: coordinates.longitude };
+      const location = { lat: origin.latitude, lng: origin.longitude };
       const collected = new Map<string, Venue>();
-      let requestCursor: string | null = null;
-      let nextCursor: string | null = null;
-      while (collected.size < 6) {
-        const page = await fetchIndexedFeedPage(
-          selectedCategory,
-          { lat: origin.latitude, lng: origin.longitude },
-          requestCursor,
-          reserveDiscoveryRequest,
-        );
-        if (discoveryGeneration.current !== generation) return;
-        if (page.failure) {
-          setLiveDiscoveryFailure(page.failure.code);
-          return;
-        }
-        page.venues.forEach((result) => {
+      const mergeCollected = () => {
+        const venuesForCategory = [...collected.values()].sort((first, second) => first.distanceMeters - second.distanceMeters);
+        if (!venuesForCategory.length) return;
+        setLiveVenues((current) => {
+          const merged = new Map(current.map((venue) => [venue.id, venue]));
+          venuesForCategory.forEach((venue) => {
+            const existing = merged.get(venue.id);
+            if (!existing) {
+              merged.set(venue.id, venue);
+              return;
+            }
+            const mergedVenue = {
+              ...existing,
+              ...venue,
+              premium: existing.premium || venue.premium,
+              banging: existing.banging || venue.banging,
+              promoted: existing.promoted || venue.promoted,
+            };
+            Object.assign(mergedVenue, { discoveryCategories: [...new Set([
+              ...venueDiscoveryCategories(existing),
+              ...venueDiscoveryCategories(venue),
+            ])] });
+            merged.set(venue.id, mergedVenue);
+          });
+          return [...merged.values()];
+        });
+      };
+      const addMatches = (results: LiveVenueResult[]) => {
+        results.forEach((result) => {
+          if (!result.name.trim() || !result.photoName?.trim()) return;
           const venue = liveVenueFromResult(result, origin, liveArea || 'your location');
           if (venueDiscoveryCategories(venue).includes(selectedCategory)) collected.set(venue.id, venue);
         });
-        nextCursor = page.nextCursor;
-        if (!nextCursor || collected.size >= 6) break;
-        requestCursor = nextCursor;
+      };
+
+      // Render the first valid Google text-search cards immediately. If its
+      // category match is sparse, make one serial, type-filtered Nearby request.
+      const page = await fetchIndexedFeedPage(selectedCategory, location, null, reserveDiscoveryRequest);
+      if (discoveryGeneration.current !== generation) return;
+      if (page.failure) {
+        setLiveDiscoveryFailure(page.failure.code);
+        return;
       }
+      addMatches(page.venues);
+      let nextCursor = page.nextCursor;
+      mergeCollected();
+
+      if (collected.size < 6 && liveDiscoveryNearbyTypes(selectedCategory).length) {
+        const nearby = await fetchNearbyTypePage(selectedCategory, location, reserveDiscoveryRequest);
+        if (discoveryGeneration.current !== generation) return;
+        if (nearby.failure) {
+          if (!collected.size) setLiveDiscoveryFailure(nearby.failure.code);
+        } else {
+          addMatches(nearby.venues);
+          mergeCollected();
+        }
+      }
+
       const venuesForCategory = [...collected.values()].sort((first, second) => first.distanceMeters - second.distanceMeters);
       indexedFeedCursors.current.set(selectedCategory, nextCursor);
       if (!nextCursor) indexedFeedExhausted.current.add(selectedCategory);
       else indexedFeedExhausted.current.delete(selectedCategory);
       loadedCategories.current.add(selectedCategory);
       writeCategoryFeedCache(origin, selectedCategory, venuesForCategory, nextCursor, !nextCursor, true);
-      if (venuesForCategory.length) {
-        setLiveVenues((current) => {
-          const merged = new Map(current.map((venue) => [venue.id, venue]));
-          venuesForCategory.forEach((venue) => {
-            const existing = merged.get(venue.id);
-            merged.set(venue.id, existing ? {
-              ...existing,
-              ...venue,
-              premium: existing.premium || venue.premium,
-              banging: existing.banging || venue.banging,
-              promoted: existing.promoted || venue.promoted,
-              discoveryCategories: [...new Set([
-                ...venueDiscoveryCategories(existing),
-                ...venueDiscoveryCategories(venue),
-              ])],
-            } : venue);
-          });
-          return [...merged.values()];
-        });
-      }
     } catch {
       setLiveDiscoveryFailure('API-RESPONSE');
     } finally {
@@ -1056,17 +1137,22 @@ export default function DiscoverScreen() {
           const merged = new Map(current.map((venue) => [venue.id, venue]));
           additions.forEach((venue) => {
             const existing = merged.get(venue.id);
-            merged.set(venue.id, existing ? {
+            if (!existing) {
+              merged.set(venue.id, venue);
+              return;
+            }
+            const mergedVenue = {
               ...existing,
               ...venue,
               premium: existing.premium || venue.premium,
               banging: existing.banging || venue.banging,
               promoted: existing.promoted || venue.promoted,
-              discoveryCategories: [...new Set([
-                ...venueDiscoveryCategories(existing),
-                ...venueDiscoveryCategories(venue),
-              ])],
-            } : venue);
+            };
+            Object.assign(mergedVenue, { discoveryCategories: [...new Set([
+              ...venueDiscoveryCategories(existing),
+              ...venueDiscoveryCategories(venue),
+            ])] });
+            merged.set(venue.id, mergedVenue);
           });
           return [...merged.values()];
         });
