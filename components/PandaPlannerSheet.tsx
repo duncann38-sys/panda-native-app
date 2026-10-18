@@ -81,7 +81,6 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
     stops: [
       { icon: '☕', label: 'Coffee', categories: ['Coffee'], terms: ['coffee', 'cafe'] },
       { icon: '🍳', label: 'Breakfast', categories: ['Restaurant'], terms: ['breakfast', 'all day'] },
-      { icon: '🥐', label: 'Brunch', categories: ['Restaurant', 'Coffee'], terms: ['brunch', 'mediterranean'] },
     ],
   },
   lunch: {
@@ -94,7 +93,6 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
     stops: [
       { icon: '🥗', label: 'Lunch', categories: ['Restaurant'] },
       { icon: '☕', label: 'Coffee', categories: ['Coffee'], terms: ['coffee', 'cafe'] },
-      { icon: '🍰', label: 'Something sweet', categories: ['Coffee'], terms: ['dessert', 'bakery', 'cafe'] },
     ],
   },
   night: {

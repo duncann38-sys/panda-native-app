@@ -55,7 +55,7 @@ function fetchLiveProfile(placeId: string, signal: AbortSignal): Promise<Record<
     if (response.status === 429 || profile.limited === true || profile.dataMode === 'independent_baseline') {
       blockedProfileMessage = typeof profile.availabilityMessage === 'string'
         ? profile.availabilityMessage
-        : 'Google venue details are temporarily unavailable. The saved 200-ID category feed is still intact.';
+        : 'Google venue details are temporarily unavailable. The saved venue index is intact; live details can be retried shortly.';
       throw new Error(blockedProfileMessage);
     }
     if (!response.ok) {
@@ -179,7 +179,7 @@ export function SuggestionRow({
         </>
       ) : null}
       <View style={styles.photo}>
-        <VenuePhoto venue={card} venueId={card.id} venueName={cardTitle} height={76} />
+        <VenuePhoto venue={card} venueId={card.id} venueName={cardTitle} height={64} />
       </View>
       <View style={styles.copy}>
         <View style={styles.titleRow}>
@@ -222,7 +222,6 @@ export function SuggestionRow({
           <Text style={[styles.meta, { color: colors.foreground }]}>{card.price}</Text>
           <Text numberOfLines={1} style={[styles.meta, styles.type, { color: colors.mutedForeground }]}>{card.type}</Text>
         </View>}
-        {card.sourceAttribution ? <Text style={[styles.meta, { color: colors.mutedForeground }]}>{card.sourceAttribution}</Text> : null}
       </View>
     </Pressable>
   );
@@ -235,11 +234,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     elevation: 2,
     flexDirection: 'row',
-    gap: 12,
-    marginBottom: 9,
-    minHeight: 100,
+    gap: 10,
+    marginBottom: 6,
+    minHeight: 76,
     overflow: 'hidden',
-    padding: 8,
+    padding: 6,
     shadowOffset: { width: 0, height: 5 },
     shadowOpacity: 0.08,
     shadowRadius: 11,
@@ -254,9 +253,9 @@ const styles = StyleSheet.create({
   photo: {
     borderWidth: 0,
     borderRadius: 14,
-    height: 80,
+    height: 64,
     overflow: 'hidden',
-    width: 82,
+    width: 64,
   },
   copy: {
     flex: 1,
@@ -278,9 +277,9 @@ const styles = StyleSheet.create({
   name: {
     flex: 1,
     fontFamily: 'serif',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
-    lineHeight: 20,
+    lineHeight: 18,
     letterSpacing: -0.25,
   },
   promotedLabel: {
@@ -313,23 +312,23 @@ const styles = StyleSheet.create({
   address: {
     flex: 1,
     fontFamily: 'Inter_400Regular',
-    fontSize: 11,
+    fontSize: 10,
   },
   metaRow: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 6,
-    marginTop: 5,
+    gap: 4,
+    marginTop: 3,
     minWidth: 0,
   },
   open: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 12,
+    fontSize: 10,
     fontWeight: '700',
   },
   meta: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 11,
+    fontSize: 10,
   },
   type: {
     flex: 1,
