@@ -1,6 +1,9 @@
 name: Build Panda Android Preview APK
 
 on:
+  push:
+    branches:
+      - panda-new-openings-native-review-20261018
   workflow_dispatch: {}
 
 jobs:
