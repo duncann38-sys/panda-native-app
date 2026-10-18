@@ -608,7 +608,7 @@ async function fetchNearbyTypePage(
       return { venues: [], nextCursor: null, indexExhausted: false, failure: { code: 'API-RESPONSE', status: response.status } };
     }
     const venues = payload.venues.flatMap((venue) => {
-      const normalized = normalizeLiveVenueResult(venue, query);
+      const normalized = normalizeLiveVenueResult(venue, '');
       if (!normalized || !normalized.id || normalized.id.startsWith('osm:')
         || !normalized.name.trim() || !normalized.photoName?.trim()
         || !Number.isFinite(normalized.lat) || !Number.isFinite(normalized.lng)) return [];

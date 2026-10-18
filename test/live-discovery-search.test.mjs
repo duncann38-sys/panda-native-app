@@ -46,5 +46,8 @@ test('Native classification keeps Google type matches and WAP-style search conte
   assert.ok(classify('bar', ['bar'], ['live music venues concert halls karaoke music bars']).includes('Live Music'));
   assert.ok(classify('bar', ['bar'], ['pubs gastropubs beer gardens']).includes('Pubs'));
   assert.ok(classify('bar', ['bar'], ['nightlife bars clubs dance halls karaoke']).includes('Nightlife'));
-  assert.equal(classify('bar', ['bar']).includes('Live Music'), false);
+  const genericBar = classify('bar', ['bar']);
+  assert.equal(genericBar.includes('Pubs'), false);
+  assert.equal(genericBar.includes('Sports'), false);
+  assert.equal(genericBar.includes('Live Music'), false);
 });
