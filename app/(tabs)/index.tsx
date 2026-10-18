@@ -516,6 +516,7 @@ async function fetchIndexedFeedPage(
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         venuesOnly: true,
+        discoveryMode: 'cover',
         query: liveDiscoverySearchQuery(category),
         location,
         ...request,
