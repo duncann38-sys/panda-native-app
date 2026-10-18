@@ -1275,7 +1275,7 @@ function AiVenueCard({
               accessibilityRole="link"
               onPress={onEvidence}
             >
-              <Text style={[styles.resultStopLabel, { color: colors.green700 }]} numberOfLines={1}>
+              <Text style={[styles.resultStopLabel, { color: colors.honeyInk }]} numberOfLines={1}>
                 OPENING REPORTED · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
               </Text>
             </Pressable>
