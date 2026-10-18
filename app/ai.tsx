@@ -1,5 +1,6 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   AppState,
@@ -33,6 +34,14 @@ import {
   resolveSessionVenueReference,
   type SessionVenueCard,
 } from '@/utils/ai-session-context';
+import {
+  advanceOpeningRotation,
+  isNewOpeningPrompt,
+  OPENING_ROTATION_STORAGE_KEY,
+  parseOpeningRotationState,
+  rememberShownOpenings,
+  type OpeningRotationState,
+} from '@/utils/ai-openings';
 
 type AiVenue = {
   id?: string;
@@ -54,6 +63,9 @@ type AiVenue = {
   todayHours?: string;
   nearest_station?: string;
   stopLabel?: string;
+  openingSourceName?: string;
+  openingSourceUrl?: string;
+  openingReportedAt?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -250,6 +262,13 @@ function requiresCurrentLocation(text: string) {
   return !clearlyGeneral;
 }
 
+function formatOpeningReportDate(value?: string) {
+  if (!value) return 'recently';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'recently';
+  return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+}
+
 function isNearestStationOnly(text: string) {
   return /\b(nearest|closest|local)\s+(?:tube|underground|train|rail)?\s*station\b/i.test(text)
     && !/\b(?:to|for)\s+[a-z0-9]/i.test(text);
@@ -438,6 +457,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   ]);
   const suggestionsWithPlanner = [
     { label: `${getPandaTimeEmoji(timeMode)} Plan my ${getPandaTimeLabel(timeMode)}`, planner: true },
+    { label: 'New restaurants', prompt: 'New restaurants near me', planner: false },
     ...suggestions.map((suggestion) => ({ label: suggestion, planner: false })),
   ];
   const [draft, setDraft] = useState('');
@@ -455,6 +475,28 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const primaryPendingRef = useRef(false);
   const primaryControllerRef = useRef<AbortController | null>(null);
   const activeAiVenueRef = useRef<AiVenue | null>(null);
+  const openingRotationRef = useRef<OpeningRotationState>({ seenPlaceIds: [], rotation: 0 });
+  const openingRotationLoadRef = useRef<Promise<void> | null>(null);
+
+  const loadOpeningRotationState = async () => {
+    if (!openingRotationLoadRef.current) {
+      openingRotationLoadRef.current = AsyncStorage.getItem(OPENING_ROTATION_STORAGE_KEY)
+        .then((stored) => {
+          openingRotationRef.current = parseOpeningRotationState(stored);
+        })
+        .catch(() => undefined);
+    }
+    await openingRotationLoadRef.current;
+  };
+
+  const persistOpeningRotationState = (state: OpeningRotationState) => {
+    openingRotationRef.current = state;
+    void AsyncStorage.setItem(OPENING_ROTATION_STORAGE_KEY, JSON.stringify(state)).catch(() => undefined);
+  };
+
+  useEffect(() => {
+    void loadOpeningRotationState();
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -469,6 +511,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
 
+    const isNewOpeningSearch = isNewOpeningPrompt(trimmed);
     const isTransit = isTransitQuestion(trimmed);
     const sessionVenueContext = buildSessionVenueContext(messages, activeAiVenueRef.current);
     const sessionVenueResolution = resolveSessionVenueReference(trimmed, sessionVenueContext);
@@ -505,7 +548,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     primaryPendingRef.current = true;
     const chatGeneration = chatGenerationRef.current;
     const conversation = [...messages, { role: 'user' as const, text: trimmed }];
-    const needsCurrentLocation = requiresCurrentLocation(trimmed);
+    const needsCurrentLocation = requiresCurrentLocation(trimmed) || isNewOpeningSearch;
     setMessages([
       ...conversation,
       ...(needsCurrentLocation
@@ -524,6 +567,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     };
 
     try {
+      let openingRequestState: OpeningRotationState | null = null;
       let requestCoordinates = coordinates;
       // Pure chat never waits on GPS; only location-dependent questions refresh.
       if (!requestCoordinates && needsCurrentLocation) {
@@ -544,6 +588,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         }
       }
 
+      if (isNewOpeningSearch) {
+        await loadOpeningRotationState();
+        if (!isCurrentRequest()) return;
+        openingRequestState = advanceOpeningRotation(openingRotationRef.current);
+        persistOpeningRotationState(openingRequestState);
+      }
+
       const controller = new AbortController();
       primaryControllerRef.current = controller;
       const response = await fetchWithTimeout(
@@ -555,6 +606,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             contents: buildPandaAiContents(conversation),
             chatContext: { timeZone: localTimeZone() },
             ...(sessionVenueContext.recentVenues.length ? { sessionVenueContext } : {}),
+            ...(openingRequestState
+              ? {
+                  openingSeenPlaceIds: openingRequestState.seenPlaceIds,
+                  openingRotation: openingRequestState.rotation,
+                }
+              : {}),
             generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
             ...(requestCoordinates
               ? {
@@ -574,19 +631,27 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         venues?: AiVenue[];
         customItinerary?: boolean;
         customPubCrawl?: boolean;
+        newOpeningsSearch?: boolean;
       };
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
-      const eligibleVenues = (data.venues ?? []).filter(
-        (venue) => Boolean(venue.photoName) && Number(venue.photoCount) >= 5,
+      const eligibleVenues = (data.venues ?? []).filter((venue) =>
+        Boolean(venue.photoName)
+        && Number(venue.photoCount) >= (data.newOpeningsSearch ? 1 : 5)
+        && (!data.newOpeningsSearch || Boolean(venue.openingSourceUrl)),
       );
-      if (!data.customItinerary && !data.customPubCrawl) {
+      if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch) {
         eligibleVenues.sort(
           (left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
         );
       }
       eligibleVenues.splice(PANDA_AI_VENUE_LIMIT);
+      if (data.newOpeningsSearch && openingRequestState) {
+        persistOpeningRotationState(
+          rememberShownOpenings(openingRequestState, eligibleVenues.map((venue) => venue.id)),
+        );
+      }
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
       const baseReply =
         data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
@@ -973,7 +1038,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           sending ? (
             <View style={styles.messageRow}>
               <View style={[styles.bubble, { backgroundColor: colors.card }]}>
-                <ActivityIndicator color={colors.green700} />
+                <ActivityIndicator color={colors.honeyInk} />
               </View>
             </View>
           ) : null
@@ -1007,6 +1072,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                     venue={venue}
                     colors={colors}
                     onDirections={() => void openAiVenueDirections(venue)}
+                    onEvidence={() => {
+                      if (!venue.openingSourceUrl) return;
+                      void Linking.openURL(venue.openingSourceUrl).catch(() =>
+                        Alert.alert('Opening source', 'This source link could not be opened right now.'),
+                      );
+                    }}
                     onMenu={() => void openAiVenueMenu(venue)}
                     onOpen={() => openAiVenue(venue)}
                   />
@@ -1038,10 +1109,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             key={suggestion.label}
             accessibilityRole="button"
             accessibilityLabel={suggestion.planner ? `Plan my ${timeMode}` : suggestion.label}
+            testID={'prompt' in suggestion ? 'panda-ai-new-openings-shortcut' : undefined}
             onPress={() =>
               suggestion.planner
                 ? router.push({ pathname: '/', params: { openPlanner: timeMode } })
-                : sendMessage(suggestion.label)
+                : sendMessage('prompt' in suggestion ? suggestion.prompt : suggestion.label)
             }
             style={({ pressed }) => [
               styles.suggestion,
@@ -1145,12 +1217,14 @@ function AiVenueCard({
   venue,
   colors,
   onDirections,
+  onEvidence,
   onMenu,
   onOpen,
 }: {
   venue: AiVenue;
   colors: ReturnType<typeof useColors>;
   onDirections: () => void;
+  onEvidence: () => void;
   onMenu: () => void;
   onOpen: () => void;
 }) {
@@ -1194,6 +1268,17 @@ function AiVenueCard({
             <Text style={[styles.resultStopLabel, { color: colors.honeyInk }]} numberOfLines={1}>
               {venue.stopLabel}
             </Text>
+          ) : null}
+          {venue.openingSourceName && venue.openingSourceUrl ? (
+            <Pressable
+              accessibilityLabel={`Read the opening report from ${venue.openingSourceName}`}
+              accessibilityRole="link"
+              onPress={onEvidence}
+            >
+              <Text style={[styles.resultStopLabel, { color: colors.green700 }]} numberOfLines={1}>
+                OPENING REPORTED · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
+              </Text>
+            </Pressable>
           ) : null}
           <Text numberOfLines={1} style={[styles.resultName, { color: colors.foreground }]}>
             {venue.name ?? 'Panda pick'}
