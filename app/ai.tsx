@@ -287,7 +287,11 @@ function asksForSpecificVenueDestination(text: string) {
 }
 
 
-function sameSessionVenue
+function sameSessionVenue(left: SessionVenueCard, right: SessionVenueCard) {
+  if (left.id && right.id) return left.id === right.id;
+  return Boolean(left.name && right.name && left.name.toLocaleLowerCase('en-GB') === right.name.toLocaleLowerCase('en-GB'));
+}
+
 function findOriginalSessionVenue(
   messages: Message[],
   target: SessionVenueCard,
