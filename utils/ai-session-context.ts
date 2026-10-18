@@ -102,15 +102,65 @@ function normalizeVenue(
   };
 }
 
-function mentionedVenue(text: string, venues: SessionVenueCard[]): SessionVenueCard | null {
+const GENERIC_VENUE_NAME_TOKENS = new Set([
+  'a', 'an', 'and', 'at', 'bar', 'bars', 'breakfast', 'cafe', 'cafes', 'coffee',
+  'closest', 'directions', 'dinner', 'do', 'eat', 'food', 'for', 'from', 'get',
+  'here', 'hotel', 'hotels', 'how', 'in', 'london', 'lunch', 'me', 'near', 'nearest',
+  'of', 'on', 'open', 'place', 'places', 'pub', 'pubs', 'restaurant', 'restaurants',
+  'road', 'route', 'square', 'station', 'street', 'the', 'there', 'this', 'to',
+  'tube', 'venue', 'venues', 'walk', 'where',
+]);
+
+export function findExplicitSessionVenue(
+  text: string,
+  venues: SessionVenueCard[],
+): { venue: SessionVenueCard | null; ambiguous: boolean } {
   const normalizedText = normalizeName(text);
-  const matches = venues
-    .filter((venue) => {
-      const name = venue.name ? normalizeName(venue.name) : '';
-      return name.length >= 3 && normalizedText.includes(name);
+  const hotelWasRequested = /\bhotels?\b/i.test(text);
+  const typeCompatible = (venue: SessionVenueCard) =>
+    !hotelWasRequested
+    || /\bhotel\b/i.test(normalizeName(`${venue.name ?? ''} ${venue.type ?? ''}`));
+
+  const exactMatches = venues.filter((venue) => {
+    const name = venue.name ? normalizeName(venue.name) : '';
+    return name.length >= 3 && normalizedText.includes(name) && typeCompatible(venue);
+  });
+  if (exactMatches.length) {
+    const longestName = Math.max(...exactMatches.map((venue) => normalizeName(venue.name ?? '').length));
+    const bestMatches = exactMatches.filter(
+      (venue) => normalizeName(venue.name ?? '').length === longestName,
+    );
+    return bestMatches.length === 1
+      ? { venue: bestMatches[0], ambiguous: false }
+      : { venue: null, ambiguous: true };
+  }
+
+  const queryTokens = new Set(normalizedText.split(' ').filter(Boolean));
+  const tokenMatches = venues
+    .filter(typeCompatible)
+    .map((venue) => {
+      const nameTokens = new Set(
+        normalizeName(venue.name ?? '')
+          .split(' ')
+          .filter((token) => token.length >= 3 && !GENERIC_VENUE_NAME_TOKENS.has(token)),
+      );
+      const score = [...nameTokens].filter((token) => queryTokens.has(token)).length;
+      return { venue, score };
     })
-    .sort((left, right) => (right.name?.length ?? 0) - (left.name?.length ?? 0));
-  return matches[0] ?? null;
+    .filter((candidate) => candidate.score > 0);
+  if (!tokenMatches.length) return { venue: null, ambiguous: false };
+
+  const highestScore = Math.max(...tokenMatches.map((candidate) => candidate.score));
+  const bestMatches = tokenMatches
+    .filter((candidate) => candidate.score === highestScore)
+    .map((candidate) => candidate.venue);
+  return bestMatches.length === 1
+    ? { venue: bestMatches[0], ambiguous: false }
+    : { venue: null, ambiguous: true };
+}
+
+function mentionedVenue(text: string, venues: SessionVenueCard[]): SessionVenueCard | null {
+  return findExplicitSessionVenue(text, venues).venue;
 }
 
 export function buildSessionVenueContext(
@@ -179,8 +229,9 @@ export function resolveSessionVenueReference(
   text: string,
   context: SessionVenueContext,
 ): SessionVenueResolution {
-  const explicit = mentionedVenue(text, context.recentVenues);
-  if (explicit) return { isReference: true, ambiguous: false, venue: explicit };
+  const explicit = findExplicitSessionVenue(text, context.recentVenues);
+  if (explicit.ambiguous) return { isReference: true, ambiguous: true, venue: null };
+  if (explicit.venue) return { isReference: true, ambiguous: false, venue: explicit.venue };
 
   if (!DEICTIC_VENUE_REFERENCE.test(text)) {
     return { isReference: false, ambiguous: false, venue: null };

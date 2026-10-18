@@ -30,6 +30,7 @@ import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { getPartnerTier } from '@/utils/partner-venues';
 import {
   buildSessionVenueContext,
+  findExplicitSessionVenue,
   isGooglePlaceSessionVenue,
   resolveSessionVenueReference,
   type SessionVenueCard,
@@ -127,6 +128,7 @@ type AiTransitContext = {
     distanceMeters: number;
     steps: AiTransitStep[];
     updatedAt?: string;
+    timingSource?: string;
     polyline?: string;
   } | null;
   venueWalk?: {
@@ -279,11 +281,13 @@ function asksForVenueStation(text: string) {
     || /\b(?:nearest|closest)\s+(?:tube|underground)\b/i.test(text);
 }
 
-function sameSessionVenue(left: SessionVenueCard, right: SessionVenueCard) {
-  if (left.id && right.id) return left.id === right.id;
-  return Boolean(left.name && right.name && left.name.toLocaleLowerCase('en-GB') === right.name.toLocaleLowerCase('en-GB'));
+function asksForSpecificVenueDestination(text: string) {
+  return /\b(?:how\s+(?:do|can|would)\s+i\s+get\s+to|(?:get|take|guide)\s+me\s+to|directions?\s+to|route\s+to|navigate\s+to|travel\s+to)\s+(?:(?:the|a)\s+)?(?!there\b|here\b|that\b|it\b|me\b|nearest\b|station\b|tube\b)[a-z0-9][\w'&.-]*/i.test(text)
+    || /\b(?:nearest|closest|local)\s+(?:(?:tube|underground|train|rail)\s+)?station\s+(?:to|for)\s+(?:(?:the|a)\s+)?(?!there\b|here\b|that\b|it\b|me\b)[a-z0-9][\w'&.-]*/i.test(text);
 }
 
+
+function sameSessionVenue
 function findOriginalSessionVenue(
   messages: Message[],
   target: SessionVenueCard,
@@ -311,21 +315,33 @@ function findOriginalSessionVenue(
 }
 
 async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
-  const aiVenue = candidates.find((venue) => isGooglePlaceSessionVenue(venue) && venue.name);
-  if (aiVenue) return aiVenue;
+  const googleCandidates = candidates.filter(
+    (venue) => isGooglePlaceSessionVenue(venue) && venue.name,
+  );
+  const currentMatch = findExplicitSessionVenue(text, googleCandidates);
+  if (currentMatch.ambiguous) return null;
+  if (currentMatch.venue) {
+    return googleCandidates.find((venue) => sameSessionVenue(venue, currentMatch.venue!))
+      ?? currentMatch.venue as AiVenue;
+  }
 
-  const normalizedText = text.toLocaleLowerCase('en-GB');
-  const catalogVenue = [...pandaVenues]
-    .sort((left, right) => right.name.length - left.name.length)
-    .find((venue) => normalizedText.includes(venue.name.toLocaleLowerCase('en-GB')));
-  if (catalogVenue) {
+  const catalogCandidates = [...pandaVenues]
+    .filter((venue) => isGooglePlaceSessionVenue(venue))
+    .map((venue) => ({
+      id: venue.id,
+      name: venue.name,
+      type: venue.type,
+      rating: Number.parseFloat(venue.rating),
+      price: venue.price,
+      openNow: venue.openNow,
+    }));
+  const catalogMatch = findExplicitSessionVenue(text, catalogCandidates);
+  if (catalogMatch.ambiguous) return null;
+  if (catalogMatch.venue) {
+    const catalogVenue = catalogCandidates.find((venue) => sameSessionVenue(venue, catalogMatch.venue!));
+    if (!catalogVenue) return null;
     return {
-      id: catalogVenue.id,
-      name: catalogVenue.name,
-      type: catalogVenue.type,
-      rating: Number.parseFloat(catalogVenue.rating),
-      price: catalogVenue.price,
-      openNow: catalogVenue.openNow,
+      ...catalogVenue,
     };
   }
 
@@ -338,9 +354,12 @@ async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
     const payload = (await response.json()) as {
       results?: Array<{ id: string; name: string; category: string }>;
     };
-    const result = payload.results?.[0];
-    if (!result) return null;
-    return { id: result.id, name: result.name, type: result.category };
+    const directoryCandidates = (payload.results ?? [])
+      .filter((result) => isGooglePlaceSessionVenue(result))
+      .map((result) => ({ id: result.id, name: result.name, type: result.category }));
+    const directoryMatch = findExplicitSessionVenue(text, directoryCandidates);
+    if (directoryMatch.ambiguous || !directoryMatch.venue) return null;
+    return directoryCandidates.find((venue) => sameSessionVenue(venue, directoryMatch.venue!)) ?? null;
   } catch {
     return null;
   }
@@ -515,9 +534,15 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const isTransit = isTransitQuestion(trimmed);
     const sessionVenueContext = buildSessionVenueContext(messages, activeAiVenueRef.current);
     const sessionVenueResolution = resolveSessionVenueReference(trimmed, sessionVenueContext);
+    const hasExplicitVenueDestination = asksForSpecificVenueDestination(trimmed);
+    const activeSessionCard = sessionVenueContext.recentVenues.find(
+      (venue) => venue.id && venue.id === sessionVenueContext.activeVenueId,
+    ) ?? (sessionVenueContext.recentVenues.length === 1 ? sessionVenueContext.recentVenues[0] : null);
     const referencedVenue = sessionVenueResolution.venue
       ? findOriginalSessionVenue(messages, sessionVenueResolution.venue, activeAiVenueRef.current)
-      : null;
+      : isTransit && !hasExplicitVenueDestination && activeSessionCard
+        ? findOriginalSessionVenue(messages, activeSessionCard, activeAiVenueRef.current)
+        : null;
     if (isTransit && sessionVenueResolution.isReference && sessionVenueResolution.ambiguous) {
       setMessages([
         ...messages,
@@ -530,7 +555,25 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       setDraft('');
       return;
     }
-    if (isTransit && sessionVenueResolution.isReference && referencedVenue && !isGooglePlaceSessionVenue(referencedVenue)) {
+    if (
+      isTransit
+      && !hasExplicitVenueDestination
+      && !isNearestStationOnly(trimmed)
+      && !referencedVenue
+      && sessionVenueContext.recentVenues.length > 1
+    ) {
+      setMessages([
+        ...messages,
+        { role: 'user', text: trimmed },
+        {
+          role: 'model',
+          text: 'Which venue do you mean? Tap its card or tell me the venue name, and I’ll route to the right place.',
+        },
+      ]);
+      setDraft('');
+      return;
+    }
+    if (isTransit && referencedVenue && !isGooglePlaceSessionVenue(referencedVenue)) {
       setMessages([
         ...messages,
         { role: 'user', text: trimmed },
@@ -730,10 +773,17 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             }
 
             const { latitude, longitude } = currentLocation.coordinates;
-            const venue = isNearestStationOnly(trimmed)
-              ? null
-              : referencedVenue ?? await resolveTransitVenue(trimmed, initialVenues);
+            const venue = referencedVenue
+              ?? (isNearestStationOnly(trimmed) ? null : await resolveTransitVenue(trimmed, initialVenues));
             if (!isCurrentRequest()) return;
+
+            if (!venue && hasExplicitVenueDestination) {
+              updateResult((message) => ({
+                ...message,
+                text: 'I couldn’t confidently match that destination to a venue. Tap the correct venue card or give me its full name, and I’ll route you there rather than guess.',
+              }));
+              return;
+            }
 
             if (venue?.id && venue.name) {
               const transitResponse = await fetchWithTimeout(
@@ -744,7 +794,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               if (!transitResponse.ok) {
                 updateResult((message) => ({
                   ...message,
-                  text: 'I couldn’t load live station information for that venue right now.',
+                  text: `I couldn’t verify the route to ${venue.name} right now, so I won’t guess its station or journey time.`,
                 }));
                 return;
               }
@@ -759,7 +809,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               if (!liveTransit.originStation || !liveTransit.destinationStation) {
                 updateResult((message) => ({
                   ...message,
-                  text: 'I couldn’t load live station information for that venue right now.',
+                  text: `I couldn’t verify the route to ${venue.name} right now, so I won’t guess its station or journey time.`,
                 }));
                 return;
               }
@@ -776,14 +826,16 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 venueWalk: liveTransit.venueWalk,
               };
               const walkText = liveTransit.venueWalk
-                ? `It’s a ${liveTransit.venueWalk.durationMinutes}-minute walk from there to the venue.`
+                ? `Google estimates a ${liveTransit.venueWalk.durationMinutes}-minute walk from there to the venue.`
                 : 'I’ll keep the final walk visible in the route panel.';
               const transitText = liveTransit.transitRoute
-                ? `The live station-to-station journey is about ${liveTransit.transitRoute.durationMinutes} minutes.`
-                : 'I’ll show the verified station context while live route details are unavailable.';
+                ? liveTransit.transitRoute.timingSource === 'tfl_live'
+                  ? `TfL live timings show about ${liveTransit.transitRoute.durationMinutes} minutes between stations.`
+                  : `Google’s route estimate is about ${liveTransit.transitRoute.durationMinutes} minutes between stations.`
+                : 'I can show the verified stations, but no journey time was confirmed.';
               const venueStationText = asksForVenueStation(trimmed)
-                ? `For ${venue.name}, the nearest station is ${liveTransit.destinationStation.name}—a rather good place to start. ${transitText} ${walkText}`
-                : `Your nearest station is ${liveTransit.originStation.name}. For ${venue.name}, use ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`;
+                ? `For ${venue.name}, the recommended arrival station is ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`
+                : `To reach ${venue.name}, start at ${liveTransit.originStation.name} and get off at ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`;
               updateResult((message) => ({
                 ...message,
                 text: venueStationText,
