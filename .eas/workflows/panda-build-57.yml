@@ -1,0 +1,12 @@
+name: Panda Android Build 57 - Native auth home return
+on:
+  push:
+    branches:
+      - panda-build-57-auth-home-return
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 57
+    type: build
+    params:
+      platform: android
+      profile: preview
