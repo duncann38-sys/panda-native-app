@@ -4,6 +4,7 @@ import { Alert, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Switc
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useState } from 'react';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
+import { useAuth, type PandaAuthProvider } from '@/context/auth';
 import { useSavedVenues } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
 
@@ -26,7 +27,9 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const profileTopPadding = Platform.OS === 'web' ? 21 : insets.top + 8;
   const { savedVenues } = useSavedVenues();
+  const { account, signingIn, error: authError, signIn, signOut, clearError } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [authSheetOpen, setAuthSheetOpen] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
 
   const sharePanda = async () => {
@@ -37,6 +40,20 @@ export default function ProfileScreen() {
 
   const showPasswordSettings = () => {
     Alert.alert('Password & security', 'Your Panda sign-in and security details are managed securely with your account provider.');
+  };
+
+  const handleSignIn = async (provider: PandaAuthProvider) => {
+    const succeeded = await signIn(provider);
+    if (succeeded) setAuthSheetOpen(false);
+  };
+
+  const showAccountDetails = () => {
+    if (!account) {
+      clearError();
+      setAuthSheetOpen(true);
+      return;
+    }
+    Alert.alert('Panda account', `${account.name}\n${account.email}\nVerified with ${account.provider}.`);
   };
 
   return (
@@ -90,9 +107,9 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="user"
             title="Account details"
-            subtitle="Name, email and personal details"
+            subtitle={account ? `${account.name} · ${account.provider}` : 'Optional Google or Apple sign-in'}
             colors={colors}
-            onPress={() => Alert.alert('Account details', 'Your account details are managed securely with your account provider.')}
+            onPress={showAccountDetails}
           />
           <ProfileMenuRow
             icon="lock"
@@ -137,17 +154,25 @@ export default function ProfileScreen() {
 
         <View style={styles.profileWelcome}>
           <Text style={[styles.welcomeEyebrow, { color: colors.green700 }]}>Welcome back · London</Text>
-          <Text style={[styles.welcomeHeading, { color: colors.foreground }]}>Hi, Duncan</Text>
+          <Text style={[styles.welcomeHeading, { color: colors.foreground }]}>
+            Hi, {account?.name.trim().split(/\s+/)[0] || 'there'}
+          </Text>
         </View>
 
         <View style={[styles.identityCard, { backgroundColor: colors.card }]}>
           <ProfileAvatar size={86} showAdd />
           <View style={styles.identityCopy}>
-            <Text style={[styles.profileName, { color: colors.foreground }]}>Duncan Nyanzi</Text>
-            <Text style={[styles.email, { color: colors.mutedForeground }]}>duncann38@gmail.com</Text>
+            <Text style={[styles.profileName, { color: colors.foreground }]}>
+              {account?.name || 'Discover as a guest'}
+            </Text>
+            <Text style={[styles.email, { color: colors.mutedForeground }]}>
+              {account?.email || 'Sign in to connect your Panda account'}
+            </Text>
             <View style={[styles.memberPill, { backgroundColor: colors.secondary }]}>
               <Ionicons name="checkmark-circle" size={13} color={colors.green700} />
-              <Text style={[styles.memberPillText, { color: colors.green700 }]}>Panda member · 2026</Text>
+              <Text style={[styles.memberPillText, { color: colors.green700 }]}>
+                {account ? `Verified ${account.provider} account` : 'Guest browsing · sign-in optional'}
+              </Text>
             </View>
           </View>
           <Pressable
@@ -163,9 +188,26 @@ export default function ProfileScreen() {
 
       <SettingsSheet
         visible={settingsOpen}
+        account={account}
         notificationsEnabled={notificationsEnabled}
         onNotificationsChange={setNotificationsEnabled}
         onClose={() => setSettingsOpen(false)}
+        onSignIn={() => {
+          setSettingsOpen(false);
+          clearError();
+          setAuthSheetOpen(true);
+        }}
+        onSignOut={() => { void signOut(); }}
+      />
+      <AuthSheet
+        visible={authSheetOpen}
+        signingIn={signingIn}
+        error={authError}
+        onClose={() => {
+          setAuthSheetOpen(false);
+          clearError();
+        }}
+        onSignIn={handleSignIn}
       />
     </View>
   );
@@ -218,14 +260,20 @@ function ProfileMenuRow({
 
 function SettingsSheet({
   visible,
+  account,
   notificationsEnabled,
   onNotificationsChange,
   onClose,
+  onSignIn,
+  onSignOut,
 }: {
   visible: boolean;
+  account: ReturnType<typeof useAuth>['account'];
   notificationsEnabled: boolean;
   onNotificationsChange: (value: boolean) => void;
   onClose: () => void;
+  onSignIn: () => void;
+  onSignOut: () => void;
 }) {
   const colors = useColors();
 
@@ -255,8 +303,12 @@ function SettingsSheet({
               <Feather name="user" size={20} color={colors.green700} />
             </View>
             <View>
-              <Text style={[styles.accountName, { color: colors.foreground }]}>Duncan Nyanzi</Text>
-              <Text style={[styles.accountEmail, { color: colors.mutedForeground }]}>duncann38@gmail.com</Text>
+              <Text style={[styles.accountName, { color: colors.foreground }]}>
+                {account?.name || 'Browsing as a guest'}
+              </Text>
+              <Text style={[styles.accountEmail, { color: colors.mutedForeground }]}>
+                {account?.email || 'Sign in whenever you like'}
+              </Text>
             </View>
           </View>
 
@@ -283,16 +335,101 @@ function SettingsSheet({
           <SettingsAction icon="lock" title="Password & security" subtitle="Sign-in and security details" colors={colors} />
           <Pressable
             accessibilityRole="button"
-            accessibilityLabel="Log out"
-            onPress={() => Alert.alert('Log out', 'You are still signed in to this preview.')}
+            accessibilityLabel={account ? 'Sign out' : 'Sign in'}
+            onPress={() => {
+              onClose();
+              if (account) onSignOut();
+              else onSignIn();
+            }}
             style={({ pressed }) => [styles.logoutRow, { backgroundColor: colors.card }, pressed && styles.pressed]}
           >
             <View style={[styles.accountIcon, { backgroundColor: '#FBE8E6' }]}>
-              <Feather name="log-out" size={20} color={colors.destructive} />
+              <Feather name={account ? 'log-out' : 'log-in'} size={20} color={account ? colors.destructive : colors.green700} />
             </View>
-            <Text style={[styles.logoutText, { color: colors.destructive }]}>Log out</Text>
+            <Text style={[styles.logoutText, { color: account ? colors.destructive : colors.green700 }]}>
+              {account ? 'Sign out' : 'Sign in to Panda'}
+            </Text>
           </Pressable>
           <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda · v1.0</Text>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function AuthSheet({
+  visible,
+  signingIn,
+  error,
+  onClose,
+  onSignIn,
+}: {
+  visible: boolean;
+  signingIn: boolean;
+  error: string | null;
+  onClose: () => void;
+  onSignIn: (provider: PandaAuthProvider) => Promise<void>;
+}) {
+  const colors = useColors();
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={styles.modalRoot}>
+        <Pressable accessibilityLabel="Close sign-in" accessibilityRole="button" onPress={onClose} style={styles.modalBackdrop} />
+        <View style={[styles.authSheet, { backgroundColor: colors.background }]}>
+          <View style={styles.settingsHeader}>
+            <View>
+              <Text style={[styles.settingsTitle, { color: colors.foreground }]}>Sign in to Panda</Text>
+              <Text style={[styles.settingsSubtitle, { color: colors.mutedForeground }]}>
+                Browsing stays open either way.
+              </Text>
+            </View>
+            <Pressable
+              accessibilityLabel="Close sign-in"
+              accessibilityRole="button"
+              onPress={onClose}
+              style={[styles.closeButton, { backgroundColor: colors.card }]}
+            >
+              <Feather name="x" size={18} color={colors.foreground} />
+            </Pressable>
+          </View>
+
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Continue with Google"
+            disabled={signingIn}
+            onPress={() => { void onSignIn('Google'); }}
+            style={({ pressed }) => [
+              styles.authButton,
+              { backgroundColor: colors.green800 },
+              pressed && styles.pressed,
+              signingIn && { opacity: 0.65 },
+            ]}
+          >
+            <Text style={styles.googleMark}>G</Text>
+            <Text style={styles.authButtonText}>{signingIn ? 'Connecting securely…' : 'Continue with Google'}</Text>
+          </Pressable>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Continue with Apple"
+            disabled={signingIn}
+            onPress={() => { void onSignIn('Apple'); }}
+            style={({ pressed }) => [
+              styles.authButton,
+              { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 },
+              pressed && styles.pressed,
+              signingIn && { opacity: 0.65 },
+            ]}
+          >
+            <Ionicons name="logo-apple" size={19} color={colors.foreground} />
+            <Text style={[styles.authButtonText, { color: colors.foreground }]}>
+              {signingIn ? 'Connecting securely…' : 'Continue with Apple'}
+            </Text>
+          </Pressable>
+          {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
+          <Text style={[styles.authFootnote, { color: colors.mutedForeground }]}>
+            Your account details are verified by Panda before sign-in is recorded.
+          </Text>
         </View>
       </View>
     </Modal>
@@ -389,6 +526,7 @@ const styles = StyleSheet.create({
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
   modalBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(6, 46, 34, 0.43)' },
   settingsSheet: { borderTopLeftRadius: 29, borderTopRightRadius: 29, minHeight: 650, paddingHorizontal: 18, paddingTop: 23 },
+  authSheet: { borderTopLeftRadius: 29, borderTopRightRadius: 29, paddingHorizontal: 18, paddingTop: 23, paddingBottom: 34 },
   settingsHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', marginBottom: 18 },
   settingsTitle: { fontFamily: 'Inter_700Bold', fontSize: 21, letterSpacing: -0.4 },
   settingsSubtitle: { fontFamily: 'Inter_500Medium', fontSize: 12, marginTop: 3 },
@@ -405,5 +543,10 @@ const styles = StyleSheet.create({
   settingSubtitle: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 3 },
   logoutRow: { alignItems: 'center', borderRadius: 18, flexDirection: 'row', gap: 13, minHeight: 65, paddingHorizontal: 14 },
   logoutText: { fontFamily: 'Inter_700Bold', fontSize: 15 },
+  authButton: { alignItems: 'center', borderRadius: 16, flexDirection: 'row', gap: 11, justifyContent: 'center', marginTop: 11, minHeight: 54, paddingHorizontal: 16 },
+  authButtonText: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 14 },
+  googleMark: { color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 18 },
+  authError: { fontFamily: 'Inter_600SemiBold', fontSize: 12, lineHeight: 18, marginTop: 12, textAlign: 'center' },
+  authFootnote: { fontFamily: 'Inter_500Medium', fontSize: 11, lineHeight: 16, marginTop: 16, textAlign: 'center' },
   version: { fontFamily: 'Inter_500Medium', fontSize: 11, marginTop: 14, textAlign: 'center' },
 });

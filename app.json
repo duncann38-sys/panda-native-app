@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.panda.pandamobile",
-      "versionCode": 55,
+      "versionCode": 56,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -37,7 +37,8 @@
         {
           "locationAlwaysAndWhenInUsePermission": "Allow Panda to use your location to find nearby venues and live transit routes."
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,

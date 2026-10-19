@@ -16,6 +16,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
 import { SavedVenuesProvider } from '@/context/saved-venues';
+import { AuthProvider } from '@/context/auth';
 import { useColors } from '@/hooks/useColors';
 import { startVenueActivityDelivery } from '@/utils/record-venue-activity';
 
@@ -70,12 +71,14 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
-              <LiveVenuesProvider>
-                <SavedVenuesProvider>
-                  <StatusBar style="light" backgroundColor={colors.green800} />
-                  <RootLayoutNav />
-                </SavedVenuesProvider>
-              </LiveVenuesProvider>
+              <AuthProvider>
+                <LiveVenuesProvider>
+                  <SavedVenuesProvider>
+                    <StatusBar style="light" backgroundColor={colors.green800} />
+                    <RootLayoutNav />
+                  </SavedVenuesProvider>
+                </LiveVenuesProvider>
+              </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
         </QueryClientProvider>
