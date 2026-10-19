@@ -1,5 +1,8 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -29,6 +32,7 @@ import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { getPartnerTier } from '@/utils/partner-venues';
+import { buildUberEstimate } from '@/utils/uber-estimate';
 import {
   buildSessionVenueContext,
   findExplicitSessionVenue,
@@ -53,6 +57,12 @@ type AiVenue = {
   type?: string;
   rating?: number;
   distanceMeters?: number;
+  latitude?: number;
+  longitude?: number;
+  lat?: number;
+  lng?: number;
+  location?: { latitude?: number; longitude?: number; lat?: number; lng?: number } | null;
+  driveDurationMinutes?: number;
   price?: string;
   website?: string;
   menuLink?: string;
@@ -473,7 +483,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const colors = useColors(isNight ? 'dark' : undefined);
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { coordinates, refreshLocation } = useLiveVenues();
+  const { coordinates, refreshLocation, liveVenues } = useLiveVenues();
   const { prompt: promptParam } = useLocalSearchParams<{ prompt?: string | string[] }>();
   const initialPrompt = Array.isArray(promptParam) ? promptParam[0]?.trim() ?? '' : promptParam?.trim() ?? '';
   const [messages, setMessages] = useState<Message[]>([
@@ -1126,10 +1136,23 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             </View>
             {message.venues?.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
-                {message.venues.slice(0, PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => (
+                {message.venues.slice(0, PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
+                  const liveMatch = liveVenues.find((candidate) => candidate.id === venue.id);
+                  const cardVenue: AiVenue = {
+                    ...venue,
+                    latitude: venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat ?? liveMatch?.latitude,
+                    longitude: venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng ?? liveMatch?.longitude,
+                    distanceMeters:
+                      typeof venue.distanceMeters === "number"
+                      && Number.isFinite(venue.distanceMeters)
+                      && venue.distanceMeters > 0
+                        ? venue.distanceMeters
+                        : liveMatch?.distanceMeters ?? venue.distanceMeters,
+                  };
+                  return (
                   <AiVenueCard
                     key={`${venue.id ?? venue.name}-${venueIndex}`}
-                    venue={venue}
+                    venue={cardVenue}
                     colors={colors}
                     onDirections={() => void openAiVenueDirections(venue)}
                     onEvidence={() => {
@@ -1141,7 +1164,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                     onMenu={() => void openAiVenueMenu(venue)}
                     onOpen={() => openAiVenue(venue)}
                   />
-                ))}
+                );
+                })}
               </ScrollView>
             ) : null}
             {message.transit ? (
@@ -1289,11 +1313,21 @@ function AiVenueCard({
   onOpen: () => void;
 }) {
   const photoVenue = aiVenueToVenue(venue);
-  const distance =
+  const scale = useSharedValue(1);
+  const animatedCardStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: scale.value }],
+  }));
+  const distanceMeters =
     typeof venue.distanceMeters === 'number'
-      ? venue.distanceMeters < 1000
-        ? `${Math.round(venue.distanceMeters)} m`
-        : `${(venue.distanceMeters / 1000).toFixed(1)} km`
+    && Number.isFinite(venue.distanceMeters)
+    && venue.distanceMeters > 0
+      ? venue.distanceMeters
+      : null;
+  const distance =
+    distanceMeters !== null
+      ? distanceMeters < 1000
+        ? `${Math.round(distanceMeters)} m`
+        : `${(distanceMeters / 1000).toFixed(1)} km`
       : null;
   const openingText = venue.todayHours
     ? `${venue.openNow === true ? 'Open now' : venue.openNow === false ? 'Closed' : 'Today'} · ${venue.todayHours}`
@@ -1302,8 +1336,14 @@ function AiVenueCard({
       : venue.openNow === false
         ? 'Closed'
         : null;
-
   const phoneNumber = venue.phone?.trim();
+  const rideEstimate = buildUberEstimate({
+    latitude: venue.latitude,
+    longitude: venue.longitude,
+    distanceMeters,
+    driveDurationMinutes: venue.driveDurationMinutes,
+    venueName: venue.name ?? 'Panda venue',
+  });
   const callVenue = () => {
     if (!phoneNumber) return;
     const dialableNumber = phoneNumber.replace(/[^\d+]/g, '');
@@ -1317,52 +1357,144 @@ function AiVenueCard({
       Alert.alert('Could not open the phone app', 'Please try calling this venue again.');
     });
   };
+  const openUber = () => {
+    if (!rideEstimate) return;
+    void Linking.openURL(rideEstimate.deepLink).catch(() =>
+      Alert.alert('Uber unavailable', 'Panda could not open Uber. You can still use Directions.'),
+    );
+  };
 
   return (
-    <View style={[styles.resultCard, {
-      backgroundColor: colors.card,
-      borderColor: photoVenue?.promoted ? colors.goldDeep : colors.border,
-      borderWidth: photoVenue?.promoted ? 2 : 1,
-    }]}>
-      <Pressable
-        accessibilityLabel={`Open ${venue.name ?? 'Panda recommendation'}`}
-        accessibilityHint="Opens live venue details"
-        accessibilityRole="button"
-        onPress={onOpen}
-        style={({ pressed }) => pressed && styles.pressed}
+    <Animated.View
+      style={[
+        styles.resultCardShell,
+        { shadowColor: colors.green950 },
+        animatedCardStyle,
+      ]}
+    >
+      <View
+        style={[
+          styles.resultCardSurface,
+          { backgroundColor: colors.card, borderColor: photoVenue?.promoted ? colors.goldDeep : colors.border, borderWidth: photoVenue?.promoted ? 2 : 1 },
+        ]}
       >
-        {photoVenue ? (
-          <VenuePhoto venueId={photoVenue.id} venueName={photoVenue.name} venue={photoVenue} height={styles.resultPhoto.height} />
-        ) : (
-          <View style={[styles.resultPhotoFallback, { backgroundColor: colors.ivory }]}>
-            <PandaLogo size={48} />
+        <Pressable
+          accessibilityLabel={`Open ${venue.name ?? 'Panda recommendation'}`}
+          accessibilityHint="Opens live venue details"
+          accessibilityRole="button"
+          onPress={onOpen}
+          onPressIn={() => {
+            scale.value = withSpring(0.985, { damping: 19, stiffness: 260 });
+          }}
+          onPressOut={() => {
+            scale.value = withSpring(1, { damping: 17, stiffness: 220 });
+          }}
+        >
+          <View style={styles.resultHero}>
+            {photoVenue ? (
+              <VenuePhoto
+                venue={photoVenue}
+                venueId={photoVenue.id}
+                venueName={photoVenue.name}
+                height={styles.resultHero.height}
+              />
+            ) : (
+              <View style={[styles.resultPhotoFallback, { backgroundColor: colors.secondary }]}>
+                <PandaLogo size={54} />
+              </View>
+            )}
+            <LinearGradient
+              pointerEvents="none"
+              colors={['transparent', colors.overlay, colors.photoOverlay]}
+              locations={[0, 0.54, 1]}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <View style={[styles.photoHalo, { borderColor: 'rgba(255,255,255,0.18)' }]} />
+            <View style={styles.photoBadgeRow}>
+              <BlurView intensity={26} tint="dark" style={styles.photoGlassBadge}>
+                <Feather name="map-pin" size={11} color={colors.photoCredit} />
+                <Text numberOfLines={1} style={[styles.photoBadgeText, { color: colors.photoCredit }]}>
+                  {venue.type ?? 'Panda pick'}
+                </Text>
+              </BlurView>
+              {typeof venue.openNow === 'boolean' ? (
+                <View
+                  style={[
+                    styles.openBadge,
+                    {
+                      backgroundColor: venue.openNow ? colors.openBackground : colors.closedBackground,
+                    },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.openDot,
+                      { backgroundColor: venue.openNow ? colors.openForeground : colors.closedForeground },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.openBadgeText,
+                      { color: venue.openNow ? colors.openForeground : colors.closedForeground },
+                    ]}
+                  >
+                    {venue.openNow ? 'Open now' : 'Closed'}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.photoTitleBlock}>
+              <Text numberOfLines={2} style={[styles.resultName, { color: colors.photoCredit }]}>
+                {venue.name ?? 'Panda pick'}
+              </Text>
+              <View style={styles.photoDistanceRow}>
+                <Feather name="map-pin" size={11} color={colors.photoCredit} />
+                <Text numberOfLines={1} style={[styles.photoDistanceText, { color: colors.photoCredit }]}>
+                  {distance ?? 'Nearby'}
+                </Text>
+              </View>
+            </View>
           </View>
-        )}
+        </Pressable>
         <View style={styles.resultBody}>
-          {venue.stopLabel ? (
-            <Text style={[styles.resultStopLabel, { color: colors.honeyInk }]} numberOfLines={1}>
-              {venue.stopLabel}
-            </Text>
-          ) : null}
+          <View style={styles.resultMetaRow}>
+            {typeof venue.rating === 'number' ? (
+              <View style={[styles.resultMetaChip, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                <Feather name="star" size={12} color={colors.goldDeep} />
+                <Text style={[styles.resultMetaChipText, { color: colors.foreground }]}>
+                  {venue.rating.toFixed(1)}
+                </Text>
+              </View>
+            ) : null}
+            {venue.price ? (
+              <View style={[styles.resultMetaChip, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                <Text style={[styles.resultMetaChipText, { color: colors.foreground }]}>
+                  {venue.price}
+                </Text>
+              </View>
+            ) : null}
+            {venue.stopLabel ? (
+              <View style={[styles.resultMetaChip, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
+                <Feather name="map-pin" size={11} color={colors.green700} />
+                <Text numberOfLines={1} style={[styles.resultMetaChipText, { color: colors.foreground }]}>
+                  {venue.stopLabel}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           {venue.openingSourceName && venue.openingSourceUrl ? (
             <Pressable
               accessibilityLabel={`Read the opening report from ${venue.openingSourceName}`}
               accessibilityRole="link"
               onPress={onEvidence}
+              style={styles.resultSourceLink}
             >
-              <Text style={[styles.resultStopLabel, { color: colors.honeyInk }]} numberOfLines={1}>
+              <Feather name="file-text" size={11} color={colors.honeyInk} />
+              <Text numberOfLines={1} style={[styles.resultStopLabel, { color: colors.honeyInk }]}>
                 OPENING REPORTED · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
               </Text>
             </Pressable>
           ) : null}
-          <Text numberOfLines={1} style={[styles.resultName, { color: colors.foreground }]}>
-            {venue.name ?? 'Panda pick'}
-          </Text>
-          <Text numberOfLines={1} style={[styles.resultMeta, { color: colors.mutedForeground }]}>
-            {venue.rating ? `★ ${venue.rating}` : venue.type ?? 'Local venue'}
-            {distance ? ` · ${distance}` : ''}
-            {venue.price ? ` · ${venue.price}` : ''}
-          </Text>
           {openingText ? (
             <View style={[styles.resultHours, { backgroundColor: colors.honeySoft, borderColor: colors.goldLine }]}>
               <PandaIcon name="clock" size={12} color={colors.honeyInk} />
@@ -1371,40 +1503,74 @@ function AiVenueCard({
               </Text>
             </View>
           ) : null}
-        </View>
-      </Pressable>
-      <View style={[styles.resultActions, styles.resultActionsInset, styles.resultActionStack]}>
-        <View style={styles.resultActions}>
-          {venue.mapsUri ? (
+          {rideEstimate ? (
             <Pressable
-              accessibilityLabel={`Directions to ${venue.name ?? 'venue'}`}
+              accessibilityLabel={`Open Uber for ${venue.name ?? 'this venue'}. ${rideEstimate.label}`}
+              accessibilityHint="Indicative local estimate only; Uber will show the live fare before you confirm."
               accessibilityRole="button"
-              onPress={onDirections}
-              style={[styles.resultPrimaryAction, { backgroundColor: colors.gold, borderColor: colors.goldLine }]}
+              onPress={openUber}
+              testID={`panda-ai-uber-${venue.id ?? 'venue'}`}
+              style={({ pressed }) => [
+                styles.uberEstimateButton,
+                {
+                  backgroundColor: colors.green950,
+                  borderColor: colors.green700,
+                  opacity: pressed ? 0.9 : 1,
+                },
+              ]}
             >
-              <PandaIcon name="navigate" size={12} color="#171006" />
-              <Text style={[styles.resultActionText, styles.embossedGoldText]}>Directions</Text>
+              <View style={[styles.uberIconWrap, { backgroundColor: colors.green800 }]}>
+                <Feather name="navigation" size={15} color={colors.primaryForeground} />
+              </View>
+              <View style={styles.uberCopy}>
+                <Text style={[styles.uberEyebrow, { color: colors.mint300 }]}>UBER · LOCAL ESTIMATE</Text>
+                <Text style={[styles.uberFare, { color: colors.primaryForeground }]}>
+                  {rideEstimate.label}
+                </Text>
+                <Text style={[styles.uberDisclaimer, { color: colors.mint100 }]}>
+                  Indicative only · Uber shows the live fare
+                </Text>
+              </View>
+              <Feather name="arrow-up-right" size={17} color={colors.mint300} />
             </Pressable>
           ) : null}
-          {venue.website || venue.menuLink ? (
-            <Pressable accessibilityRole="button" onPress={onMenu}>
-              <Text style={[styles.resultActionText, { color: colors.green700 }]}>Menu</Text>
-            </Pressable>
-          ) : null}
+          <View style={styles.resultActions}>
+            {venue.mapsUri ? (
+              <Pressable
+                accessibilityLabel={`Directions to ${venue.name ?? 'venue'}`}
+                accessibilityRole="button"
+                onPress={onDirections}
+                style={[styles.resultPrimaryAction, { backgroundColor: colors.gold, borderColor: colors.goldLine }]}
+              >
+                <PandaIcon name="navigate" size={12} color="#171006" />
+                <Text style={[styles.resultActionText, styles.embossedGoldText]}>Directions</Text>
+              </Pressable>
+            ) : null}
+            {venue.website || venue.menuLink ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={onMenu}
+                style={[styles.resultSecondaryAction, { backgroundColor: colors.card, borderColor: colors.border }]}
+              >
+                <Feather name="book-open" size={12} color={colors.green700} />
+                <Text style={[styles.resultActionText, { color: colors.green700 }]}>Menu</Text>
+              </Pressable>
+            ) : null}
+            {phoneNumber ? (
+              <Pressable
+                accessibilityLabel={`Call ${venue.name ?? 'venue'}`}
+                accessibilityRole="button"
+                onPress={callVenue}
+                style={[styles.resultSecondaryAction, { backgroundColor: colors.card, borderColor: colors.border }]}
+              >
+                <Feather name="phone" size={12} color={colors.green700} />
+                <Text style={[styles.resultActionText, { color: colors.green700 }]}>Call</Text>
+              </Pressable>
+            ) : null}
+          </View>
         </View>
-        {phoneNumber ? (
-          <Pressable
-            accessibilityLabel={`Call ${venue.name ?? 'venue'}`}
-            accessibilityRole="button"
-            onPress={callVenue}
-            style={[styles.resultCallAction, { backgroundColor: colors.secondary, borderColor: colors.border }]}
-          >
-            <Feather name="phone" size={13} color={colors.green700} />
-            <Text style={[styles.resultActionText, { color: colors.green700 }]}>Call venue</Text>
-          </Pressable>
-        ) : null}
       </View>
-    </View>
+    </Animated.View>
   );
 }
 
@@ -1726,66 +1892,150 @@ const styles = StyleSheet.create({
     paddingTop: 10,
     paddingRight: 14,
   },
-  resultCard: {
-    borderRadius: 17,
+  resultCardShell: {
+    borderRadius: 24,
+    elevation: 8,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    width: 248,
+  },
+  resultCardSurface: {
+    borderRadius: 24,
     borderWidth: 1,
     overflow: 'hidden',
-    width: 190,
+    width: '100%',
   },
-  resultPhoto: {
-    height: 96,
+  resultHero: {
+    height: 148,
+    overflow: 'hidden',
+    position: 'relative',
     width: '100%',
   },
   resultPhotoFallback: {
     alignItems: 'center',
-    height: 96,
+    height: '100%',
     justifyContent: 'center',
     width: '100%',
   },
+  photoHalo: {
+    borderRadius: 70,
+    borderWidth: 1,
+    height: 140,
+    position: 'absolute',
+    right: -42,
+    top: -62,
+    width: 140,
+  },
+  photoBadgeRow: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 11,
+    position: 'absolute',
+    right: 11,
+    top: 11,
+  },
+  photoGlassBadge: {
+    alignItems: 'center',
+    borderColor: 'rgba(255,255,255,0.3)',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    maxWidth: 154,
+    overflow: 'hidden',
+    paddingHorizontal: 9,
+    paddingVertical: 7,
+  },
+  photoBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 9,
+    letterSpacing: 0.55,
+    textTransform: 'uppercase',
+  },
+  openBadge: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 7,
+  },
+  openDot: {
+    borderRadius: 4,
+    height: 6,
+    width: 6,
+  },
+  openBadgeText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 9,
+  },
+  photoTitleBlock: {
+    bottom: 12,
+    left: 13,
+    position: 'absolute',
+    right: 13,
+  },
+  photoDistanceRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 4,
+    marginTop: 4,
+  },
+  photoDistanceText: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 10,
+  },
   resultBody: {
-    padding: 10,
+    padding: 11,
+  },
+  resultName: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 17,
+    lineHeight: 21,
+    textShadowColor: 'rgba(0,0,0,0.24)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  resultMetaRow: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  resultMetaChip: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 25,
+    paddingHorizontal: 8,
+  },
+  resultMetaChipText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 10,
+  },
+  resultSourceLink: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 8,
   },
   resultStopLabel: {
     fontFamily: 'Inter_700Bold',
     fontSize: 8,
     letterSpacing: 0.8,
-    marginBottom: 3,
     textTransform: 'uppercase',
-  },
-  resultName: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 13,
-  },
-  resultMeta: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 10,
-    marginTop: 5,
+    flexShrink: 1,
   },
   resultActions: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
-    marginTop: 9,
-  },
-  resultActionsInset: {
-    marginTop: 0,
-    paddingBottom: 11,
-    paddingHorizontal: 11,
-  },
-  resultActionStack: {
-    alignItems: 'stretch',
-    flexDirection: 'column',
-    gap: 8,
-  },
-  resultCallAction: {
-    alignItems: 'center',
-    alignSelf: 'flex-start',
-    borderRadius: 10,
-    borderWidth: 1,
-    flexDirection: 'row',
     gap: 6,
-    minHeight: 31,
-    paddingHorizontal: 10,
+    justifyContent: 'space-between',
+    marginTop: 10,
   },
   embossedGoldText: {
     color: '#171006',
@@ -1795,32 +2045,78 @@ const styles = StyleSheet.create({
   },
   resultHours: {
     alignItems: 'center',
-    borderRadius: 9,
+    borderRadius: 11,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 4,
-    marginTop: 7,
-    paddingHorizontal: 7,
-    paddingVertical: 5,
+    gap: 6,
+    marginTop: 9,
+    paddingHorizontal: 9,
+    paddingVertical: 7,
   },
   resultHoursText: {
     flex: 1,
     fontFamily: 'Inter_700Bold',
-    fontSize: 9,
-    lineHeight: 12,
+    fontSize: 10,
+    lineHeight: 14,
+  },
+  uberEstimateButton: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 9,
+    marginTop: 10,
+    minHeight: 62,
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+  },
+  uberIconWrap: {
+    alignItems: 'center',
+    borderRadius: 12,
+    height: 33,
+    justifyContent: 'center',
+    width: 33,
+  },
+  uberCopy: {
+    flex: 1,
+    gap: 2,
+  },
+  uberEyebrow: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 8,
+    letterSpacing: 0.8,
+  },
+  uberFare: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 13,
+    lineHeight: 16,
+  },
+  uberDisclaimer: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 8,
+    lineHeight: 11,
   },
   resultPrimaryAction: {
     alignItems: 'center',
-    borderRadius: 999,
+    borderRadius: 12,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 5,
+    minHeight: 33,
+    paddingHorizontal: 9,
+  },
+  resultSecondaryAction: {
+    alignItems: 'center',
+    borderRadius: 12,
     borderWidth: 1,
     flexDirection: 'row',
     gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
+    minHeight: 33,
+    paddingHorizontal: 8,
   },
   resultActionText: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 10,
+    fontSize: 9,
   },
   suggestions: {
     alignItems: 'center',
