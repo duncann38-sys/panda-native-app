@@ -1,0 +1,12 @@
+name: Panda Android Build 58 - Branded native sign-in host
+on:
+  push:
+    branches:
+      - panda-build-58-auth-pandaindustry
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 58
+    type: build
+    params:
+      platform: android
+      profile: preview
