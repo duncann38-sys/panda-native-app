@@ -1,4 +1,6 @@
-export type VenueCategory = 'Restaurant' | 'Bar' | 'Coffee' | 'Pub';
+import type { DiscoveryCategory } from '@/data/venue-categories';
+
+export type VenueCategory = 'Restaurant' | 'Bar' | 'Coffee' | 'Pub' | 'Shop' | 'Place of Interest';
 
 export type Venue = {
   id: string;
@@ -18,18 +20,10 @@ export type Venue = {
   fullAddress: string;
   latitude?: number;
   longitude?: number;
-  photoName?: string;
-  primaryPhotoPath?: string;
-  photoCount?: number;
-  photoNames?: Array<{ name: string; attribution: string }>;
-  detailsDeferred?: boolean;
-  source?: 'openstreetmap';
+  source?: 'google_places' | 'openstreetmap';
   sourceAttribution?: string;
   openNow: boolean;
   cached?: boolean;
-  luxurySource?: string;
-  bangingTransitMinutes?: number;
-  bangingVerifiedAt?: number;
   website: string;
   mapsUri: string;
   phone: string;
@@ -37,6 +31,13 @@ export type Venue = {
   banging: boolean;
   promoted: boolean;
   photoAttributions: string[];
+  photoName?: string;
+  photoCount?: number;
+  primaryPhotoPath?: string;
+  photoNames?: Array<{ name: string; attribution: string }>;
+  photoUris?: Array<{ uri: string; attribution: string }>;
+  detailsDeferred?: boolean;
+  discoveryCategories?: DiscoveryCategory[];
 };
 
 type PremiumRotationSeed = readonly [

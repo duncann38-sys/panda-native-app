@@ -1,0 +1,10 @@
+name: Panda Android Build 59 - Profile and saved places
+on:
+  workflow_dispatch: {}
+jobs:
+  build_android_preview:
+    name: Build Panda Android APK 59
+    type: build
+    params:
+      platform: android
+      profile: preview

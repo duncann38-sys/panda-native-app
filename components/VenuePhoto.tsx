@@ -56,7 +56,7 @@ export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
     }
     request.then(photos => { if (active) setLoaded({ id, photos }); }).catch(() => {});
     return () => { active = false; };
-  }, [venue?.id, venue?.photoNames, venue?.photoCount, venue?.detailsDeferred, allowDetails, limit]);
+  }, [venue?.id, venue?.photoNames, venue?.photoCount, venue?.photoUris, venue?.detailsDeferred, allowDetails, limit]);
   const initial = venue ? venuePhotosFor(venue) : [];
   const candidates = loaded && loaded.id === venue?.id && loaded.photos.length ? loaded.photos : initial;
   return [...new Map(candidates.map(photo => [photo.uri, photo])).values()].slice(0, limit);
@@ -64,10 +64,11 @@ export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
 
 export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   const id = typeof value === 'string' ? value : value.id;
-  const cached = photoLists.get(id);
-  if (cached && cached.expires > Date.now()) return cached.photos;
   const venue = typeof value === 'string' ? getVenue(value) : value;
   if (!venue) return [];
+  if (venue.photoUris?.length) return venue.photoUris.slice(0, 10);
+  const cached = photoLists.get(id);
+  if (cached && cached.expires > Date.now()) return cached.photos;
   if (venue.photoNames?.length) {
     const firstPartyGallery = Boolean(venue.promoted || venue.banging || venue.premium);
     return venue.photoNames.map((photo, index) => ({

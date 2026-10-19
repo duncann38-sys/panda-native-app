@@ -11,6 +11,7 @@ import { Tabs } from 'expo-router';
 import { Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useAuth } from '@/context/auth';
 
 // IMPORTANT: iOS 26 uses NativeTabs for native tabs with liquid glass support.
 // NativeTabs intentionally does NOT use custom design tokens — liquid glass
@@ -44,6 +45,7 @@ function NativeTabLayout() {
 }
 
 function ClassicTabLayout() {
+  const { account } = useAuth();
   const colors = useColors();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -55,7 +57,6 @@ function ClassicTabLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarHideOnKeyboard: true,
         tabBarActiveTintColor: colors.goldDeep,
         tabBarInactiveTintColor: colors.mutedForeground,
         headerShown: false,
@@ -146,7 +147,7 @@ function ClassicTabLayout() {
             isIOS ? (
               <SymbolView name="person" tintColor={color} size={24} />
             ) : (
-              <ProfileTabIcon color={color} focused={focused} />
+              <ProfileTabIcon color={color} focused={focused} name={account?.name || 'Panda'} />
             ),
         }}
       />
@@ -185,8 +186,8 @@ function CreditCardTabIcon() {
   );
 }
 
-function ProfileTabIcon({ color, focused }: { color: string; focused: boolean }) {
-  return <ProfileAvatar size={31} active={focused} />;
+function ProfileTabIcon({ color, focused, name }: { color: string; focused: boolean; name: string }) {
+  return <ProfileAvatar size={31} active={focused} name={name} />;
 }
 
 const styles = StyleSheet.create({

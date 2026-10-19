@@ -1,4 +1,5 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -60,6 +61,7 @@ type AiVenue = {
   photoNames?: Venue['photoNames'];
   photoAttribution?: string;
   photoCount?: number;
+  phone?: string;
   openNow?: boolean;
   todayHours?: string;
   nearest_station?: string;
@@ -74,6 +76,7 @@ type GoogleAiVenueProfile = {
   todayHours: string | null;
   googleMapsUrl: string;
   website: string | null;
+  phone: string | null;
 };
 
 type Message = {
@@ -370,7 +373,7 @@ async function resolveTransitVenue(text: string, candidates: AiVenue[]) {
 }
 
 async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
-  if (!venue.id || !venue.id.startsWith('ChI')) return venue;
+  if (!venue.id || !isGooglePlaceSessionVenue(venue)) return venue;
 
   try {
     const response = await fetchWithTimeout(
@@ -386,6 +389,7 @@ async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
       todayHours: profile.todayHours ?? venue.todayHours,
       mapsUri: profile.googleMapsUrl || venue.mapsUri,
       website: venue.website || profile.website || undefined,
+      phone: profile.phone || venue.phone,
     };
   } catch {
     return venue;
@@ -435,7 +439,7 @@ function aiVenueToVenue(venue: AiVenue): Venue | null {
     openNow: venue.openNow === true,
     website: venue.website || mapsUri,
     mapsUri,
-    phone: '',
+    phone: venue.phone ?? '',
     premium: tier === 'banging',
     banging: tier === 'banging',
     promoted: Boolean(tier),
@@ -1299,6 +1303,21 @@ function AiVenueCard({
         ? 'Closed'
         : null;
 
+  const phoneNumber = venue.phone?.trim();
+  const callVenue = () => {
+    if (!phoneNumber) return;
+    const dialableNumber = phoneNumber.replace(/[^\d+]/g, '');
+    if (!dialableNumber) {
+      Alert.alert('Number unavailable', 'Panda could not prepare this venue’s phone number.');
+      return;
+    }
+    const activityVenue = aiVenueToVenue(venue);
+    if (activityVenue) void recordVenueActivity('call_click', activityVenue);
+    void Linking.openURL(`tel:${dialableNumber}`).catch(() => {
+      Alert.alert('Could not open the phone app', 'Please try calling this venue again.');
+    });
+  };
+
   return (
     <View style={[styles.resultCard, {
       backgroundColor: colors.card,
@@ -1354,7 +1373,7 @@ function AiVenueCard({
           ) : null}
         </View>
       </Pressable>
-      <View style={[styles.resultActions, styles.resultActionsInset]}>
+      <View style={[styles.resultActions, styles.resultActionsInset, styles.resultActionStack]}>
         <View style={styles.resultActions}>
           {venue.mapsUri ? (
             <Pressable
@@ -1373,6 +1392,17 @@ function AiVenueCard({
             </Pressable>
           ) : null}
         </View>
+        {phoneNumber ? (
+          <Pressable
+            accessibilityLabel={`Call ${venue.name ?? 'venue'}`}
+            accessibilityRole="button"
+            onPress={callVenue}
+            style={[styles.resultCallAction, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+          >
+            <Feather name="phone" size={13} color={colors.green700} />
+            <Text style={[styles.resultActionText, { color: colors.green700 }]}>Call venue</Text>
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -1741,6 +1771,21 @@ const styles = StyleSheet.create({
     marginTop: 0,
     paddingBottom: 11,
     paddingHorizontal: 11,
+  },
+  resultActionStack: {
+    alignItems: 'stretch',
+    flexDirection: 'column',
+    gap: 8,
+  },
+  resultCallAction: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    borderRadius: 10,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    minHeight: 31,
+    paddingHorizontal: 10,
   },
   embossedGoldText: {
     color: '#171006',
