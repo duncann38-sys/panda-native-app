@@ -1,0 +1,12 @@
+name: Panda Android Build 65 - Faster verified planner
+on:
+  push:
+    branches:
+      - panda-build-65-fast-planner
+jobs:
+  build_android_preview:
+    name: Panda Android APK 65
+    type: build
+    params:
+      platform: android
+      profile: preview
