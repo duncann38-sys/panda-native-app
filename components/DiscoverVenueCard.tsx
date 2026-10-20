@@ -57,7 +57,7 @@ export function DiscoverVenueCard({
         style={styles.open}
       >
         <View style={styles.photo}>
-          <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={74} />
+          <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={86} />
           {photoCredit ? (
             <View pointerEvents="none" style={[styles.photoCredit, { backgroundColor: cardColors.photoCreditBackground }]}>
               <Text numberOfLines={1} style={[styles.photoCreditText, { color: cardColors.photoCreditForeground, fontFamily: fonts.medium }]}>{photoCredit}</Text>
@@ -77,7 +77,7 @@ export function DiscoverVenueCard({
       </Pressable>
       <View style={styles.rail}>
         {hasRating ? (
-          <View accessibilityLabel={`Rated ${venue.rating} out of 5`} style={styles.rating}>
+          <View accessibilityLabel={`Rated ${venue.rating} out of 5`} style={[styles.rating, { backgroundColor: cardColors.goldSoft }]}>
             <Svg width={11} height={11} viewBox="0 0 24 24" fill={cardColors.goldInk}>
               <Path d="m12 2.5 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3.1-5.8 3.1 1.1-6.5-4.7-4.6 6.5-.9L12 2.5Z" />
             </Svg>
@@ -92,7 +92,10 @@ export function DiscoverVenueCard({
           onPress={onToggleSaved}
           style={({ pressed }) => [
             styles.heart,
-            { backgroundColor: saved ? cardColors.savedSurface : 'transparent' },
+            {
+              backgroundColor: saved ? cardColors.savedSurface : cardColors.surface,
+              borderColor: saved ? cardColors.gold : cardColors.rule,
+            },
             pressed && styles.iconPressed,
           ]}
         >
@@ -115,33 +118,33 @@ export function DiscoverVenueCard({
 const styles = StyleSheet.create({
   row: {
     alignItems: 'center',
-    borderRadius: 15,
+    borderRadius: 21,
     borderWidth: 1,
-    elevation: 2,
+    elevation: 1,
     flexDirection: 'row',
-    gap: 4,
-    marginBottom: 6,
-    minHeight: 90,
+    gap: 6,
+    marginBottom: 9,
+    minHeight: 104,
     overflow: 'hidden',
-    padding: 6,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
+    padding: 8,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.07,
+    shadowRadius: 14,
   },
-  promoted: { shadowOpacity: 0.11, elevation: 3 },
-  open: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch' },
-  photo: { borderRadius: 11, height: 74, overflow: 'hidden', width: 70 },
+  promoted: { shadowOpacity: 0.1, elevation: 2 },
+  open: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 12, alignSelf: 'stretch' },
+  photo: { borderRadius: 15, height: 86, overflow: 'hidden', width: 80 },
   photoCredit: { borderRadius: 4, bottom: 4, left: 4, maxWidth: 62, paddingHorizontal: 4, paddingVertical: 2, position: 'absolute' },
   photoCreditText: { fontSize: 7 },
   copy: { flex: 1, minWidth: 0 },
-  name: { fontSize: 17, lineHeight: 23, fontWeight: '700', letterSpacing: -0.25, includeFontPadding: true },
-  promotedLabel: { alignSelf: 'flex-start', borderRadius: 999, borderWidth: 1, marginBottom: 4, paddingHorizontal: 6, paddingVertical: 2 },
-  promotedLabelText: { fontSize: 7, letterSpacing: 0.65 },
-  meta: { fontSize: 10, marginTop: 5 },
+  name: { fontSize: 17.5, lineHeight: 24, fontWeight: '700', letterSpacing: -0.35, includeFontPadding: true },
+  promotedLabel: { alignSelf: 'flex-start', borderRadius: 6, borderWidth: StyleSheet.hairlineWidth, marginBottom: 5, paddingHorizontal: 7, paddingVertical: 3 },
+  promotedLabelText: { fontSize: 8, letterSpacing: 1 },
+  meta: { fontSize: 11, lineHeight: 16, marginTop: 5 },
   rail: { alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', minWidth: 44 },
-  rating: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingTop: 2 },
-  ratingText: { fontSize: 10 },
-  heart: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44, borderRadius: 22 },
+  rating: { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 8, paddingHorizontal: 5, paddingVertical: 4 },
+  ratingText: { fontSize: 11 },
+  heart: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44, borderRadius: 15, borderWidth: StyleSheet.hairlineWidth },
   iconPressed: { opacity: 0.6, transform: [{ scale: 0.92 }] },
-  goldRail: { bottom: 0, left: 0, position: 'absolute', top: 0, width: 3 },
+  goldRail: { bottom: 17, left: 0, position: 'absolute', top: 17, width: 3, borderRadius: 2 },
 });

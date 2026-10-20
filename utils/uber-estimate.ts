@@ -48,8 +48,12 @@ export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null
   const minutes = Math.max(3, suppliedDriveTime ?? Math.round(3 + distanceKm * 3));
 
   // Broad local bands are deliberately indicative; Uber's live fare can differ.
-  const minFare = Math.max(4, Math.floor(3.5 + distanceKm * 1.25 + minutes * 0.16));
-  const maxFare = Math.max(minFare + 2, Math.ceil(5.25 + distanceKm * 1.85 + minutes * 0.27));
+  const baseMinFare = Math.max(4, Math.floor(3.5 + distanceKm * 1.25 + minutes * 0.16));
+  const baseMaxFare = Math.max(baseMinFare + 2, Math.ceil(5.25 + distanceKm * 1.85 + minutes * 0.27));
+  // A £5 planning buffer on both ends, not a fee charged by Panda or Uber.
+  const planningBufferGbp = 5;
+  const minFare = baseMinFare + planningBufferGbp;
+  const maxFare = baseMaxFare + planningBufferGbp;
   const safeName = venueName.trim() || 'Panda venue';
   const deepLink = [
     'https://m.uber.com/ul/?action=setPickup&pickup=my_location',

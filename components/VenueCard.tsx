@@ -4,6 +4,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { venueCardPalette } from '@/constants/venue-card-design';
 
 type VenueCardProps = {
   venue: Venue;
@@ -41,10 +42,11 @@ export function VenueCard({
       style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: premiumBanging ? colors.green900 : editorial ? '#FFF8E6' : premiumCard ? colors.green800 : colors.card,
-          borderColor: editorial || premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
+          backgroundColor: premiumBanging ? colors.green900 : editorial ? venueCardPalette.row : premiumCard ? colors.green800 : colors.card,
+          borderColor: premiumBanging ? venueCardPalette.gold : editorial ? venueCardPalette.border : premiumCard || featured ? colors.goldLine : colors.border,
         },
         pressed && styles.pressed,
+        editorial && styles.editorialCard,
         premiumBanging && styles.premiumBangingCard,
         premiumFeatured && styles.featuredCard,
         compact && styles.compactCard,
@@ -111,6 +113,7 @@ export function VenueCard({
           compact && styles.compactBody,
           premiumFeatured && styles.featuredBody,
           compact && premiumFeatured && styles.compactFeaturedBody,
+          editorial && styles.editorialBody,
         ]}
       >
         <Text
@@ -189,10 +192,20 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.24,
   },
   premiumBangingCard: {
-    borderWidth: 2,
-    elevation: 8,
+    borderWidth: 1.5,
+    elevation: 3,
     shadowColor: '#033B2B',
-    shadowOpacity: 0.3,
+    shadowOpacity: 0.18,
+  },
+  editorialCard: {
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  editorialBody: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: 'rgba(181,148,86,0.22)',
   },
   compactCard: {
     borderRadius: 18,
