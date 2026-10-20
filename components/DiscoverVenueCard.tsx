@@ -70,7 +70,7 @@ export function DiscoverVenueCard({
               <Text style={[styles.promotedLabelText, { color: cardColors.goldInk, fontFamily: fonts.bold }]}>PANDA PREMIUM</Text>
             </View>
           )}
-          <Text numberOfLines={1} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+          <Text numberOfLines={2} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
           {cardMeta ? <Text numberOfLines={1} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{cardMeta}</Text> : null}
           {warning ? <Text numberOfLines={2} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{warning}</Text> : null}
         </View>
@@ -134,7 +134,7 @@ const styles = StyleSheet.create({
   photoCredit: { borderRadius: 4, bottom: 4, left: 4, maxWidth: 62, paddingHorizontal: 4, paddingVertical: 2, position: 'absolute' },
   photoCreditText: { fontSize: 7 },
   copy: { flex: 1, minWidth: 0 },
-  name: { fontSize: 19, lineHeight: 22, letterSpacing: -0.15 },
+  name: { fontSize: 17, lineHeight: 23, fontWeight: '700', letterSpacing: -0.25, includeFontPadding: true },
   promotedLabel: { alignSelf: 'flex-start', borderRadius: 999, borderWidth: 1, marginBottom: 4, paddingHorizontal: 6, paddingVertical: 2 },
   promotedLabelText: { fontSize: 7, letterSpacing: 0.65 },
   meta: { fontSize: 10, marginTop: 5 },

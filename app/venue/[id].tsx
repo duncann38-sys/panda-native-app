@@ -636,7 +636,7 @@ export default function VenueDetailScreen() {
           <View style={styles.venueTitleRow}>
             <View style={styles.editorialHeading}>
               <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}</Text>
-              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
             </View>
             {venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
               <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
@@ -2084,12 +2084,13 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   venueTitle: {
-    flex: 1,
+    flexShrink: 0,
+    includeFontPadding: true,
     marginBottom: 0,
   },
   editorialHeading: { flex: 1, minWidth: 0 },
   editorialKicker: { fontSize: 8, letterSpacing: 1.2, marginBottom: 6 },
-  editorialTitle: { fontSize: 30, lineHeight: 34, fontWeight: '400', letterSpacing: -0.45 },
+  editorialTitle: { fontSize: 28, lineHeight: 36, fontWeight: '700', letterSpacing: -0.55 },
   editorialPrice: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
   editorialPriceText: { fontSize: 11 },
   editorialPremium: { marginTop: 0, paddingHorizontal: 8, paddingVertical: 4 },

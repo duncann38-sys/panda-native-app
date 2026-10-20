@@ -286,9 +286,10 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   editorialName: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 15,
-    lineHeight: 20,
+    fontFamily: 'Inter_700Bold',
+    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 21,
     letterSpacing: -0.25,
   },
   metaRow: {

@@ -1,0 +1,12 @@
+name: Panda Android Build 63 - Clear bold venue names
+on:
+  push:
+    branches:
+      - panda-build-63-venue-titles
+jobs:
+  build_android_preview:
+    name: Panda Android APK 63
+    type: build
+    params:
+      platform: android
+      profile: preview
