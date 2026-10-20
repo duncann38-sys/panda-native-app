@@ -31,6 +31,7 @@ import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { fullCardOpenStatus, hydrateVenueDetails } from '@/utils/venue-detail-hydration';
 
@@ -184,7 +185,7 @@ function parsePlannerVenueData(value: string): Venue[] {
 }
 
 export default function VenueDetailScreen() {
-  const colors = useColors();
+  const colors = useColors('light');
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const {
@@ -342,7 +343,8 @@ export default function VenueDetailScreen() {
   const { width, height } = useWindowDimensions();
   const screenBottomInset =
     Platform.OS === 'web' ? 0 : Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 0);
-  const venueSurface = '#FFFBF1';
+  const { cardColors, fonts } = useVenueCardDesign('light');
+  const venueSurface = cardColors.surface;
   const detailsCanScroll =
     scrollViewportHeight > 0 && scrollContentHeight > scrollViewportHeight + 2;
 
@@ -487,7 +489,7 @@ export default function VenueDetailScreen() {
 
   // Keep the hero editorial but compact enough that the venue essentials and
   // primary actions can share the first mobile frame.
-  const heroHeight = Math.min(430, Math.max(290, height * 0.34));
+  const heroHeight = Math.min(400, Math.max(278, height * 0.33));
 
   const backToPlanner = () => {
     const plannerHref = {
@@ -556,7 +558,14 @@ export default function VenueDetailScreen() {
               onIndexChange={setHeroActive}
               onPhotoTap={openGallery}
             />
-            <View pointerEvents="box-none" style={[styles.heroOverlay, { justifyContent: 'flex-end' }]}>
+            <LinearGradient pointerEvents="none" colors={['transparent', cardColors.photoShade]} locations={[0.35, 1]} style={StyleSheet.absoluteFillObject} />
+            <View pointerEvents="none" style={[styles.heroOverlay, styles.editorialHeroOverlay]}>
+              <View style={styles.heroCaptionBlock}>
+                {photos[heroActive]?.attribution ? <View style={[styles.heroCredit, { backgroundColor: cardColors.photoCreditBackground }]}>
+                  <Text numberOfLines={2} style={[styles.heroCreditText, { fontFamily: fonts.medium, color: cardColors.photoCreditForeground }]}>{photos[heroActive].attribution}</Text>
+                </View> : null}
+                <Text numberOfLines={1} style={[styles.heroCaption, { fontFamily: fonts.display, color: cardColors.onGreen }]}>{venue.neighborhood || displayedType}</Text>
+              </View>
               {photos.length > 1 && (
                 <View style={styles.pagination}>
                   {photos.map((_, idx) => (
@@ -598,7 +607,8 @@ export default function VenueDetailScreen() {
             styles.pinnedHeader,
             {
               backgroundColor: venueSurface,
-              shadowColor: colors.green950,
+              shadowColor: cardColors.ink,
+              borderBottomColor: cardColors.rule,
             },
           ]}
         >
@@ -610,6 +620,7 @@ export default function VenueDetailScreen() {
             <View
               style={[
                 styles.premiumLabel,
+                styles.editorialPremium,
                 {
                   backgroundColor: colors.honeySoft,
                   borderColor: colors.honey,
@@ -623,28 +634,33 @@ export default function VenueDetailScreen() {
           )}
 
           <View style={styles.venueTitleRow}>
-            <Text style={[styles.title, styles.venueTitle, { color: colors.foreground }]}>{venue.name}</Text>
-            <PandaRatingBadge colors={colors} rating={displayedRating} />
+            <View style={styles.editorialHeading}>
+              <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}</Text>
+              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+            </View>
+            {venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
+              <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
+            </View> : null}
           </View>
 
           <View style={styles.chips}>
             <MetaChip
+              refined fontFamily={fonts.medium}
               icon="star"
               label={`${displayedRating} (${displayedRatingCount})`}
-              background={colors.goldSoft}
-              foreground={colors.honeyInk}
+              background={cardColors.goldSoft}
+              foreground={cardColors.goldInk}
             />
-            {venue.price ? (
-              <MetaChip label={venue.price} background={colors.muted} foreground={colors.green800} />
-            ) : null}
-            <MetaChip label={displayedType} background={colors.muted} foreground={colors.green800} />
+            <MetaChip refined fontFamily={fonts.medium} label={displayedType} background={cardColors.soft} foreground={cardColors.ink} />
             <MetaChip
+              refined fontFamily={fonts.medium}
               icon="clock"
               label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
               background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
               foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
             />
             <MetaChip
+              refined fontFamily={fonts.medium}
               icon="map"
               label={`${venue.distance} · ${venue.walkingTime}`}
               background={colors.muted}
@@ -677,27 +693,37 @@ export default function VenueDetailScreen() {
             <View
               style={[
                 styles.contextPanel,
+                styles.editorialContext,
                 {
-                  backgroundColor: colors.secondary,
-                  borderColor: colors.border,
+                  backgroundColor: venueSurface,
+                  borderColor: 'transparent',
                   shadowColor: colors.green950,
                 },
               ]}
             >
               {venue.description ? (
-                <Text style={[styles.description, { color: colors.mutedForeground }]}>{venue.description}</Text>
+                <Text style={[styles.description, styles.editorialDescription, { color: cardColors.muted, fontFamily: fonts.display }]}>{venue.description}</Text>
               ) : null}
 
               <View style={styles.addressRow}>
-                <View style={[styles.addressIcon, { backgroundColor: colors.mint100 }]}>
+                <View style={[styles.addressIcon, styles.editorialAddressIcon, { backgroundColor: cardColors.soft }]}>
                   <PandaIcon name="map-pin" size={18} color={colors.green700} />
                 </View>
                 <View style={styles.addressTextContainer}>
-                  <Text style={[styles.address, { color: colors.foreground }]}>{displayedAddress}</Text>
+                  <Text style={[styles.address, styles.editorialAddress, { color: cardColors.ink, fontFamily: fonts.bold }]}>{displayedAddress}</Text>
                 </View>
               </View>
             </View>
 
+            <View style={styles.editorialActions}>
+              <ActionButton refined fontFamily={fonts.bold} label="View menu" icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
+              <ActionButton refined fontFamily={fonts.bold} label="Reservations" icon="calendar" background={cardColors.secondaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('reservation')} />
+              <ActionButton refined fontFamily={fonts.bold} label="Directions" icon="navigate" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={openWalkingDirections} />
+              {venue.phone ? <ActionButton refined fontFamily={fonts.bold} label="Call" icon="phone" background={cardColors.soft} foreground={cardColors.ink} onPress={() => {
+                recordVenueActivity('call_click', venue);
+                openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
+              }} /> : null}
+            </View>
             {weatherStatus !== 'idle' ? (
               <View
                 style={[
@@ -787,43 +813,6 @@ export default function VenueDetailScreen() {
               ) : null}
             </View>
 
-            <View style={styles.actions}>
-            <ActionButton
-              label="View menu"
-              icon="globe"
-              full
-              background={colors.honey}
-              foreground={colors.honeyInk}
-              onPress={() => openVenuePage('menu')}
-            />
-            <ActionButton
-              label="Reservations"
-              icon="calendar"
-              full
-              background={colors.goldSoft}
-              foreground={colors.honeyInk}
-              onPress={() => openVenuePage('reservation')}
-            />
-            <ActionButton
-              label="Directions"
-                icon="navigate"
-              background={colors.green700}
-              foreground={colors.primaryForeground}
-              onPress={openWalkingDirections}
-            />
-            {venue.phone ? (
-              <ActionButton
-                label="Call"
-                icon="phone"
-                background={colors.muted}
-                foreground={colors.green800}
-                onPress={() => {
-                  recordVenueActivity('call_click', venue);
-                  openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
-                }}
-              />
-            ) : null}
-            </View>
           </View>
         </ScrollView>
       </View>
@@ -834,6 +823,7 @@ export default function VenueDetailScreen() {
         onPress={closeVenue}
         colors={colors}
         testID="venue-close"
+        round
         containerStyle={[styles.floatingClose, { top: Math.max(16, insets.top + 8) }]}
       />
 
@@ -1484,16 +1474,20 @@ function MetaChip({
   icon,
   background,
   foreground,
+  refined = false,
+  fontFamily,
 }: {
   label: string;
   icon?: PandaIconName;
   background: string;
   foreground: string;
+  refined?: boolean;
+  fontFamily?: string;
 }) {
   return (
-    <View style={[styles.chip, { backgroundColor: background }]}>
+    <View style={[styles.chip, refined && styles.editorialChip, { backgroundColor: background }]}>
       {icon && <PandaIcon name={icon} size={13} color={foreground} />}
-      <Text style={[styles.chipText, { color: foreground }]}>{label}</Text>
+      <Text style={[styles.chipText, refined && styles.editorialChipText, { color: foreground }, fontFamily ? { fontFamily } : undefined]}>{label}</Text>
     </View>
   );
 }
@@ -1505,6 +1499,8 @@ function ActionButton({
   foreground,
   full = false,
   onPress,
+  refined = false,
+  fontFamily,
 }: {
   label: string;
   icon: PandaIconName;
@@ -1512,6 +1508,8 @@ function ActionButton({
   foreground: string;
   full?: boolean;
   onPress: () => void;
+  refined?: boolean;
+  fontFamily?: string;
 }) {
   return (
     <Pressable
@@ -1519,13 +1517,14 @@ function ActionButton({
       onPress={onPress}
       style={({ pressed }) => [
         styles.action,
+        refined && styles.editorialAction,
         full && styles.actionFull,
         { backgroundColor: background },
         pressed && styles.pressed,
       ]}
     >
       <PandaIcon name={icon} size={19} color={foreground} />
-      <Text style={[styles.actionText, { color: foreground }]}>{label}</Text>
+      <Text style={[styles.actionText, refined && styles.editorialActionText, { color: foreground }, fontFamily ? { fontFamily } : undefined]}>{label}</Text>
     </Pressable>
   );
 }
@@ -1542,12 +1541,14 @@ function BoutiqueCloseButton({
   colors,
   testID,
   containerStyle,
+  round = false,
 }: {
   accessibilityLabel: string;
   onPress: () => void;
   colors: ReturnType<typeof useColors>;
   testID?: string;
   containerStyle?: StyleProp<ViewStyle>;
+  round?: boolean;
 }) {
   return (
     <Pressable
@@ -1557,8 +1558,8 @@ function BoutiqueCloseButton({
       testID={testID}
       style={({ pressed }) => [styles.boutiqueClose, containerStyle, pressed && styles.pressed]}
     >
-      <View style={[styles.boutiqueCloseInner, { backgroundColor: colors.ivory, borderColor: colors.goldLine }]}>
-        <BlurView intensity={46} tint="light" style={StyleSheet.absoluteFill} />
+      <View style={[styles.boutiqueCloseInner, round && styles.editorialClose, { backgroundColor: colors.ivory, borderColor: colors.goldLine }]}>
+        {!round && <BlurView intensity={46} tint="light" style={StyleSheet.absoluteFill} />}
         <PandaIcon name="x" size={21} color={colors.green900} />
       </View>
     </Pressable>
@@ -1953,7 +1954,7 @@ const styles = StyleSheet.create({
   },
   detailsPanel: {
     flex: 1,
-    marginTop: -32,
+    marginTop: -26,
     minHeight: 0,
     zIndex: 2,
   },
@@ -1962,11 +1963,11 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   pinnedHeader: {
-    borderTopLeftRadius: 32,
-    borderTopRightRadius: 32,
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
     borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: 24,
-    paddingTop: 24,
+    paddingHorizontal: 21,
+    paddingTop: 11,
     paddingBottom: 12,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.1,
@@ -1975,7 +1976,7 @@ const styles = StyleSheet.create({
     zIndex: 3,
   },
   detailsContent: {
-    paddingHorizontal: 24,
+    paddingHorizontal: 21,
   },
   floatingClose: {
     position: 'absolute',
@@ -2086,6 +2087,27 @@ const styles = StyleSheet.create({
     flex: 1,
     marginBottom: 0,
   },
+  editorialHeading: { flex: 1, minWidth: 0 },
+  editorialKicker: { fontSize: 8, letterSpacing: 1.2, marginBottom: 6 },
+  editorialTitle: { fontSize: 30, lineHeight: 34, fontWeight: '400', letterSpacing: -0.45 },
+  editorialPrice: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
+  editorialPriceText: { fontSize: 11 },
+  editorialPremium: { marginTop: 0, paddingHorizontal: 8, paddingVertical: 4 },
+  editorialHeroOverlay: { left: 17, right: 18, bottom: 42, alignItems: 'flex-end', gap: 12 },
+  heroCaptionBlock: { flex: 1, minWidth: 0, gap: 8, alignItems: 'flex-start' },
+  heroCredit: { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 4, maxWidth: '100%' },
+  heroCreditText: { fontSize: 8 },
+  heroCaption: { fontSize: 16, lineHeight: 20 },
+  editorialChip: { minHeight: 29, paddingHorizontal: 8, paddingVertical: 5, gap: 4 },
+  editorialChipText: { fontSize: 11 },
+  editorialContext: { borderWidth: 0, paddingHorizontal: 0, paddingVertical: 12, shadowOpacity: 0, elevation: 0 },
+  editorialDescription: { fontSize: 18, lineHeight: 24, marginBottom: 13 },
+  editorialAddressIcon: { width: 34, height: 34, borderRadius: 17 },
+  editorialAddress: { fontSize: 12, lineHeight: 18, fontWeight: '400' },
+  editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 4, marginBottom: 16 },
+  editorialAction: { borderRadius: 11, minHeight: 46, gap: 7, paddingHorizontal: 8 },
+  editorialActionText: { fontSize: 12, fontWeight: '400' },
+  editorialClose: { borderRadius: 20, width: 40, height: 40 },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',

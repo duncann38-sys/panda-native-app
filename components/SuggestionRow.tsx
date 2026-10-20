@@ -5,6 +5,7 @@ import { VenuePhoto } from '@/components/VenuePhoto';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
+import { DiscoverVenueCard } from '@/components/DiscoverVenueCard';
 
 let nextProfileRequestAt = 0;
 let profileQueue: Promise<void> = Promise.resolve();
@@ -157,74 +158,13 @@ export function SuggestionRow({
       ? profileFailureMessage ? 'Venue details paused' : 'Loading venue…'
       : card.name;
 
-  return (
-    <Pressable
-      testID={`suggestion-${venue.id}`}
-      onPress={onPress}
-      style={({ pressed }) => [
-        styles.row,
-        {
-          backgroundColor: card.promoted ? colors.ivory : colors.card,
-          borderColor: card.promoted ? colors.gold : colors.border,
-          shadowColor: card.promoted ? colors.goldDeep : colors.green900,
-        },
-        card.promoted && styles.promoted,
-        pressed && styles.pressed,
-      ]}
-    >
-      {card.promoted ? (
-        <>
-          <View style={[styles.goldRail, { backgroundColor: colors.gold }]} />
-          <View style={[styles.goldGlow, { backgroundColor: colors.honeySoft }]} />
-        </>
-      ) : null}
-      <View style={styles.photo}>
-        <VenuePhoto venue={card} venueId={card.id} venueName={cardTitle} height={64} />
-      </View>
-      <View style={styles.copy}>
-        <View style={styles.titleRow}>
-          <View style={styles.titleWrap}>
-            {card.promoted ? (
-              <View style={[styles.promotedLabel, { backgroundColor: colors.goldSoft, borderColor: colors.gold }]}>
-                <MaterialCommunityIcons name="star-four-points" size={9} color={colors.goldDeep} />
-                <Text style={[styles.promotedLabelText, { color: colors.goldDeep }]}>Promoted</Text>
-              </View>
-            ) : null}
-            <Text numberOfLines={1} style={[styles.name, { color: card.promoted ? colors.green800 : colors.foreground }]}>{cardTitle}</Text>
-          </View>
-          <Pressable
-            testID={`suggestion-save-${venue.id}`}
-            accessibilityLabel={saved ? `Remove ${cardTitle} from saved venues` : `Save ${cardTitle}`}
-            accessibilityRole="button"
-            hitSlop={10}
-            onPress={onToggleSaved}
-            style={({ pressed }) => [styles.heart, pressed && styles.iconPressed]}
-          >
-            <Ionicons name={saved ? 'heart' : 'heart-outline'} size={20}
-              color={saved ? colors.destructive : card.promoted ? colors.goldDeep : colors.mutedForeground} />
-          </Pressable>
-        </View>
-        {profileFailureMessage ? (
-          <Text numberOfLines={2} style={[styles.address, { color: colors.mutedForeground }]}>
-            {profileFailureMessage}
-          </Text>
-        ) : null}
-        {!card.detailsDeferred && <View style={styles.addressRow}>
-          <Feather name="map-pin" size={13} color={colors.mutedForeground} />
-          <Text numberOfLines={1} style={[styles.address, { color: colors.mutedForeground }]}>{card.fullAddress}</Text>
-        </View>}
-        {!card.detailsDeferred && <View style={styles.metaRow}>
-          <Text style={[styles.open, { color: card.cached ? colors.green700 : card.openNow ? colors.openForeground : colors.closedForeground }]}>
-            {card.cached ? 'Saved · check hours' : card.openNow ? 'Open' : 'Closed'}
-          </Text>
-          <Text style={[styles.meta, { color: colors.foreground }]}>{card.distance}</Text>
-          <Text style={[styles.meta, { color: colors.foreground }]}>{card.walkingTime}</Text>
-          <Text style={[styles.meta, { color: colors.foreground }]}>{card.price}</Text>
-          <Text numberOfLines={1} style={[styles.meta, styles.type, { color: colors.mutedForeground }]}>{card.type}</Text>
-        </View>}
-      </View>
-    </Pressable>
-  );
+  return <DiscoverVenueCard
+    venue={{ ...card, name: cardTitle }}
+    saved={saved}
+    onPress={onPress}
+    onToggleSaved={onToggleSaved}
+    warning={profileFailureMessage}
+  />;
 }
 
 const styles = StyleSheet.create({

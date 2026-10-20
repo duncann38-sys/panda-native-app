@@ -1,0 +1,12 @@
+name: Panda Android Build 61 - Refined Discover and venue cards
+on:
+  push:
+    branches:
+      - panda-build-61-discovery-cards
+jobs:
+  build_android_preview:
+    name: Panda Android APK 61
+    type: build
+    params:
+      platform: android
+      profile: preview
