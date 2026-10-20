@@ -2,8 +2,9 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetch as expoFetch } from 'expo/fetch';
 import * as Location from 'expo-location';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LatestDiscoverySelection, shouldFillDiscovery } from '@/utils/discovery-continuity';
 import {
   ActivityIndicator,
   FlatList,
@@ -259,6 +260,7 @@ const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
 const CACHE_REUSE_DISTANCE_METERS = 2_000;
 const NEARBY_CACHE_KEY = 'panda-live-nearby-v1';
 type CategoryFeedCacheEntry = {
+  expiresAt: number;
   venues: Venue[];
   nextCursor: string | null;
   indexExhausted: boolean;
@@ -280,6 +282,10 @@ function readCategoryFeedCache(
   const key = categoryFeedCacheKey(coordinates, category);
   const cached = categoryFeedCache.get(key);
   if (!cached) return null;
+  if (cached.expiresAt <= Date.now()) {
+    categoryFeedCache.delete(key);
+    return null;
+  }
   categoryFeedCache.delete(key);
   categoryFeedCache.set(key, cached);
   return cached;
@@ -299,6 +305,7 @@ function writeCategoryFeedCache(
   venues.forEach(venue => merged.set(venue.id, { ...merged.get(venue.id), ...venue }));
   categoryFeedCache.delete(key);
   categoryFeedCache.set(key, {
+    expiresAt: Date.now() + DISCOVERY_CACHE_TTL_MS,
     venues: [...merged.values()],
     nextCursor,
     indexExhausted,
@@ -727,6 +734,16 @@ export default function DiscoverScreen() {
     setLiveVenues,
   } = useLiveVenues();
   const [category, setCategory] = useState<TopCategory>('All');
+  const discoveryFocused = useRef(true);
+  const [screenActive, setScreenActive] = useState(true);
+  useFocusEffect(useCallback(() => {
+    discoveryFocused.current = true;
+    setScreenActive(true);
+    return () => {
+      discoveryFocused.current = false;
+      setScreenActive(false);
+    };
+  }, []));
   const [priceFilter, setPriceFilter] = useState<'Any price' | '£' | '££' | '£££' | '££££'>('Any price');
   const [sortBy, setSortBy] = useState<'Nearest' | 'Top rated'>('Nearest');
   const [openFilter, setOpenFilter] = useState<'price' | 'sort' | null>(null);
@@ -764,7 +781,9 @@ export default function DiscoverScreen() {
   const [visibleVenueIds, setVisibleVenueIds] = useState<Set<string>>(() => new Set());
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 10 }).current;
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<ViewToken<Venue>> }) => {
-    setVisibleVenueIds(new Set(viewableItems.map(({ item }) => item.id)));
+    const next = new Set(viewableItems.map(({ item }) => item.id));
+    setVisibleVenueIds(previous => previous.size === next.size
+      && [...next].every(id => previous.has(id)) ? previous : next);
   }).current;
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
   const indexedFeedCursors = useRef(new Map<TopCategory, string | null>());
@@ -776,6 +795,10 @@ export default function DiscoverScreen() {
   const displayedOrigin = useRef<{ latitude: number; longitude: number } | null>(null);
   const cachedNearbyAtRef = useRef<number | null>(null);
   const categoryLoadInFlight = useRef(false);
+  const pendingCategory = useRef(new LatestDiscoverySelection<DiscoveryCategory>());
+  const [categoryRequestVersion, setCategoryRequestVersion] = useState(0);
+  const continuationRetryAt = useRef(new Map<TopCategory, number>());
+  const automaticPages = useRef(new Map<TopCategory, number>());
   const discoveryGeneration = useRef(0);
   const discoveryRequestTimes = useRef<number[]>([]);
   const reserveDiscoveryRequest = useCallback(() => {
@@ -835,6 +858,8 @@ export default function DiscoverScreen() {
     loadedCategories.current.clear();
     indexedFeedCursors.current.clear();
     indexedFeedExhausted.current.clear();
+    continuationRetryAt.current.clear();
+    automaticPages.current.clear();
     allLiveFallbackLoaded.current = false;
     try {
       const location = requestPermission || !coordinates
@@ -1003,7 +1028,7 @@ export default function DiscoverScreen() {
         return;
       }
     }
-    if (!coordinates || loadedCategories.current.has(selectedCategory)
+    if (!coordinates
       || categoryLoading === selectedCategory || categoryLoadInFlight.current || liveLoadInFlight.current) return;
 
     categoryLoadInFlight.current = true;
@@ -1060,16 +1085,8 @@ export default function DiscoverScreen() {
       let nextCursor = page.nextCursor;
       mergeCollected();
 
-      if (collected.size < 6 && liveDiscoveryNearbyTypes(selectedCategory).length) {
-        const nearby = await fetchNearbyTypePage(selectedCategory, location, reserveDiscoveryRequest);
-        if (discoveryGeneration.current !== generation) return;
-        if (nearby.failure) {
-          if (!collected.size) setLiveDiscoveryFailure(nearby.failure.code);
-        } else {
-          addMatches(nearby.venues);
-          mergeCollected();
-        }
-      }
+      // Match WAP: show each Text Search page immediately, then continue
+      // its cursor. Do not hold category changes behind a second Nearby call.
 
       const venuesForCategory = [...collected.values()].sort((first, second) => first.distanceMeters - second.distanceMeters);
       indexedFeedCursors.current.set(selectedCategory, nextCursor);
@@ -1087,35 +1104,48 @@ export default function DiscoverScreen() {
 
   const selectCategory = useCallback((nextCategory: TopCategory) => {
     setCategory(nextCategory);
-    if (nextCategory !== 'All') void loadExpandedCategory(nextCategory);
-  }, [loadExpandedCategory]);
+    automaticPages.current.set(nextCategory, 0);
+    if (nextCategory === 'All') pendingCategory.current.clear();
+    else pendingCategory.current.request(nextCategory);
+    setCategoryRequestVersion(version => version + 1);
+  }, []);
+
+  useEffect(() => {
+    const next = pendingCategory.current.take(
+      categoryLoadInFlight.current || liveLoadInFlight.current || indexedFeedInFlight.current
+      || !coordinates || !screenActive || liveDiscoveryState === 'loading' || feedPageLoading,
+    );
+    if (next) void loadExpandedCategory(next);
+  }, [categoryRequestVersion, categoryLoading, feedPageLoading, liveDiscoveryState, loadExpandedCategory, coordinates, screenActive]);
 
   const loadMoreFeed = useCallback(async () => {
-    if (indexedFeedInFlight.current || feedPageLoading || categoryLoading === category) return;
+    if (!discoveryFocused.current || indexedFeedInFlight.current || feedPageLoading || categoryLoadInFlight.current
+      || liveLoadInFlight.current || Date.now() < (continuationRetryAt.current.get(category) ?? 0)) return;
     const initialCursor = indexedFeedCursors.current.get(category);
     if (!coordinates || !initialCursor || indexedFeedExhausted.current.has(category)) return;
     indexedFeedInFlight.current = true;
     setFeedPageLoading(true);
+    const generation = discoveryGeneration.current;
     try {
       const origin = { latitude: coordinates.latitude, longitude: coordinates.longitude };
-      const knownIds = new Set(liveVenues.map((venue) => venue.id));
       let requestCursor: string | null = initialCursor;
       let nextCursor: string | null = initialCursor;
       let additions: Venue[] = [];
-      while (requestCursor && !additions.length) {
+      if (requestCursor) {
         const page = await fetchIndexedFeedPage(
           category,
           { lat: origin.latitude, lng: origin.longitude },
           requestCursor,
           reserveDiscoveryRequest,
         );
+        if (discoveryGeneration.current !== generation) return;
         if (page.failure) {
+          continuationRetryAt.current.set(category, Date.now() + 30_000);
           setLiveDiscoveryFailure(page.failure.code);
           return;
         }
         additions = page.venues.flatMap((result) => {
-          if (!result.name.trim() || !result.photoName?.trim() || knownIds.has(result.id)) return [];
-          knownIds.add(result.id);
+          if (!result.name.trim() || !result.photoName?.trim()) return [];
           const venue = liveVenueFromResult(result, origin, liveArea || 'your location');
           const venueCategories = venueDiscoveryCategories(venue);
           if (category === 'All') {
@@ -1159,6 +1189,7 @@ export default function DiscoverScreen() {
         setLiveDiscoveryFailure(null);
       }
     } catch {
+      continuationRetryAt.current.set(category, Date.now() + 30_000);
       setLiveDiscoveryFailure('API-RESPONSE');
     } finally {
       indexedFeedInFlight.current = false;
@@ -1279,13 +1310,16 @@ export default function DiscoverScreen() {
       ...venue, promoted: false, premium: false, banging: true,
     })),
   ]), [partners, bangingSupplement, bangingPremiumJourneys, rotationWindow, bangingRefreshTick]);
+  const categoryMembership = useMemo(() => new Map(displayVenues.map(venue => [
+    venue.id, new Set(venueDiscoveryCategories(venue)),
+  ])), [displayVenues]);
   const filteredVenues = useMemo(() => {
     const result = displayVenues.filter((venue) => {
+      const tags = categoryMembership.get(venue.id)!;
       const matchesCategory =
         category === 'All'
-          ? !venueDiscoveryCategories(venue).includes('Shops')
-            && !venueDiscoveryCategories(venue).includes('Places of Interest')
-          : venueDiscoveryCategories(venue).includes(category);
+          ? !tags.has('Shops') && !tags.has('Places of Interest')
+          : tags.has(category);
       const matchesPrice = priceFilter === 'Any price' || poundPrice(venue.price) === priceFilter;
       return matchesCategory && matchesPrice;
     });
@@ -1294,12 +1328,29 @@ export default function DiscoverScreen() {
         ? Number(a.distanceMeters) - Number(b.distanceMeters)
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
     ));
-  }, [category, displayVenues, priceFilter, sortBy]);
+  }, [category, displayVenues, categoryMembership, priceFilter, sortBy]);
   const { setListedVenues } = useLiveVenues();
   useEffect(() => { setListedVenues(filteredVenues); }, [filteredVenues, setListedVenues]);
 
+  useEffect(() => {
+    if (!screenActive || !coordinates || liveDiscoveryState !== 'ready'
+      || (category !== 'All' && !loadedCategories.current.has(category))) return;
+    if (!shouldFillDiscovery({
+      count: filteredVenues.length,
+      busy: feedPageLoading || categoryLoading !== null || categoryLoadInFlight.current || liveLoadInFlight.current,
+      hasCursor: Boolean(indexedFeedCursors.current.get(category)),
+      exhausted: indexedFeedExhausted.current.has(category),
+      attempts: automaticPages.current.get(category) ?? 0,
+      retryAt: continuationRetryAt.current.get(category) ?? 0,
+    })) return;
+    automaticPages.current.set(category, (automaticPages.current.get(category) ?? 0) + 1);
+    void loadMoreFeed();
+  }, [category, coordinates, filteredVenues.length, feedPageLoading, categoryLoading, screenActive,
+    liveDiscoveryState, loadMoreFeed]);
+
   const onRefresh = async () => {
     setRefreshing(true);
+    if (category !== 'All') pendingCategory.current.request(category);
     await loadLiveVenues(true);
     setRefreshing(false);
   };
@@ -1412,6 +1463,11 @@ export default function DiscoverScreen() {
       <FlatList
         style={styles.feed}
         data={filteredVenues}
+        initialNumToRender={6}
+        maxToRenderPerBatch={4}
+        windowSize={5}
+        updateCellsBatchingPeriod={50}
+        removeClippedSubviews={Platform.OS === 'android'}
         keyExtractor={(item) => item.id}
         numColumns={1}
         showsVerticalScrollIndicator={false}
@@ -1428,7 +1484,27 @@ export default function DiscoverScreen() {
           />
         }
         contentContainerStyle={styles.feedContent}
-        ListFooterComponent={null}
+        ListFooterComponent={
+          <View style={{ padding: 18, alignItems: 'center', gap: 9 }}>
+            {feedPageLoading || categoryLoading === category ? <>
+              <ActivityIndicator color={colors.green700} />
+              <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
+                Finding more {category === 'All' ? 'places' : category.toLowerCase()} nearby…
+              </Text>
+            </> : indexedFeedCursors.current.get(category) && !indexedFeedExhausted.current.has(category) ? (
+              <Pressable accessibilityRole="button" onPress={() => {
+                continuationRetryAt.current.delete(category);
+                void loadMoreFeed();
+              }} style={{ paddingVertical: 13, paddingHorizontal: 22, backgroundColor: colors.card, borderRadius: 20 }}>
+                <Text style={{ color: colors.green700, fontFamily: 'Inter_600SemiBold' }}>
+                  {liveDiscoveryFailure ? 'Retry loading more places' : 'Discover more nearby'}
+                </Text>
+              </Pressable>
+            ) : filteredVenues.length ? <Text style={{ color: colors.mutedForeground, fontSize: 12 }}>
+              You’re up to date with these nearby results.
+            </Text> : null}
+          </View>
+        }
         ListHeaderComponent={
           <View style={styles.suggestionsHeader}>
             <View style={styles.liveStatusRow}>
@@ -1525,7 +1601,7 @@ export default function DiscoverScreen() {
         )}
         ListEmptyComponent={
           <View style={[styles.empty, { backgroundColor: colors.card }]}>
-            {liveDiscoveryState === 'loading' ? (
+            {liveDiscoveryState === 'loading' || categoryLoading === category || feedPageLoading ? (
               <>
                 <ActivityIndicator color={colors.green700} size="small" />
                 <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Finding live places</Text>
@@ -1565,10 +1641,21 @@ export default function DiscoverScreen() {
             ) : (
               <>
                 <Ionicons name="search-outline" size={28} color={colors.green700} />
-                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No places found</Text>
-                <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
-                  Try a different area, category, or search term.
+                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
+                  {liveDiscoveryFailure ? 'More places couldn’t load just now' : 'No matching places returned yet'}
                 </Text>
+                <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
+                  {liveDiscoveryFailure ? 'Your existing places are kept. Retry the live search when your connection is ready.'
+                    : 'Panda only shows genuine matching venues. Refresh the search or choose another category.'}
+                </Text>
+                <Pressable accessibilityRole="button" onPress={() => {
+                  loadedCategories.current.delete(category as DiscoveryCategory);
+                  if (coordinates) categoryFeedCache.delete(categoryFeedCacheKey(coordinates, category));
+                  if (category === 'All') void loadLiveVenues(true);
+                  else selectCategory(category);
+                }} style={{ padding: 14 }}>
+                  <Text style={{ color: colors.green700, fontFamily: 'Inter_700Bold' }}>Retry this category</Text>
+                </Pressable>
               </>
             )}
           </View>

@@ -19,8 +19,8 @@ import { VenueCard } from '@/components/VenueCard';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 
-const DRAWER_OPEN_HEIGHT = 314;
-const DRAWER_CLOSED_HEIGHT = 48;
+const DRAWER_OPEN_HEIGHT = 272;
+const DRAWER_CLOSED_HEIGHT = 44;
 const DRAWER_CLOSED_OFFSET = DRAWER_OPEN_HEIGHT - DRAWER_CLOSED_HEIGHT;
 
 export function BangingDrawer({
@@ -41,6 +41,8 @@ export function BangingDrawer({
   const androidBottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0;
   const { width } = useWindowDimensions();
   const [open, setOpen] = useState(false);
+  const [carouselVisible, setCarouselVisible] = useState(false);
+  const [photoInteracting, setPhotoInteracting] = useState(false);
   const translateY = useRef(new Animated.Value(DRAWER_CLOSED_OFFSET)).current;
   const settledOffset = useRef(DRAWER_CLOSED_OFFSET);
   const gestureStartOffset = useRef(DRAWER_CLOSED_OFFSET);
@@ -57,13 +59,17 @@ export function BangingDrawer({
       const nextOffset = nextOpen ? 0 : DRAWER_CLOSED_OFFSET;
       settledOffset.current = nextOffset;
       setOpen(nextOpen);
+      if (nextOpen) setCarouselVisible(true);
+      setPhotoInteracting(false);
       Animated.spring(translateY, {
         damping: 22,
         mass: 0.8,
         stiffness: 230,
         toValue: nextOffset,
         useNativeDriver: true,
-      }).start();
+      }).start(({ finished }) => {
+        if (finished && !nextOpen) setCarouselVisible(false);
+      });
     },
     [translateY],
   );
@@ -145,17 +151,21 @@ export function BangingDrawer({
               <MaterialCommunityIcons name="fire" size={open ? 19 : 15} color={colors.honey} />
               <View style={[styles.liveDot, { backgroundColor: colors.gold }]} />
             </View>
-            <Text style={[styles.spotCount, !open && styles.closedSpotCount, { color: colors.goldDeep }]}>
+            {open ? <Text style={[styles.spotCount, { color: colors.goldDeep }]}>
               {bangingVenues.length ? `${bangingVenues.length} curated cards` : status || 'Finding luxury venues…'}
-            </Text>
+            </Text> : null}
           </View>
           <Feather name={open ? 'chevron-down' : 'chevron-up'} size={open ? 22 : 18} color={colors.goldDeep} />
         </View>
       </Pressable>
       <View style={styles.carouselViewport}>
-        <FlatList
+        {carouselVisible ? <FlatList
           data={bangingVenues}
           horizontal
+          nestedScrollEnabled
+          scrollEnabled={!photoInteracting}
+          initialScrollIndex={bangingVenues.length ? Math.min(activeIndex, bangingVenues.length - 1) : undefined}
+          getItemLayout={(_, index) => ({ length: cardWidth + cardGap, offset: (cardWidth + cardGap) * index, index })}
           decelerationRate="fast"
           keyExtractor={(venue, index) => `${venue.id}:${index}`}
           snapToInterval={cardWidth + cardGap}
@@ -177,11 +187,12 @@ export function BangingDrawer({
                 onPress={() => onPress(venue)}
                 compact
                 presentation="banging"
+                onPhotoInteraction={setPhotoInteracting}
                 featured={index === activeIndex}
               />
             </View>
           )}
-        />
+        /> : null}
         <LinearGradient
           colors={[drawerSurface, 'transparent']}
           pointerEvents="none"
@@ -257,11 +268,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 19,
-    letterSpacing: -0.3,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.65,
   },
   closedTitle: {
-    fontSize: 17,
+    fontSize: 18,
+    lineHeight: 22,
   },
   liveDot: {
     borderRadius: 999,
@@ -271,6 +284,7 @@ const styles = StyleSheet.create({
   spotCount: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
+    lineHeight: 12,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
@@ -278,10 +292,10 @@ const styles = StyleSheet.create({
     fontSize: 8,
   },
   cards: {
-    paddingBottom: 14,
+    paddingBottom: 8,
   },
   carouselViewport: {
-    height: 252,
+    height: 208,
     position: 'relative',
   },
   frostedEdge: {

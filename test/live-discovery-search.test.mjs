@@ -20,16 +20,16 @@ test('typed category fallbacks cover requested Google types without reviving rem
 });
 
 test('live search rings grow outward and page tokens retain their original radius', () => {
-  assert.deepEqual(LIVE_DISCOVERY_EXPANSION_RINGS_KM, [8, 10, 12, 16, 20]);
+  assert.deepEqual(LIVE_DISCOVERY_EXPANSION_RINGS_KM, [1.2, 2.4, 3.6, 4, 6, 8, 10, 12, 16, 20]);
   assert.deepEqual(liveSearchRequest({ ringIndex: -1 }), {});
   assert.deepEqual(advanceLiveSearchCursor({ ringIndex: -1 }), { ringIndex: 0 });
-  assert.deepEqual(liveSearchRequest({ ringIndex: 0 }), { expansionRingKm: 6.5 });
+  assert.deepEqual(liveSearchRequest({ ringIndex: 0 }), { expansionRingKm: 1.2 });
   const nextPage = advanceLiveSearchCursor({ ringIndex: 0 }, 'next-page-token', true);
   assert.deepEqual(nextPage, { pageToken: 'next-page-token', ringIndex: 0 });
-  assert.deepEqual(liveSearchRequest(nextPage), { pageToken: 'next-page-token', expansionRingKm: 6.5 });
+  assert.deepEqual(liveSearchRequest(nextPage), { pageToken: 'next-page-token', expansionRingKm: 1.2 });
   assert.deepEqual(advanceLiveSearchCursor(nextPage, undefined, true), { ringIndex: 1 });
-  assert.equal(liveSearchRequest({ ringIndex: 4 }).expansionRingKm, 18.5);
-  assert.equal(advanceLiveSearchCursor({ ringIndex: 4 }, undefined, true), undefined);
+  assert.equal(liveSearchRequest({ ringIndex: 9 }).expansionRingKm, 20);
+  assert.equal(advanceLiveSearchCursor({ ringIndex: 9 }, undefined, true), undefined);
   assert.equal(hasMoreLiveSearch({ ringIndex: -1 }), true);
   assert.equal(hasMoreLiveSearch(undefined), false);
 });

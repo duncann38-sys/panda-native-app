@@ -29,6 +29,9 @@ export type Venue = {
   phone: string;
   premium: boolean;
   banging: boolean;
+  luxurySource?: string;
+  bangingTransitMinutes?: number;
+  bangingVerifiedAt?: number;
   promoted: boolean;
   photoAttributions: string[];
   photoName?: string;

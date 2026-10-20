@@ -2,7 +2,7 @@ import { Image } from 'expo-image';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { VenueGallery } from './VenueGallery';
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 import { getVenue, type Venue } from '@/data/venues';
 import { useLiveVenues } from '@/context/live-venues';
@@ -22,7 +22,7 @@ export function useVenuePhotos(venue?: Venue | null, allowDetails = false) {
   useEffect(() => {
     if (!venue?.id) return;
     if (venue.id.startsWith('osm:') || (venue.detailsDeferred && !allowDetails)) return;
-    const firstPartyGallery = Boolean(venue.promoted || venue.banging || venue.premium);
+    const firstPartyGallery = Boolean(venue.promoted || venue.premium);
     if (!firstPartyGallery) { setLoaded(null); return; }
     if (!allowDetails && venue.photoNames?.length && venue.photoNames.length >= Math.min(limit, venue.photoCount || limit)) {
       setLoaded(null);
@@ -70,7 +70,7 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   const cached = photoLists.get(id);
   if (cached && cached.expires > Date.now()) return cached.photos;
   if (venue.photoNames?.length) {
-    const firstPartyGallery = Boolean(venue.promoted || venue.banging || venue.premium);
+    const firstPartyGallery = Boolean(venue.promoted || venue.premium);
     return venue.photoNames.map((photo, index) => ({
       uri: firstPartyGallery
         ? `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(venue.id)}/photos/${index}/image`
@@ -97,30 +97,52 @@ export function venuePhotosFor(value: string | Venue): VenuePhotoItem[] {
   }] : [];
 }
 
-export function VenuePhoto({
-  venue,
-  venueId,
-  venueName,
-  height,
-}: {
+type VenuePhotoProps = {
   venue?: Venue;
   venueId: string;
   venueName: string;
   height: number;
-}) {
-  const colors = useColors();
+  showControls?: boolean;
+  onInteractionChange?: (active: boolean) => void;
+};
+
+// Cards already pass their venue. Avoid subscribing every photo carousel to
+// unrelated global location/list updates while the user switches categories.
+export function VenuePhoto(props: VenuePhotoProps) {
+  return props.venue ? <VenuePhotoMedia {...props} /> : <LiveVenuePhoto {...props} />;
+}
+
+function LiveVenuePhoto(props: VenuePhotoProps) {
   const { liveVenues } = useLiveVenues();
-  const record = venue ?? liveVenues.find((item) => item.id === venueId) ?? getVenue(venueId);
+  return <VenuePhotoMedia {...props} venue={liveVenues.find(item => item.id === props.venueId) ?? getVenue(props.venueId)} />;
+}
+
+const VenuePhotoMedia = memo(function VenuePhotoMedia({
+  venue,
+  venueId,
+  venueName,
+  height,
+  showControls = false,
+  onInteractionChange,
+}: VenuePhotoProps) {
+  const colors = useColors();
+  const record = venue ?? getVenue(venueId);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
   const photos = useVenuePhotos(record, galleryIndex !== null);
   const [width, setWidth] = useState(0);
   const [page, setPage] = useState(0);
+  const scroll = useRef<ScrollView>(null);
   const [coverFallbackIndex, setCoverFallbackIndex] = useState(0);
   useEffect(() => {
     setPage(0);
     setCoverFallbackIndex(0);
   }, [venueId, photos[0]?.uri]);
   const photo = photos[Math.min(page, photos.length - 1)] ?? photos[0];
+  const movePhoto = (direction: number) => {
+    const next = (page + direction + photos.length) % Math.max(1, photos.length);
+    setPage(next);
+    scroll.current?.scrollTo({ x: next * width, animated: false });
+  };
   const coverFallbackUris = [
     record?.photoName
       ? `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(record.photoName)}&max=900`
@@ -131,8 +153,16 @@ export function VenuePhoto({
   if (photo) {
     return (
       <View style={{ height, width: '100%' }} onLayout={event => setWidth(event.nativeEvent.layout.width)}>
-        <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}
-          onMomentumScrollEnd={event => setPage(Math.round(event.nativeEvent.contentOffset.x / Math.max(1, width)))}>
+        <ScrollView ref={scroll} horizontal pagingEnabled nestedScrollEnabled showsHorizontalScrollIndicator={false}
+          onTouchStart={() => onInteractionChange?.(true)}
+          onTouchEnd={() => onInteractionChange?.(false)}
+          onTouchCancel={() => onInteractionChange?.(false)}
+          onScrollBeginDrag={() => onInteractionChange?.(true)}
+          onScrollEndDrag={() => onInteractionChange?.(false)}
+          onMomentumScrollEnd={event => {
+            setPage(Math.max(0, Math.min(photos.length - 1, Math.round(event.nativeEvent.contentOffset.x / Math.max(1, width)))));
+            onInteractionChange?.(false);
+          }}>
           {photos.map((item, index) => (
             <Pressable key={item.uri} accessibilityRole="button" accessibilityLabel={`Open ${venueName} photo ${index + 1}`}
               onPress={event => { event.stopPropagation(); setGalleryIndex(index); }} style={{ height, width: width || 1 }}>
@@ -156,7 +186,20 @@ export function VenuePhoto({
             </Pressable>
           ))}
         </ScrollView>
-        {photos.length > 1 ? <Text style={{ position: 'absolute', right: 5, bottom: 5,
+        {showControls && photos.length > 1 ? <View pointerEvents="box-none" style={StyleSheet.absoluteFillObject}>
+          {[-1, 1].map(direction => <Pressable key={direction}
+            hitSlop={4}
+            accessibilityRole="button"
+            accessibilityLabel={`${direction < 0 ? 'Previous' : 'Next'} photo of ${venueName}`}
+            testID={`photo-${direction < 0 ? 'previous' : 'next'}-${venueId}`}
+            onPress={event => { event.stopPropagation(); movePhoto(direction); }}
+            style={{ position: 'absolute', top: Math.max(0, height / 2 - 18),
+              ...(direction < 0 ? { left: 3 } : { right: 3 }), width: 36, height: 36,
+              borderRadius: 18, backgroundColor: colors.photoOverlay, alignItems: 'center', justifyContent: 'center' }}>
+            <Text style={{ color: colors.primaryForeground, fontSize: 29, lineHeight: 31 }}>{direction < 0 ? '‹' : '›'}</Text>
+          </Pressable>)}
+        </View> : null}
+        {photos.length > 1 ? <Text pointerEvents="none" style={{ position: 'absolute', right: 5, bottom: 5,
           color: '#fff', backgroundColor: '#0009', borderRadius: 8, paddingHorizontal: 5, fontSize: 10 }}>
           {Math.min(page + 1, photos.length)}/{photos.length}
         </Text> : null}
@@ -171,7 +214,7 @@ export function VenuePhoto({
       <MaterialCommunityIcons name="image-outline" size={26} color={colors.green700} />
     </View>
   );
-}
+});
 
 const styles = StyleSheet.create({
   fallback: {

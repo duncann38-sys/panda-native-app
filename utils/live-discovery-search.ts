@@ -58,7 +58,8 @@ export function liveDiscoveryNearbyTypes(category: string): readonly string[] {
   return LIVE_DISCOVERY_NEARBY_TYPES[category] ?? [];
 }
 
-export const LIVE_DISCOVERY_EXPANSION_RINGS_KM = [8, 10, 12, 16, 20] as const;
+// These are the exact expansion request values used by WAP's loadMoreHome.
+export const LIVE_DISCOVERY_EXPANSION_RINGS_KM = [1.2, 2.4, 3.6, 4, 6, 8, 10, 12, 16, 20] as const;
 
 export type LiveSearchCursor = {
   pageToken?: string;
@@ -75,7 +76,7 @@ export function liveSearchRequest(cursor?: LiveSearchCursor): {
 } {
   if (!cursor) return {};
   const effectiveRingKm = LIVE_DISCOVERY_EXPANSION_RINGS_KM[cursor.ringIndex];
-  const expansionRingKm = effectiveRingKm === undefined ? undefined : effectiveRingKm - 1.5;
+  const expansionRingKm = effectiveRingKm;
   return {
     ...(cursor.pageToken ? { pageToken: cursor.pageToken } : {}),
     ...(expansionRingKm !== undefined ? { expansionRingKm } : {}),

@@ -13,6 +13,7 @@ type VenueCardProps = {
   compact?: boolean;
   featured?: boolean;
   presentation?: 'banging';
+  onPhotoInteraction?: (active: boolean) => void;
 };
 
 export function VenueCard({
@@ -23,6 +24,7 @@ export function VenueCard({
   compact = false,
   featured = false,
   presentation,
+  onPhotoInteraction,
 }: VenueCardProps) {
   const colors = useColors();
   const editorial = presentation === 'banging';
@@ -54,6 +56,8 @@ export function VenueCard({
           venueId={venue.id}
           venueName={venue.name}
           height={editorial ? 108 : compact ? 100 : premiumFeatured ? 148 : 136}
+          showControls={editorial}
+          onInteractionChange={onPhotoInteraction}
         />
         {editorial ? (
           <LinearGradient
@@ -115,6 +119,7 @@ export function VenueCard({
           style={[
             styles.name,
             compact && styles.compactName,
+            editorial && styles.editorialName,
             { color: onGreen ? colors.primaryForeground : colors.foreground },
           ]}
         >
@@ -279,6 +284,12 @@ const styles = StyleSheet.create({
   compactName: {
     fontSize: 15.5,
     lineHeight: 19,
+  },
+  editorialName: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 15,
+    lineHeight: 20,
+    letterSpacing: -0.25,
   },
   metaRow: {
     alignItems: 'center',

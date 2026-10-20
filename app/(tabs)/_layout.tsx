@@ -57,6 +57,8 @@ function ClassicTabLayout() {
   return (
     <Tabs
       screenOptions={{
+        lazy: true,
+        freezeOnBlur: Platform.OS === 'android',
         tabBarActiveTintColor: colors.goldDeep,
         tabBarInactiveTintColor: colors.mutedForeground,
         headerShown: false,

@@ -1,0 +1,12 @@
+name: Panda Android Build 62 - Discovery speed and compact Banging
+on:
+  push:
+    branches:
+      - panda-build-62-discovery-speed
+jobs:
+  build_android_preview:
+    name: Panda Android APK 62
+    type: build
+    params:
+      platform: android
+      profile: preview
