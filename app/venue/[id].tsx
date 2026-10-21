@@ -34,6 +34,7 @@ import { useColors } from '@/hooks/useColors';
 import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { fullCardOpenStatus, hydrateVenueDetails } from '@/utils/venue-detail-hydration';
+import { getOfficialVenueLinks, type OfficialVenueLinks } from '@/utils/official-venue-links';
 
 type GoogleVenueProfile = {
   id: string;
@@ -235,19 +236,23 @@ export default function VenueDetailScreen() {
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   
   const photos = useVenuePhotos(venue, true);
-  const [officialLinks, setOfficialLinks] = useState<{ menuUrl?: string; reservationUrl?: string } | null>(null);
-  const officialLinksRequest = useRef<Promise<{ menuUrl?: string; reservationUrl?: string } | null> | null>(null);
+  const [officialLinks, setOfficialLinks] = useState<OfficialVenueLinks | null>(null);
+  const officialLinksRequest = useRef<Promise<OfficialVenueLinks | null> | null>(null);
+  const [openingVenuePage, setOpeningVenuePage] = useState(false);
+  const openingVenuePageRef = useRef(false);
   useEffect(() => {
     setOfficialLinks(null);
+    officialLinksRequest.current = null;
     if (!venue?.id) return;
-    const controller = new AbortController();
-    const request = fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/links`, { signal: controller.signal })
-      .then(async response => {
-        if (!response.ok) throw new Error('Official links unavailable');
-        return response.json();
-      }).then(links => { setOfficialLinks(links); return links; }).catch(() => null);
+    let active = true;
+    const request = getOfficialVenueLinks(venue.id).then(links => {
+      if (active) setOfficialLinks(links);
+      return links;
+    }).finally(() => {
+      if (active) officialLinksRequest.current = null;
+    });
     officialLinksRequest.current = request;
-    return () => controller.abort();
+    return () => { active = false; };
   }, [venue?.id]);
 
   const [heroActive, setHeroActive] = useState(0);
@@ -344,7 +349,8 @@ export default function VenueDetailScreen() {
   const screenBottomInset =
     Platform.OS === 'web' ? 0 : Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 0);
   const { cardColors, fonts } = useVenueCardDesign('light');
-  const venueSurface = cardColors.surface;
+  const paidPremium = Boolean(venue?.premium && venue?.banging);
+  const venueSurface = paidPremium ? cardColors.premiumSurface : cardColors.surface;
   const detailsCanScroll =
     scrollViewportHeight > 0 && scrollContentHeight > scrollViewportHeight + 2;
 
@@ -452,16 +458,29 @@ export default function VenueDetailScreen() {
       directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };
   const openVenuePage = async (kind: 'menu' | 'reservation') => {
-    const links = officialLinks ?? await officialLinksRequest.current;
-    const pageUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
-    if (!pageUrl) {
-      recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
-      Alert.alert('Verified venue link unavailable',
-        `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
-      return;
+    if (openingVenuePageRef.current) return;
+    openingVenuePageRef.current = true;
+    setOpeningVenuePage(true);
+    try {
+      const knownUrl = kind === 'menu' ? officialLinks?.menuUrl : officialLinks?.reservationUrl;
+      // Share a current lookup, or retry once on this tap when the requested
+      // link is missing. Never leave the button waiting on two serial timeouts.
+      const links = knownUrl ? officialLinks
+        : await (officialLinksRequest.current ?? getOfficialVenueLinks(venue.id, true));
+      if (links) setOfficialLinks(links);
+      const pageUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
+      if (!pageUrl) {
+        recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
+        Alert.alert('Verified venue link unavailable',
+          `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
+        return;
+      }
+      router.push({ pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
+        params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl } });
+    } finally {
+      openingVenuePageRef.current = false;
+      setOpeningVenuePage(false);
     }
-    router.push({ pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
-      params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl } });
   };
   const openTransitRoute = () => {
     recordVenueActivity('directions_click', venue);
@@ -599,6 +618,7 @@ export default function VenueDetailScreen() {
           {
             backgroundColor: venueSurface,
           },
+          paidPremium && { borderWidth: 1, borderColor: cardColors.gold },
         ]}
       >
         {/* This header stays pinned while the detail content scrolls behind it. */}
@@ -616,6 +636,9 @@ export default function VenueDetailScreen() {
             <View style={[styles.grip, { backgroundColor: colors.border }]} />
           </View>
 
+          {venue.premium && venue.banging ? (
+            <View pointerEvents="none" style={[styles.paidPremiumRule, { backgroundColor: colors.gold }]} />
+          ) : null}
           {(venue.premium || venue.promoted) && (
             <View
               style={[
@@ -626,10 +649,11 @@ export default function VenueDetailScreen() {
                   borderColor: colors.honey,
                   shadowColor: colors.goldDeep,
                 },
+                venue.premium && venue.banging ? [styles.paidPremiumLabel, { backgroundColor: colors.green900, borderColor: colors.gold }] : null,
               ]}
             >
-              <PandaIcon name="award" size={13} color={colors.goldDeep} />
-              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>{venue.premium && venue.banging ? 'Premium' : 'Promoted'}</Text>
+              <PandaIcon name="award" size={13} color={venue.premium && venue.banging ? colors.honey : colors.goldDeep} />
+              <Text style={[styles.premiumLabelText, { color: venue.premium && venue.banging ? colors.goldLine : colors.honeyInk }]}>{venue.premium && venue.banging ? 'Premium' : 'Promoted'}</Text>
             </View>
           )}
 
@@ -637,6 +661,7 @@ export default function VenueDetailScreen() {
             <View style={styles.editorialHeading}>
               <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}</Text>
               <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
+              {venue.premium && venue.banging ? <View style={[styles.paidPremiumUnderline, { backgroundColor: colors.gold }]} /> : null}
             </View>
             {venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
               <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
@@ -716,7 +741,7 @@ export default function VenueDetailScreen() {
             </View>
 
             <View style={styles.editorialActions}>
-              <ActionButton refined fontFamily={fonts.bold} label="View menu" icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
+              <ActionButton refined fontFamily={fonts.bold} label={openingVenuePage ? 'Finding link…' : 'View menu'} icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
               <ActionButton refined fontFamily={fonts.bold} label="Reservations" icon="calendar" background={cardColors.secondaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('reservation')} />
               <ActionButton refined fontFamily={fonts.bold} label="Directions" icon="navigate" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={openWalkingDirections} />
               {venue.phone ? <ActionButton refined fontFamily={fonts.bold} label="Call" icon="phone" background={cardColors.soft} foreground={cardColors.ink} onPress={() => {
@@ -2093,6 +2118,9 @@ const styles = StyleSheet.create({
   editorialTitle: { fontSize: 30, lineHeight: 39, fontWeight: '700', letterSpacing: -0.7 },
   editorialPrice: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D7C8A7', paddingHorizontal: 11, paddingVertical: 9, marginTop: 3 },
   editorialPriceText: { fontSize: 12, letterSpacing: 0.5 },
+  paidPremiumRule: { position: 'absolute', top: 0, left: 30, right: 30, borderBottomLeftRadius: 3, borderBottomRightRadius: 3, height: 3, opacity: 0.9 },
+  paidPremiumLabel: { borderWidth: 1, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.22, shadowRadius: 6, elevation: 3 },
+  paidPremiumUnderline: { width: 34, height: 2, borderRadius: 2, marginTop: 6 },
   editorialPremium: { marginTop: 0, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
   editorialHeroOverlay: { left: 17, right: 18, bottom: 42, alignItems: 'flex-end', gap: 12 },
   heroCaptionBlock: { flex: 1, minWidth: 0, gap: 8, alignItems: 'flex-start' },

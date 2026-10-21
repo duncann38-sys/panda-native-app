@@ -29,6 +29,7 @@ import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
+import { getOfficialVenueLinks } from '@/utils/official-venue-links';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { getPartnerTier } from '@/utils/partner-venues';
@@ -1017,13 +1018,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
       directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
   };
+  const menuOpeningRef = useRef(false);
   const openAiVenueMenu = async (venue: AiVenue) => {
-    if (!venue.id) return;
+    if (!venue.id || menuOpeningRef.current) return;
+    menuOpeningRef.current = true;
     try {
-      const response = await fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/links`);
-      if (!response.ok) throw new Error('Official menu lookup unavailable');
-      const links = await response.json() as { menuUrl?: string | null };
-      if (!links.menuUrl || !/^https?:\/\//i.test(links.menuUrl)) throw new Error('No verified menu link');
+      const links = await getOfficialVenueLinks(venue.id);
+      if (!links?.menuUrl) throw new Error('No verified menu link');
       const record = aiVenueToVenue(venue);
       if (!record) throw new Error('Venue unavailable');
       router.push({ pathname: '/venue/[id]/menu', params: { id: record.id, venueData: JSON.stringify(record), pageUrl: links.menuUrl } });
@@ -1031,6 +1032,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const record = aiVenueToVenue(venue);
       if (record) recordVenueActivity('menu_click', record);
       Alert.alert('Menu link unavailable', 'A correct official menu link could not be verified. No homepage or search link has been substituted.');
+    } finally {
+      menuOpeningRef.current = false;
     }
   };
 
@@ -1546,7 +1549,7 @@ function AiVenueCard({
                 <Text style={[styles.resultActionText, styles.embossedGoldText]}>Directions</Text>
               </Pressable>
             ) : null}
-            {venue.website || venue.menuLink ? (
+            {venue.id ? (
               <Pressable
                 accessibilityRole="button"
                 onPress={onMenu}

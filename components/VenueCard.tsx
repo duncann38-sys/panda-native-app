@@ -255,13 +255,14 @@ const styles = StyleSheet.create({
     zIndex: 12,
   },
   premiumBadgeStrong: {
-    borderWidth: 1.5,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    borderWidth: 1,
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3.5,
   },
   premiumTextStrong: {
-    fontSize: 9.5,
-    letterSpacing: 1.4,
+    fontSize: 9,
+    letterSpacing: 0.9,
   },
   premiumStar: {
     fontSize: 10,
