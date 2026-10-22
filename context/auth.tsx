@@ -274,6 +274,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signOut = useCallback(async () => {
     setError(null);
+    setReady(false);
     setAccount(null);
     sessionVersion.current++;
     listenerRef.current?.();
@@ -283,6 +284,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setError(authErrorMessage(signOutError));
     } finally {
       try { await removeStoredAccount(); } catch (failure) { setError(authErrorMessage(failure)); }
+      finally { setReady(true); }
     }
   }, []);
 
