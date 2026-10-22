@@ -1,9 +1,18 @@
-export type VenueActivityType = 'impression' | 'detail_open' | 'menu_click' | 'booking_click' | 'directions_click' | 'call_click';
+export type VenueActivityType = 'presentation' | 'impression' | 'detail_open' | 'menu_click' | 'booking_click' | 'directions_click' | 'call_click' | 'photo_click' | 'save_click';
 export type VenueActivitySurface = 'discovery' | 'banging' | 'panda_ai' | 'map' | 'planner' | 'saved';
-type ActivityVenue = { id: string; name: string };
-type ActivityEvent = { eventId: string; type: VenueActivityType; venueId: string; venue: string; ts: number; platform: 'native' | 'website'; surface?: VenueActivitySurface };
+export type VenueActivityContext = { surface?: VenueActivitySurface; placement?: 'suggestions' | 'promoted_discovery' | 'banging' | 'other' };
+export type ActivityVenue = { id: string; name: string; promoted?: boolean; premium?: boolean; activityContext?: VenueActivityContext };
+type ActivityEvent = { eventId: string; type: VenueActivityType; venueId: string; venue: string; ts: number; platform: 'native' | 'website'; surface?: VenueActivitySurface; placement?: VenueActivityContext['placement']; trackingVersion?: number };
+export type VenueActivityInput = { type: VenueActivityType; venue: ActivityVenue; context?: VenueActivityContext | VenueActivitySurface };
+export function venueActivityContext(venue: ActivityVenue, surface: VenueActivitySurface): VenueActivityContext {
+  return { surface, placement: surface === 'banging' ? 'banging' : surface === 'discovery'
+    ? venue.promoted || venue.premium ? 'promoted_discovery' : 'suggestions' : 'other' };
+}
+export function withVenueActivityContext<T extends ActivityVenue>(venue: T, surface: VenueActivitySurface) {
+  return { ...venue, activityContext: venueActivityContext(venue, surface) };
+}
 const KEY = 'panda_venue_activity_pending_v1';
-const TYPES = new Set<VenueActivityType>(['impression', 'detail_open', 'menu_click', 'booking_click', 'directions_click', 'call_click']);
+const TYPES = new Set<VenueActivityType>(['presentation', 'impression', 'detail_open', 'menu_click', 'booking_click', 'directions_click', 'call_click', 'photo_click', 'save_click']);
 function eventId() {
   return `panda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2).padEnd(13, '0')}-${Math.random().toString(36).slice(2).padEnd(13, '0')}`;
 }
@@ -70,18 +79,27 @@ export function createVenueActivityRecorder(options: {
     return result;
   }
   return {
-    record(type: VenueActivityType, venue: ActivityVenue, surface?: VenueActivitySurface) {
+    record(type: VenueActivityType, venue: ActivityVenue, context?: VenueActivityContext | VenueActivitySurface) {
       if (!venue.id || !TYPES.has(type)) return Promise.resolve();
       // Capture the tap time, not the later retry time.
       const event: ActivityEvent = {
         eventId: eventId(), type, venueId: venue.id, venue: venue.name, ts: Date.now(), platform: options.platform,
-        ...(surface ? { surface } : {}),
+        ...(typeof context === 'string' ? { surface: context } : context ?? venue.activityContext ?? {}),
+        trackingVersion: 2,
       };
       return run(async () => {
         await load();
         pending!.push(event);
         await persist();
       }).then(deliver);
+    },
+    recordBatch(inputs: VenueActivityInput[]) {
+      const events = inputs.filter(({ type, venue }) => venue.id && TYPES.has(type)).map(({ type, venue, context }) => ({
+        eventId: eventId(), type, venueId: venue.id, venue: venue.name, ts: Date.now(), platform: options.platform,
+        ...(typeof context === 'string' ? { surface: context } : context ?? venue.activityContext ?? {}), trackingVersion: 2,
+      }));
+      if (!events.length) return Promise.resolve();
+      return run(async () => { await load(); pending!.push(...events); await persist(); }).then(deliver);
     },
     flush: () => run(load).then(deliver),
   };

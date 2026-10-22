@@ -3,6 +3,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { venueCardPalette } from '@/constants/venue-card-design';
 
@@ -80,7 +81,7 @@ export function VenueCard({
             accessibilityLabel={saved ? `Remove ${venue.name} from saved venues` : `Save ${venue.name}`}
             accessibilityRole="button"
             hitSlop={10}
-            onPress={onToggleSaved}
+            onPress={() => { recordVenueActivity('save_click', venue, presentation === 'banging' ? 'banging' : undefined); onToggleSaved(); }}
             style={({ pressed }) => [styles.heartButton, pressed && styles.iconPressed]}
           >
             <Ionicons
@@ -95,7 +96,7 @@ export function VenueCard({
             testID={`view-photos-${venue.id}`}
             accessibilityLabel={`View albums of ${venue.name}`}
             accessibilityRole="button"
-            onPress={onPress}
+            onPress={() => { recordVenueActivity('photo_click', venue, presentation === 'banging' ? 'banging' : undefined); onPress(); }}
             style={({ pressed }) => [
               styles.photoAction,
               { backgroundColor: colors.photoOverlay },

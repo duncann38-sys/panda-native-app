@@ -19,6 +19,7 @@ import { VenueCard } from '@/components/VenueCard';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
+import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
 const DRAWER_OPEN_HEIGHT = 272;
 const DRAWER_CLOSED_HEIGHT = 44;
@@ -45,6 +46,7 @@ export function BangingDrawer({
   const { width } = useWindowDimensions();
   const [open, setOpen] = useState(false);
   const bangingImpressions = useVenueImpressions('banging', open);
+  const bangingViewabilityPairs = useRef([bangingImpressions.presentationPair, bangingImpressions]).current;
   const [carouselVisible, setCarouselVisible] = useState(false);
   const [photoInteracting, setPhotoInteracting] = useState(false);
   const translateY = useRef(new Animated.Value(DRAWER_CLOSED_OFFSET)).current;
@@ -165,7 +167,7 @@ export function BangingDrawer({
       </Pressable>
       <View style={styles.carouselViewport}>
         {carouselVisible ? <FlatList
-          {...bangingImpressions}
+          viewabilityConfigCallbackPairs={bangingViewabilityPairs}
           data={bangingVenues}
           horizontal
           nestedScrollEnabled
@@ -190,7 +192,7 @@ export function BangingDrawer({
                 venue={venue}
                 saved={isSaved(venue.id)}
                 onToggleSaved={() => onToggleSaved(venue)}
-                onPress={() => onPress(venue)}
+                onPress={() => onPress(withVenueActivityContext(venue, 'banging'))}
                 compact
                 presentation="banging"
                 onPhotoInteraction={setPhotoInteracting}

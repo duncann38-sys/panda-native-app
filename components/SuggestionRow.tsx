@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import type { Venue } from '@/data/venues';
+import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { useColors } from '@/hooks/useColors';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 import { DiscoverVenueCard } from '@/components/DiscoverVenueCard';
@@ -162,7 +163,7 @@ export function SuggestionRow({
     venue={{ ...card, name: cardTitle }}
     saved={saved}
     onPress={onPress}
-    onToggleSaved={onToggleSaved}
+    onToggleSaved={() => { recordVenueActivity('save_click', venue, 'discovery'); onToggleSaved(); }}
     warning={profileFailureMessage}
   />;
 }

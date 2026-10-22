@@ -489,6 +489,7 @@ export default function VenueDetailScreen() {
   };
 
   const openGallery = () => {
+    recordVenueActivity('photo_click', venue);
     setGalleryActive(heroActive);
     setGalleryOpen(true);
   };

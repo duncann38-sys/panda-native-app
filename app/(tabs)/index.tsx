@@ -37,7 +37,7 @@ import { useSavedVenues } from '@/context/saved-venues';
 import { venues, type Venue } from '@/data/venues';
 import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
-import { recordVenueActivity } from '@/utils/record-venue-activity';
+import { recordVenueActivity, withVenueActivityContext } from '@/utils/record-venue-activity';
 import { loadProgressiveDiscovery } from '@/utils/discovery-loading';
 import {
   advanceLiveSearchCursor,
@@ -791,6 +791,7 @@ export default function DiscoverScreen() {
   // Keep the existing 10% hydration prefetch separate from 50%/600ms impressions.
   const viewabilityPairs = useRef([
     { viewabilityConfig, onViewableItemsChanged },
+    discoveryImpressions.presentationPair,
     discoveryImpressions,
   ]).current;
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
@@ -1598,7 +1599,7 @@ export default function DiscoverScreen() {
                   pathname: '/venue/[id]',
                   params: {
                     id: item.id,
-                    venueData: JSON.stringify(item),
+                    venueData: JSON.stringify(withVenueActivityContext(item, 'discovery')),
                     plannerLocation: liveArea,
                   },
                 });
