@@ -21,6 +21,7 @@ import {
 import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BangingDrawer } from '@/components/BangingDrawer';
+import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { FilterDropdown } from '@/components/FilterDropdown';
 import { PandaPlannerSheet, type PlannerMode, venueFromSearchResult } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
@@ -710,6 +711,8 @@ function liveVenueFromResult(
 }
 
 export default function DiscoverScreen() {
+  const [bangingIsOpen, setBangingIsOpen] = useState(false);
+  const discoveryImpressions = useVenueImpressions('discovery', !bangingIsOpen);
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
@@ -785,6 +788,11 @@ export default function DiscoverScreen() {
     setVisibleVenueIds(previous => previous.size === next.size
       && [...next].every(id => previous.has(id)) ? previous : next);
   }).current;
+  // Keep the existing 10% hydration prefetch separate from 50%/600ms impressions.
+  const viewabilityPairs = useRef([
+    { viewabilityConfig, onViewableItemsChanged },
+    discoveryImpressions,
+  ]).current;
   const loadedCategories = useRef(new Set<DiscoveryCategory>());
   const indexedFeedCursors = useRef(new Map<TopCategory, string | null>());
   const indexedFeedExhausted = useRef(new Set<TopCategory>());
@@ -1471,8 +1479,7 @@ export default function DiscoverScreen() {
         keyExtractor={(item) => item.id}
         numColumns={1}
         showsVerticalScrollIndicator={false}
-        viewabilityConfig={viewabilityConfig}
-        onViewableItemsChanged={onViewableItemsChanged}
+        viewabilityConfigCallbackPairs={viewabilityPairs}
         onEndReached={() => void loadMoreFeed()}
         onEndReachedThreshold={0.8}
         refreshControl={
@@ -1662,6 +1669,7 @@ export default function DiscoverScreen() {
         }
       />
       <BangingDrawer
+        onOpenChange={setBangingIsOpen}
         status={bangingStatus}
         venues={bangingVenues}
         isSaved={isSaved}

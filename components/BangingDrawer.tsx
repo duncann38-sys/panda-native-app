@@ -18,6 +18,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenueCard } from '@/components/VenueCard';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 
 const DRAWER_OPEN_HEIGHT = 272;
 const DRAWER_CLOSED_HEIGHT = 44;
@@ -29,18 +30,21 @@ export function BangingDrawer({
   isSaved,
   onToggleSaved,
   onPress,
+  onOpenChange,
 }: {
   venues: Venue[];
   status?: string;
   isSaved: (id: string) => boolean;
   onToggleSaved: (venue: Venue) => void;
   onPress: (venue: Venue) => void;
+  onOpenChange?: (open: boolean) => void;
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const androidBottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0;
   const { width } = useWindowDimensions();
   const [open, setOpen] = useState(false);
+  const bangingImpressions = useVenueImpressions('banging', open);
   const [carouselVisible, setCarouselVisible] = useState(false);
   const [photoInteracting, setPhotoInteracting] = useState(false);
   const translateY = useRef(new Animated.Value(DRAWER_CLOSED_OFFSET)).current;
@@ -59,6 +63,7 @@ export function BangingDrawer({
       const nextOffset = nextOpen ? 0 : DRAWER_CLOSED_OFFSET;
       settledOffset.current = nextOffset;
       setOpen(nextOpen);
+      onOpenChange?.(nextOpen);
       if (nextOpen) setCarouselVisible(true);
       setPhotoInteracting(false);
       Animated.spring(translateY, {
@@ -71,7 +76,7 @@ export function BangingDrawer({
         if (finished && !nextOpen) setCarouselVisible(false);
       });
     },
-    [translateY],
+    [translateY, onOpenChange],
   );
 
   const panResponder = useMemo(
@@ -160,6 +165,7 @@ export function BangingDrawer({
       </Pressable>
       <View style={styles.carouselViewport}>
         {carouselVisible ? <FlatList
+          {...bangingImpressions}
           data={bangingVenues}
           horizontal
           nestedScrollEnabled

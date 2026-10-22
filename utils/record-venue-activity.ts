@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AppState, Platform } from 'react-native';
 import { PANDA_PARTNER_ACTIVITY_API } from '@/constants/services';
-import { createVenueActivityRecorder, type VenueActivityType } from './venue-activity';
+import { createVenueActivityRecorder, type VenueActivityType, type VenueActivitySurface } from './venue-activity';
 
 const recorder = createVenueActivityRecorder({
   endpoint: `${PANDA_PARTNER_ACTIVITY_API}/api/track`,
@@ -11,8 +11,8 @@ const recorder = createVenueActivityRecorder({
 });
 const report = (error: unknown) => console.warn('Venue activity remains pending for retry:', error);
 
-export function recordVenueActivity(type: VenueActivityType, venue: { id: string; name: string }) {
-  void recorder.record(type, venue).catch(report);
+export function recordVenueActivity(type: VenueActivityType, venue: { id: string; name: string }, surface?: VenueActivitySurface) {
+  void recorder.record(type, venue, surface).catch(report);
 }
 
 export function startVenueActivityDelivery() {

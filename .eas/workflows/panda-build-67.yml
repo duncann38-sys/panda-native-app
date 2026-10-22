@@ -1,0 +1,13 @@
+name: Panda Android Build 67 - Partner exposure analytics
+on:
+  push:
+    branches:
+      - panda-build-67-partner-analytics
+  workflow_dispatch: {}
+jobs:
+  build_android_preview:
+    name: Panda Android APK 67
+    type: build
+    params:
+      platform: android
+      profile: preview
