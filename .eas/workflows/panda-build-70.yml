@@ -1,0 +1,12 @@
+name: Panda Android 70 - Required Google Sign-in and Profile Navigation
+on:
+  push:
+    branches:
+      - panda-build-70-required-signin
+jobs:
+  build_android:
+    name: Build Android preview
+    type: build
+    params:
+      platform: android
+      profile: preview

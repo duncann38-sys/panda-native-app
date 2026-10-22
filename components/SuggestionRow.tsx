@@ -87,12 +87,14 @@ export function SuggestionRow({
   isVisible = true,
   onPress,
   onToggleSaved,
+  activitySurface = 'discovery',
 }: {
   venue: Venue;
   saved: boolean;
   isVisible?: boolean;
   onPress: () => void;
   onToggleSaved: () => void;
+  activitySurface?: 'discovery' | 'saved';
 }) {
   const colors = useColors();
   const [hydratedVenue, setHydratedVenue] = useState<Venue | null>(null);
@@ -163,7 +165,7 @@ export function SuggestionRow({
     venue={{ ...card, name: cardTitle }}
     saved={saved}
     onPress={onPress}
-    onToggleSaved={() => { recordVenueActivity('save_click', venue, 'discovery'); onToggleSaved(); }}
+    onToggleSaved={() => { recordVenueActivity('save_click', venue, activitySurface); onToggleSaved(); }}
     warning={profileFailureMessage}
   />;
 }

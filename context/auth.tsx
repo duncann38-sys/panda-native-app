@@ -17,6 +17,7 @@ import { getApp, getApps, initializeApp, type FirebaseOptions } from 'firebase/a
 import { Platform } from 'react-native';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { PANDA_PARTNER_ACTIVITY_API } from '@/constants/services';
+import { restoreVerifiedPandaAccount } from '@/utils/auth-access';
 
 export type PandaAuthProvider = 'Google' | 'Apple';
 
@@ -167,33 +168,38 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [signingIn, setSigningIn] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const authRef = useRef<Auth | null>(null);
+  const listenerRef = useRef<(() => void) | null>(null);
+  const sessionVersion = useRef(0);
+  const signInPending = useRef(false);
+  const observeSession = useCallback((auth: Auth, uid: string) => {
+    listenerRef.current?.();
+    const version = ++sessionVersion.current;
+    listenerRef.current = onAuthStateChanged(auth, (user) => {
+      if (version !== sessionVersion.current) return;
+      if (!user || user.uid !== uid) {
+        setAccount(null);
+        void removeStoredAccount().catch((failure) => setError(authErrorMessage(failure)));
+      }
+    });
+  }, []);
 
   useEffect(() => {
     let active = true;
-    let unsubscribe: (() => void) | undefined;
     async function restoreSavedSession() {
       const saved = await readAccount();
       if (!active) return;
-      setAccount(saved);
-      setReady(true);
-      if (!saved) return;
+      if (!saved) { setReady(true); return; }
       try {
         const auth = await getNativeFirebaseAuth(await readFirebaseConfig());
         authRef.current = auth;
-        if (typeof auth.authStateReady === 'function') await auth.authStateReady();
+        const verified = await restoreVerifiedPandaAccount(saved, auth, removeStoredAccount);
         if (!active) return;
-        if (!auth.currentUser) {
-          await removeStoredAccount();
-          setAccount(null);
-          return;
-        }
-        unsubscribe = onAuthStateChanged(auth, (user) => {
-          if (!user) {
-            void removeStoredAccount().then(() => { if (active) setAccount(null); });
-          }
-        });
+        setAccount(verified);
+        if (verified) observeSession(auth, verified.uid);
       } catch (restoreError) {
-        if (active) setError(authErrorMessage(restoreError));
+        if (active) { setAccount(null); setError(authErrorMessage(restoreError)); }
+      } finally {
+        if (active) setReady(true);
       }
     }
     void restoreSavedSession().catch((restoreError) => {
@@ -202,12 +208,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     });
     return () => {
       active = false;
-      unsubscribe?.();
+      sessionVersion.current++;
+      listenerRef.current?.();
     };
-  }, []);
+  }, [observeSession]);
 
   const signIn = useCallback(async (provider: PandaAuthProvider): Promise<boolean> => {
-    if (signingIn) return false;
+    if (signInPending.current) return false;
+    signInPending.current = true;
     setSigningIn(true);
     setError(null);
     try {
@@ -244,28 +252,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       const firebaseAuth = await getNativeFirebaseAuth(await readFirebaseConfig());
       authRef.current = firebaseAuth;
-      await signInWithCustomToken(firebaseAuth, exchange.customToken);
+      sessionVersion.current++;
+      listenerRef.current?.();
+      const credential = await signInWithCustomToken(firebaseAuth, exchange.customToken);
       const verifiedAccount = exchange.user as PandaAccount;
+      if (!verifiedAccount.uid || credential.user.uid !== verifiedAccount.uid || verifiedAccount.provider !== provider) {
+        throw new Error('Panda could not verify that Google account. Please try again.');
+      }
       await writeAccount(verifiedAccount);
+      observeSession(firebaseAuth, verifiedAccount.uid);
       setAccount(verifiedAccount);
       return true;
     } catch (signInError) {
       setError(authErrorMessage(signInError));
       return false;
     } finally {
+      signInPending.current = false;
       setSigningIn(false);
     }
-  }, [signingIn]);
+  }, [signingIn, observeSession]);
 
   const signOut = useCallback(async () => {
     setError(null);
+    setAccount(null);
+    sessionVersion.current++;
+    listenerRef.current?.();
     try {
       if (authRef.current) await firebaseSignOut(authRef.current);
     } catch (signOutError) {
       setError(authErrorMessage(signOutError));
     } finally {
-      await removeStoredAccount();
-      setAccount(null);
+      try { await removeStoredAccount(); } catch (failure) { setError(authErrorMessage(failure)); }
     }
   }, []);
 

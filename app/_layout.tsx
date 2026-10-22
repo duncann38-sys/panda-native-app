@@ -16,7 +16,8 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
 import { SavedVenuesProvider } from '@/context/saved-venues';
-import { AuthProvider } from '@/context/auth';
+import { AuthProvider, useAuth } from '@/context/auth';
+import { canEnterPanda } from '@/utils/auth-access';
 import { useColors } from '@/hooks/useColors';
 import { startVenueActivityDelivery } from '@/utils/record-venue-activity';
 
@@ -26,9 +27,15 @@ SplashScreen.preventAutoHideAsync();
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
+  const { ready, account } = useAuth();
+  const allowed = canEnterPanda(ready, account);
   const colors = useColors();
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
+      <Stack.Protected guard={!allowed}>
+        <Stack.Screen name="sign-in" options={{ headerShown: false }} />
+      </Stack.Protected>
+      <Stack.Protected guard={allowed}>
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
       <Stack.Screen
         name="venue/[id]"
@@ -43,8 +50,16 @@ function RootLayoutNav() {
       <Stack.Screen name="venue/[id]/menu" options={{ headerShown: false }} />
       <Stack.Screen name="venue/[id]/reservation" options={{ headerShown: false }} />
       <Stack.Screen name="ai" options={{ headerShown: false }} />
+      </Stack.Protected>
+      <Stack.Screen name="auth" options={{ headerShown: false }} />
     </Stack>
   );
+}
+
+function AuthenticatedVenueProviders({ children }: { children: React.ReactNode }) {
+  const { ready, account } = useAuth();
+  if (!canEnterPanda(ready, account)) return <>{children}</>;
+  return <LiveVenuesProvider><SavedVenuesProvider>{children}</SavedVenuesProvider></LiveVenuesProvider>;
 }
 
 export default function RootLayout() {
@@ -72,12 +87,10 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
-                <LiveVenuesProvider>
-                  <SavedVenuesProvider>
+                <AuthenticatedVenueProviders>
                     <StatusBar style="light" backgroundColor={colors.green800} />
                     <RootLayoutNav />
-                  </SavedVenuesProvider>
-                </LiveVenuesProvider>
+                </AuthenticatedVenueProviders>
               </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>

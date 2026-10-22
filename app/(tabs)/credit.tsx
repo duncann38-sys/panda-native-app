@@ -6,6 +6,7 @@ import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View
 import { WebView } from 'react-native-webview';
 import { PandaLogo } from '@/components/PandaLogo';
 import { useColors } from '@/hooks/useColors';
+import { ProfileBackButton } from '@/components/ProfileBackButton';
 
 const creditAmount = 1000;
 const flatRate = 0.12;
@@ -33,7 +34,7 @@ export default function CreditScreen() {
         contentContainerStyle={{
           paddingBottom: 120,
           paddingHorizontal: 18,
-          paddingTop: dashboardTopPadding + 191,
+          paddingTop: dashboardTopPadding + 239,
         }}
         showsVerticalScrollIndicator={false}
       >
@@ -157,6 +158,7 @@ export default function CreditScreen() {
           { backgroundColor: colors.background, paddingTop: dashboardTopPadding },
         ]}
       >
+        <ProfileBackButton />
         <Text style={[styles.eyebrow, { color: colors.green700 }]}>PANDA CREDIT</Text>
         <Text style={[styles.title, { color: colors.foreground }]}>Your credit</Text>
         <View style={[styles.balanceCard, { backgroundColor: colors.green800 }]}>

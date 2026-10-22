@@ -187,10 +187,10 @@ const VenuePhotoMedia = memo(function VenuePhotoMedia({
                 }
                 setGalleryIndex(index);
               }} style={{ height, width: width || 1 }}>
-              {failedPhotos[item.uri] ? <View style={{ height, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.secondary, padding: 20 }}>
-                <MaterialCommunityIcons name="image-off-outline" size={28} color={colors.green700} />
-                <Text style={{ marginTop: 8, color: colors.foreground, textAlign: 'center' }}>Photo temporarily unavailable</Text>
-                <Text style={{ marginTop: 6, color: colors.mutedForeground, textAlign: 'center' }}>{retryReady ? 'Tap to retry' : 'Please try again shortly'}</Text>
+              {failedPhotos[item.uri] ? <View style={{ height, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.secondary, padding: height < 100 ? 6 : 20 }}>
+                <MaterialCommunityIcons name="image-off-outline" size={height < 100 ? 20 : 28} color={colors.green700} />
+                <Text style={{ marginTop: height < 100 ? 3 : 8, fontSize: height < 100 ? 10 : 14, color: colors.foreground, textAlign: 'center' }}>{height < 100 ? 'Photo unavailable' : 'Photo temporarily unavailable'}</Text>
+                {height >= 100 ? <Text style={{ marginTop: 6, color: colors.mutedForeground, textAlign: 'center' }}>{retryReady ? 'Tap to retry' : 'Please try again shortly'}</Text> : null}
               </View> : Math.abs(index - page) <= 1 ? <Image
                 source={{
                   uri: index === 0 && coverFallbackIndex > 0

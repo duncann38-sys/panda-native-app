@@ -104,9 +104,7 @@ export default function ProfileScreen() {
       setAuthSheetOpen(true);
       return;
     }
-    const url = account.provider === 'Apple'
-      ? 'https://account.apple.com/'
-      : 'https://myaccount.google.com/security';
+    const url = `https://myaccount.google.com/security?authuser=${encodeURIComponent(account.email)}`;
     try {
       await Linking.openURL(url);
     } catch {
@@ -189,7 +187,7 @@ export default function ProfileScreen() {
       setAuthSheetOpen(true);
       return;
     }
-    Alert.alert('Sign out of Panda?', 'You can sign back in with your Google or Apple account.', [
+    Alert.alert('Sign out of Panda?', 'You will need your Google account to use Panda again.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Sign out', style: 'destructive', onPress: () => { void signOut(); } },
     ]);
@@ -206,7 +204,8 @@ export default function ProfileScreen() {
       setAuthSheetOpen(true);
       return;
     }
-    Alert.alert('Panda account', `${account.name}\n${account.email}\nVerified with ${account.provider}.`);
+    void Linking.openURL(`https://myaccount.google.com/?authuser=${encodeURIComponent(account.email)}`)
+      .catch(() => Alert.alert('Could not open your Google account', 'Please check your connection and try again.'));
   };
   const profileName = profilePreferences.displayName || account?.name || '';
   const firstName = profileName.trim().split(/\s+/)[0] || 'there';
@@ -262,14 +261,14 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="user"
             title="Account details"
-            subtitle={account ? `${account.name} · ${account.provider}` : 'Optional Google or Apple sign-in'}
+            subtitle={account ? `${account.email} · Google account` : 'Google sign-in required'}
             colors={colors}
             onPress={showAccountDetails}
           />
           <ProfileMenuRow
             icon="lock"
             title="Password & security"
-            subtitle="Sign-in, password and security"
+            subtitle="Manage your Google account security"
             colors={colors}
             onPress={showPasswordSettings}
           />
@@ -334,12 +333,12 @@ export default function ProfileScreen() {
               {profileName || 'Discover as a guest'}
             </Text>
             <Text style={[styles.email, { color: colors.mutedForeground }]}>
-              {account?.email || 'Sign in to connect your Panda account'}
+                {account?.email || 'Sign in with Google to use Panda'}
             </Text>
             <View style={[styles.memberPill, { backgroundColor: colors.secondary }]}>
               <Ionicons name="checkmark-circle" size={13} color={colors.green700} />
               <Text style={[styles.memberPillText, { color: colors.green700 }]}>
-                {account ? `Verified ${account.provider} account` : 'Guest browsing · sign-in optional'}
+                {account ? `Verified ${account.provider} account` : 'Google sign-in required'}
               </Text>
             </View>
           </View>
@@ -539,7 +538,7 @@ function AuthSheet({
             <View>
               <Text style={[styles.settingsTitle, { color: colors.foreground }]}>Sign in to Panda</Text>
               <Text style={[styles.settingsSubtitle, { color: colors.mutedForeground }]}>
-                Browsing stays open either way.
+                Sign in with Google to use Panda.
               </Text>
             </View>
             <Pressable
@@ -566,23 +565,6 @@ function AuthSheet({
           >
             <Text style={styles.googleMark}>G</Text>
             <Text style={styles.authButtonText}>{signingIn ? 'Connecting securely…' : 'Continue with Google'}</Text>
-          </Pressable>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Continue with Apple"
-            disabled={signingIn}
-            onPress={() => { void onSignIn('Apple'); }}
-            style={({ pressed }) => [
-              styles.authButton,
-              { backgroundColor: colors.card, borderColor: colors.border, borderWidth: 1 },
-              pressed && styles.pressed,
-              signingIn && { opacity: 0.65 },
-            ]}
-          >
-            <Ionicons name="logo-apple" size={19} color={colors.foreground} />
-            <Text style={[styles.authButtonText, { color: colors.foreground }]}>
-              {signingIn ? 'Connecting securely…' : 'Continue with Apple'}
-            </Text>
           </Pressable>
           {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
           <Text style={[styles.authFootnote, { color: colors.mutedForeground }]}>

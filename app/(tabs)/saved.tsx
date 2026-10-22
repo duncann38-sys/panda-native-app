@@ -4,7 +4,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaMark } from '@/components/PandaMark';
-import { VenueCard } from '@/components/VenueCard';
+import { SuggestionRow } from '@/components/SuggestionRow';
+import { ProfileBackButton } from '@/components/ProfileBackButton';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useSavedVenues } from '@/context/saved-venues';
 import type { Venue } from '@/data/venues';
@@ -136,6 +137,7 @@ export default function SavedScreen() {
         ]}
         ListHeaderComponent={
           <View style={styles.header}>
+            <ProfileBackButton />
             <PandaMark compact />
             <Text style={[styles.title, { color: colors.foreground }]}>Saved places</Text>
             <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
@@ -145,13 +147,14 @@ export default function SavedScreen() {
         }
         renderItem={({ item }) => (
           <View style={styles.item}>
-            <VenueCard
+            <SuggestionRow
               venue={item}
+              activitySurface="saved"
               saved={isSaved(item.id)}
               onToggleSaved={() => toggleSaved(item)}
               onPress={() => router.push({
                 pathname: '/venue/[id]',
-                params: { id: item.id, venueData: JSON.stringify(item) },
+                params: { id: item.id, venueData: JSON.stringify({ ...item, activityContext: { surface: 'saved', placement: 'other' } }) },
               })}
             />
           </View>
