@@ -219,6 +219,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSigningIn(true);
     setError(null);
     try {
+      // Verify the native Auth runtime before sending the user to Google.
+      const firebaseAuth = await getNativeFirebaseAuth(await readFirebaseConfig());
+      authRef.current = firebaseAuth;
       const state = await randomHex(32);
       const verifier = await randomHex(32);
       const challenge = await sha256Hex(verifier);
@@ -250,8 +253,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         (failure as Error & { code?: string }).code = exchange.error;
         throw failure;
       }
-      const firebaseAuth = await getNativeFirebaseAuth(await readFirebaseConfig());
-      authRef.current = firebaseAuth;
       sessionVersion.current++;
       listenerRef.current?.();
       const credential = await signInWithCustomToken(firebaseAuth, exchange.customToken);

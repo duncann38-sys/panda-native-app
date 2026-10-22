@@ -1,0 +1,12 @@
+name: Panda Android 71 - Firebase Registry and Single Sign-in
+on:
+  push:
+    branches:
+      - panda-build-71-single-signin
+jobs:
+  build_android:
+    name: Build Android preview
+    type: build
+    params:
+      platform: android
+      profile: preview
