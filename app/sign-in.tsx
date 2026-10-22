@@ -1,13 +1,11 @@
 import { useEffect, useRef } from 'react';
-import { ActivityIndicator, Linking, Pressable, Text, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { PandaMark } from '@/components/PandaMark';
+import { Pressable, Text, View } from 'react-native';
+import { AuthWelcome, LoadingDots } from '@/components/AuthWelcome';
 import { useAuth } from '@/context/auth';
 import { useColors } from '@/hooks/useColors';
 
 export default function GoogleSignInScreen() {
-  const colors = useColors();
-  const insets = useSafeAreaInsets();
+  const colors = useColors('light');
   const { ready, signingIn, error, signIn } = useAuth();
   const started = useRef(false);
   const signInRef = useRef(signIn);
@@ -20,39 +18,37 @@ export default function GoogleSignInScreen() {
   }, [ready, signingIn, error]);
 
   const busy = !ready || signingIn || (!started.current && !error);
-  const status = !ready ? 'Checking your sign-in…' : 'Opening Google sign-in…';
+
+  if (busy) {
+    const status = !ready ? 'Checking your sign-in' : 'Opening secure Google sign-in';
+    return (
+      <AuthWelcome eyebrow="YOUR ACCOUNT, SECURELY" message={`${status}. Your discovery is waiting.`}>
+        <LoadingDots label={status} />
+      </AuthWelcome>
+    );
+  }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#DDF0DE', paddingHorizontal: 28, paddingTop: insets.top + 24, paddingBottom: insets.bottom + 24, alignItems: 'center', justifyContent: 'center' }}>
-      <PandaMark compact />
-      {busy ? (
-        <View accessibilityRole="progressbar" accessibilityLabel={status} accessibilityState={{ busy: true }}
-          style={{ marginTop: 36, alignItems: 'center', gap: 14 }}>
-          <ActivityIndicator color={colors.green700} />
-          <Text accessibilityLiveRegion="polite" style={{ color: colors.foreground, fontFamily: 'Inter_700Bold', fontSize: 16 }}>{status}</Text>
-          <Text style={{ color: colors.mutedForeground, fontSize: 14, lineHeight: 21, textAlign: 'center', maxWidth: 280 }}>
-            Your secure Panda sign-in will open in a moment.
-          </Text>
+    <AuthWelcome eyebrow="YOUR ACCOUNT, SECURELY"
+      message={error ? 'We could not finish signing you in. You can try again below.' : 'Continue with Google to pick up where you left off.'}>
+      {error ? (
+        <View accessibilityRole="alert" style={{ alignSelf: 'stretch', marginBottom: 14, padding: 14, borderRadius: 14, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }}>
+          <Text style={{ color: colors.destructive, fontFamily: 'Inter_500Medium', fontSize: 14, lineHeight: 20, textAlign: 'center' }}>{error}</Text>
         </View>
-      ) : (
-        <View style={{ marginTop: 36, alignItems: 'center', gap: 14, width: '100%', maxWidth: 340 }}>
-          <Text style={{ color: colors.foreground, fontFamily: 'Inter_700Bold', fontSize: 17, textAlign: 'center' }}>
-            Sign-in wasn't completed
-          </Text>
-          {error ? (
-            <Text accessibilityRole="alert" style={{ color: colors.destructive, fontSize: 14, lineHeight: 21, textAlign: 'center' }}>{error}</Text>
-          ) : null}
-          <Pressable accessibilityRole="button" accessibilityLabel="Open Google sign-in again"
-            onPress={() => { void signIn('Google'); }}
-            style={({ pressed }) => ({ marginTop: 6, minHeight: 52, alignSelf: 'stretch', backgroundColor: colors.green800, borderRadius: 16, alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.75 : 1 })}>
-            <Text style={{ color: '#FFFFFF', fontFamily: 'Inter_700Bold', fontSize: 15 }}>Try Google sign-in again</Text>
-          </Pressable>
+      ) : null}
+      <Pressable accessibilityRole="button" accessibilityLabel="Continue with Google" testID="google-continue"
+        onPress={() => { void signIn('Google'); }}
+        style={({ pressed }) => ({ minHeight: 58, alignSelf: 'stretch', flexDirection: 'row', gap: 12, backgroundColor: colors.green800, borderRadius: 16,
+          alignItems: 'center', justifyContent: 'center', opacity: pressed ? 0.85 : 1, transform: [{ scale: pressed ? 0.98 : 1 }],
+          shadowColor: colors.green950, shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 4 })}>
+        <View style={{ width: 26, height: 26, borderRadius: 8, backgroundColor: colors.card, alignItems: 'center', justifyContent: 'center' }}>
+          <Text style={{ color: '#4285F4', fontFamily: 'Inter_700Bold', fontSize: 16 }}>G</Text>
         </View>
-      )}
-      <Pressable accessibilityRole="link" onPress={() => { void Linking.openURL('https://www.pandaindustry.co/legal/#privacy'); }}
-        style={{ marginTop: 28, padding: 12 }}>
-        <Text style={{ color: colors.green700, textDecorationLine: 'underline', fontSize: 13 }}>Privacy and terms</Text>
+        <Text style={{ color: colors.card, fontFamily: 'Inter_700Bold', fontSize: 16 }}>Continue with Google</Text>
       </Pressable>
-    </View>
+      <Text style={{ marginTop: 14, color: colors.mutedForeground, fontSize: 12, textAlign: 'center' }}>
+        Your password is never shared with Panda.
+      </Text>
+    </AuthWelcome>
   );
 }
