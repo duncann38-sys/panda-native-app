@@ -3,9 +3,10 @@ import { useRouter } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import * as SecureStore from 'expo-secure-store';
+import * as FileSystem from 'expo-file-system/legacy';
 import { Alert, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth, type PandaAuthProvider } from '@/context/auth';
@@ -13,30 +14,27 @@ import { useSavedVenues } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
 import {
   DEFAULT_PROFILE_PREFERENCES,
+  createProfilePreferenceStorage,
   formatDateOfBirthInput,
   parseProfilePreferences,
   profilePreferencesStorageKey,
   validateDateOfBirth,
   type ProfilePreferences,
 } from '@/utils/profile-preferences';
+import { persistProfileAvatar, removeProfileAvatar } from '@/utils/profile-avatar';
 
 const PROFILE_BACKGROUND = '#DDF0DE';
 type FeatherName = keyof typeof Feather.glyphMap;
 type ProfileIconTone = { background: string; foreground: string };
 
-async function getProfilePreferenceValue(key: string): Promise<string | null> {
-  return Platform.OS === 'web'
-    ? AsyncStorage.getItem(key)
-    : SecureStore.getItemAsync(key);
-}
-
-async function setProfilePreferenceValue(key: string, value: string): Promise<void> {
-  if (Platform.OS === 'web') {
-    await AsyncStorage.setItem(key, value);
-    return;
-  }
-  await SecureStore.setItemAsync(key, value);
-}
+const profileStore = createProfilePreferenceStorage(
+  Platform.OS === 'web' ? AsyncStorage : {
+    getItem: SecureStore.getItemAsync,
+    setItem: SecureStore.setItemAsync,
+  },
+  AsyncStorage,
+  Platform.OS !== 'web',
+);
 
 const PROFILE_ICON_TONES: Partial<Record<FeatherName, ProfileIconTone>> = {
   bookmark: { background: '#F9E5B8', foreground: '#7B5416' },
@@ -62,12 +60,14 @@ export default function ProfileScreen() {
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
+  const ownerKey = useRef(preferencesKey);
+  ownerKey.current = preferencesKey;
 
   useEffect(() => {
     let active = true;
     setProfilePreferences({ ...DEFAULT_PROFILE_PREFERENCES });
     setProfilePreferencesReady(false);
-    getProfilePreferenceValue(preferencesKey)
+    profileStore.read(account?.uid)
       .then((stored) => {
         if (active) setProfilePreferences(parseProfilePreferences(stored));
       })
@@ -122,13 +122,12 @@ export default function ProfileScreen() {
     }
     setProfileSaveError(null);
     setSavingProfile(true);
-    const next: ProfilePreferences = {
-      ...profilePreferences,
-      displayName: displayName.trim().slice(0, 60),
-      dateOfBirth: dateOfBirth.trim(),
-    };
     try {
-      await setProfilePreferenceValue(preferencesKey, JSON.stringify(next));
+      const next = await profileStore.update(account?.uid, {
+        displayName: displayName.trim().slice(0, 60),
+        dateOfBirth: dateOfBirth.trim(),
+      });
+      if (ownerKey.current !== preferencesKey) return;
       setProfilePreferences(next);
       setProfileEditOpen(false);
     } catch {
@@ -139,9 +138,9 @@ export default function ProfileScreen() {
   };
 
   const handleNotificationsChange = async (enabled: boolean) => {
-    const next = { ...profilePreferences, notificationsEnabled: enabled };
     try {
-      await setProfilePreferenceValue(preferencesKey, JSON.stringify(next));
+      const next = await profileStore.update(account?.uid, { notificationsEnabled: enabled });
+      if (ownerKey.current !== preferencesKey) return;
       setProfilePreferences(next);
     } catch {
       Alert.alert('Setting not saved', 'Your notification preference could not be saved on this device.');
@@ -149,6 +148,8 @@ export default function ProfileScreen() {
   };
 
   const handleChangePhoto = async () => {
+    let copiedUri: string | null = null;
+    let committed = false;
     try {
       if (Platform.OS !== 'web') {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -162,14 +163,22 @@ export default function ProfileScreen() {
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.75,
+        base64: Platform.OS === 'web',
       });
       const avatarUri = result.canceled ? null : result.assets[0]?.uri;
       if (!avatarUri) return;
 
-      const next = { ...profilePreferences, avatarUri };
-      await setProfilePreferenceValue(preferencesKey, JSON.stringify(next));
+      const asset = result.assets![0];
+      copiedUri = Platform.OS === 'web'
+        ? (asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : avatarUri)
+        : await persistProfileAvatar(avatarUri, FileSystem);
+      const next = await profileStore.update(account?.uid, { avatarUri: copiedUri });
+      committed = true;
+      if (Platform.OS !== 'web') await removeProfileAvatar(profilePreferences.avatarUri, FileSystem).catch(() => {});
+      if (ownerKey.current !== preferencesKey) return;
       setProfilePreferences(next);
     } catch {
+      if (copiedUri && !committed && Platform.OS !== 'web') await removeProfileAvatar(copiedUri, FileSystem).catch(() => {});
       Alert.alert('Photo not updated', 'Panda could not save that profile photo on this device.');
     }
   };
@@ -285,10 +294,6 @@ export default function ProfileScreen() {
           </Pressable>
         ) : null}
 
-        <View style={[styles.footerCard, { backgroundColor: colors.honeySoft, borderColor: colors.goldLine }]}>
-          <Ionicons name="sparkles-outline" size={19} color={colors.honeyInk} />
-          <Text style={[styles.footerText, { color: colors.honeyInk }]}>Panda makes your next night out easy.</Text>
-        </View>
       </ScrollView>
 
       <View
@@ -354,8 +359,6 @@ export default function ProfileScreen() {
 
       <SettingsSheet
         visible={settingsOpen}
-        account={account}
-        profileName={profileName}
         dateOfBirth={profilePreferences.dateOfBirth}
         notificationsEnabled={profilePreferences.notificationsEnabled}
         notificationsReady={profilePreferencesReady}
@@ -366,18 +369,6 @@ export default function ProfileScreen() {
           setProfileSaveError(null);
           setProfileEditOpen(true);
         }}
-        onSavedPlaces={() => {
-          setSettingsOpen(false);
-          router.push('/saved');
-        }}
-        onShare={() => { void sharePanda(); }}
-        onSecurity={() => { void showPasswordSettings(); }}
-        onSignIn={() => {
-          setSettingsOpen(false);
-          clearError();
-          setAuthSheetOpen(true);
-        }}
-        onSignOut={confirmSignOut}
       />
       <ProfileEditSheet
         visible={profileEditOpen}
@@ -449,34 +440,20 @@ function ProfileMenuRow({
 
 function SettingsSheet({
   visible,
-  account,
-  profileName,
   dateOfBirth,
   notificationsEnabled,
   notificationsReady,
   onNotificationsChange,
   onClose,
   onEditProfile,
-  onSavedPlaces,
-  onShare,
-  onSecurity,
-  onSignIn,
-  onSignOut,
 }: {
   visible: boolean;
-  account: ReturnType<typeof useAuth>['account'];
-  profileName: string;
   dateOfBirth: string;
   notificationsEnabled: boolean;
   notificationsReady: boolean;
   onNotificationsChange: (value: boolean) => void;
   onClose: () => void;
   onEditProfile: () => void;
-  onSavedPlaces: () => void;
-  onShare: () => void;
-  onSecurity: () => void;
-  onSignIn: () => void;
-  onSignOut: () => void;
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
@@ -500,21 +477,6 @@ function SettingsSheet({
             >
               <Feather name="x" size={18} color={colors.foreground} />
             </Pressable>
-          </View>
-
-          <Text style={[styles.settingsOverline, { color: colors.mutedForeground }]}>YOUR ACCOUNT</Text>
-          <View style={[styles.accountCard, { backgroundColor: colors.card }]}>
-            <View style={[styles.accountIcon, { backgroundColor: colors.secondary }]}>
-              <Feather name="user" size={20} color={colors.green700} />
-            </View>
-            <View>
-              <Text style={[styles.accountName, { color: colors.foreground }]}>
-                {profileName || 'Browsing as a guest'}
-              </Text>
-              <Text style={[styles.accountEmail, { color: colors.mutedForeground }]}>
-                {account?.email || 'Sign in whenever you like'}
-              </Text>
-            </View>
           </View>
 
           <Text style={[styles.settingsOverline, { color: colors.mutedForeground }]}>YOUR PROFILE</Text>
@@ -545,38 +507,6 @@ function SettingsSheet({
             </Text>
           </View>
 
-          <Text style={[styles.settingsOverline, { color: colors.mutedForeground }]}>PANDA</Text>
-          <View style={[styles.settingBlock, { backgroundColor: colors.card }]}>
-            <SettingsAction icon="bookmark" title="Saved places" subtitle="Your favourite spots" colors={colors} onPress={onSavedPlaces} />
-            <SettingsAction icon="share-2" title="Share Panda" subtitle="Invite friends to Panda" colors={colors} onPress={onShare} last />
-          </View>
-
-          <Text style={[styles.settingsOverline, { color: colors.mutedForeground }]}>SECURITY</Text>
-          <SettingsAction
-            icon="lock"
-            title="Password & security"
-            subtitle={account ? `Managed by ${account.provider}` : 'Sign in to manage account security'}
-            colors={colors}
-            onPress={onSecurity}
-            last
-          />
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel={account ? 'Sign out' : 'Sign in'}
-            onPress={() => {
-              onClose();
-              if (account) onSignOut();
-              else onSignIn();
-            }}
-            style={({ pressed }) => [styles.logoutRow, { backgroundColor: colors.card }, pressed && styles.pressed]}
-          >
-            <View style={[styles.accountIcon, { backgroundColor: '#FBE8E6' }]}>
-              <Feather name={account ? 'log-out' : 'log-in'} size={20} color={account ? colors.destructive : colors.green700} />
-            </View>
-            <Text style={[styles.logoutText, { color: account ? colors.destructive : colors.green700 }]}>
-              {account ? 'Sign out' : 'Sign in to Panda'}
-            </Text>
-          </Pressable>
           <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda · v1.0</Text>
           </ScrollView>
         </View>

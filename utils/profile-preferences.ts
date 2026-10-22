@@ -13,7 +13,48 @@ export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
 };
 
 export function profilePreferencesStorageKey(userId?: string | null): string {
-  return `@panda-mobile/profile-preferences:${userId || 'guest'}`;
+  if (!userId) return 'panda.profile-preferences.v2.guest';
+  const encoded = userId.split('').map((char) => char.charCodeAt(0).toString(16).padStart(4, '0')).join('');
+  return `panda.profile-preferences.v2.user.${encoded}`;
+}
+
+type PreferenceStorage = {
+  getItem: (key: string) => Promise<string | null>;
+  setItem: (key: string, value: string) => Promise<void>;
+  removeItem?: (key: string) => Promise<void>;
+};
+
+/** Keep native private fields in SecureStore; migrate older local values only after a successful write. */
+export function createProfilePreferenceStorage(primary: PreferenceStorage, legacy: PreferenceStorage, removeLegacy = false) {
+  const writes = new Map<string, Promise<ProfilePreferences>>();
+  async function readRaw(userId?: string | null): Promise<string | null> {
+    const key = profilePreferencesStorageKey(userId);
+    const current = await primary.getItem(key);
+    if (current !== null) return current;
+    const legacyKey = `@panda-mobile/profile-preferences:${userId || 'guest'}`;
+    const old = await legacy.getItem(legacyKey);
+    if (old === null) return null;
+    await primary.setItem(key, old);
+    if (removeLegacy) await legacy.removeItem?.(legacyKey).catch(() => {});
+    return old;
+  }
+  return {
+    async read(userId?: string | null) {
+      await writes.get(profilePreferencesStorageKey(userId))?.catch(() => {});
+      return readRaw(userId);
+    },
+    update(userId: string | null | undefined, patch: Partial<ProfilePreferences>): Promise<ProfilePreferences> {
+      const key = profilePreferencesStorageKey(userId);
+      const task = (writes.get(key) ?? Promise.resolve()).catch(() => {}).then(async () => {
+        const next = { ...parseProfilePreferences(await readRaw(userId)), ...patch };
+        await primary.setItem(key, JSON.stringify(next));
+        return next;
+      });
+      writes.set(key, task);
+      void task.finally(() => { if (writes.get(key) === task) writes.delete(key); }).catch(() => {});
+      return task;
+    },
+  };
 }
 
 export function formatDateOfBirthInput(value: string): string {

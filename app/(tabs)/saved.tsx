@@ -20,7 +20,6 @@ export default function SavedScreen() {
   const [failedIds, setFailedIds] = useState<string[]>([]);
   const [loadingLive, setLoadingLive] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
-  const catalogById = useMemo(() => new Map(savedVenues.map((venue) => [venue.id, venue])), [savedVenues]);
 
   useEffect(() => {
     if (!hydrated || !savedIds.length) {
@@ -28,7 +27,7 @@ export default function SavedScreen() {
       return;
     }
     const placeIds = savedIds.filter(
-      (id) => !catalogById.has(id) && !liveVenues[id] && !failedIds.includes(id),
+      (id) => !liveVenues[id] && !failedIds.includes(id),
     );
     if (!placeIds.length) {
       setLoadingLive(false);
@@ -37,20 +36,27 @@ export default function SavedScreen() {
 
     const controller = new AbortController();
     setLoadingLive(true);
-    Promise.all(placeIds.map(async (placeId) => {
+    const pending = [...placeIds];
+    const results: Array<{ id: string; venue: Venue | null }> = [];
+    const loadOne = async (placeId: string) => {
+      const requestController = new AbortController();
+      const cancel = () => requestController.abort();
+      controller.signal.addEventListener('abort', cancel);
+      const timeout = setTimeout(cancel, 15_000);
       try {
         const profileResponse = await fetch(
           `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`,
-          { signal: controller.signal },
+          { signal: requestController.signal },
         );
         if (!profileResponse.ok) throw new Error('Venue details are unavailable.');
         const profile = await profileResponse.json() as LiveSavedVenueProfile;
+        if (profile.id !== placeId) throw new Error('The saved venue did not match.');
 
         let photos: LiveSavedVenuePhoto[] = [];
         try {
           const photosResponse = await fetch(
             `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/photos`,
-            { signal: controller.signal },
+            { signal: requestController.signal },
           );
           if (photosResponse.ok) {
             const payload = await photosResponse.json() as { photos?: LiveSavedVenuePhoto[] };
@@ -63,8 +69,18 @@ export default function SavedScreen() {
         return { id: placeId, venue: buildLiveSavedVenue(profile, photos, PANDA_RUNTIME_API) };
       } catch {
         return { id: placeId, venue: null };
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener('abort', cancel);
       }
-    })).then((results) => {
+    };
+    const worker = async () => {
+      while (pending.length && !controller.signal.aborted) {
+        const id = pending.shift()!;
+        results.push(await loadOne(id));
+      }
+    };
+    Promise.all([worker(), worker()]).then(() => {
       if (controller.signal.aborted) return;
       const successful = results.filter((result): result is { id: string; venue: Venue } => result.venue !== null);
       const failed = results.filter((result) => result.venue === null).map((result) => result.id);
@@ -81,7 +97,7 @@ export default function SavedScreen() {
     });
 
     return () => controller.abort();
-  }, [catalogById, failedIds, hydrated, liveVenues, retryKey, savedIds]);
+  }, [failedIds, hydrated, liveVenues, retryKey, savedIds]);
 
   useEffect(() => {
     setFailedIds((current) => current.filter((id) => savedIds.includes(id)));

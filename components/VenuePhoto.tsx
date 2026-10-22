@@ -133,9 +133,18 @@ const VenuePhotoMedia = memo(function VenuePhotoMedia({
   const [page, setPage] = useState(0);
   const scroll = useRef<ScrollView>(null);
   const [coverFallbackIndex, setCoverFallbackIndex] = useState(0);
+  const [failedPhotos, setFailedPhotos] = useState<Record<string, boolean>>({});
+  const [retryReady, setRetryReady] = useState(false);
+  useEffect(() => {
+    if (!Object.keys(failedPhotos).length) return;
+    setRetryReady(false);
+    const timer = setTimeout(() => setRetryReady(true), 30_000);
+    return () => clearTimeout(timer);
+  }, [failedPhotos]);
   useEffect(() => {
     setPage(0);
     setCoverFallbackIndex(0);
+    setFailedPhotos({});
   }, [venueId, photos[0]?.uri]);
   const photo = photos[Math.min(page, photos.length - 1)] ?? photos[0];
   const movePhoto = (direction: number) => {
@@ -164,9 +173,25 @@ const VenuePhotoMedia = memo(function VenuePhotoMedia({
             onInteractionChange?.(false);
           }}>
           {photos.map((item, index) => (
-            <Pressable key={item.uri} accessibilityRole="button" accessibilityLabel={`Open ${venueName} photo ${index + 1}`}
-              onPress={event => { event.stopPropagation(); setGalleryIndex(index); }} style={{ height, width: width || 1 }}>
-              {Math.abs(index - page) <= 1 ? <Image
+            <Pressable key={item.uri} accessibilityRole="button"
+              accessibilityLabel={failedPhotos[item.uri] ? `Retry ${venueName} photo` : `Open ${venueName} photo ${index + 1}`}
+              accessibilityState={{ disabled: Boolean(failedPhotos[item.uri] && !retryReady) }}
+              onPress={event => {
+                event.stopPropagation();
+                if (failedPhotos[item.uri]) {
+                  if (retryReady) {
+                    setCoverFallbackIndex(0);
+                    setFailedPhotos(current => { const next = { ...current }; delete next[item.uri]; return next; });
+                  }
+                  return;
+                }
+                setGalleryIndex(index);
+              }} style={{ height, width: width || 1 }}>
+              {failedPhotos[item.uri] ? <View style={{ height, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.secondary, padding: 20 }}>
+                <MaterialCommunityIcons name="image-off-outline" size={28} color={colors.green700} />
+                <Text style={{ marginTop: 8, color: colors.foreground, textAlign: 'center' }}>Photo temporarily unavailable</Text>
+                <Text style={{ marginTop: 6, color: colors.mutedForeground, textAlign: 'center' }}>{retryReady ? 'Tap to retry' : 'Please try again shortly'}</Text>
+              </View> : Math.abs(index - page) <= 1 ? <Image
                 source={{
                   uri: index === 0 && coverFallbackIndex > 0
                     ? coverFallbackUris[Math.min(coverFallbackIndex - 1, coverFallbackUris.length - 1)] || item.uri
@@ -175,10 +200,10 @@ const VenuePhotoMedia = memo(function VenuePhotoMedia({
                 contentFit="cover"
                 cachePolicy="memory"
                 transition={180}
-                onError={() => {
-                  if (index === 0 && coverFallbackIndex < coverFallbackUris.length) {
+                onError={event => {
+                  if (!/\b(?:429|403)\b/.test(event.error) && index === 0 && coverFallbackIndex < coverFallbackUris.length) {
                     setCoverFallbackIndex(current => Math.min(current + 1, coverFallbackUris.length));
-                  }
+                  } else setFailedPhotos(current => ({ ...current, [item.uri]: true }));
                 }}
                 accessibilityLabel={`${venueName} photo ${index + 1} of ${photos.length}`}
                 style={{ height, width: '100%', backgroundColor: colors.secondary }}
