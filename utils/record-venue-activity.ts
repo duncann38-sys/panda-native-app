@@ -15,6 +15,9 @@ const report = (error: unknown) => console.warn('Venue activity remains pending 
 export function recordVenueActivity(type: VenueActivityType, venue: ActivityVenue, context?: VenueActivityContext | VenueActivitySurface) {
   void recorder.record(type, venue, typeof context === 'string' ? venueActivityContext(venue, context) : context).catch(report);
 }
+export function recordVenueResults(events: VenueActivityInput[]) {
+  void recorder.recordBatch(events).catch(report);
+}
 const queuedExposures: VenueActivityInput[] = [];
 let exposureTimer: ReturnType<typeof setTimeout> | undefined;
 const presentations = new Map<string, number>();

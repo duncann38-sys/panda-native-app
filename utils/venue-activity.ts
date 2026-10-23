@@ -1,4 +1,4 @@
-export type VenueActivityType = 'presentation' | 'impression' | 'detail_open' | 'menu_click' | 'booking_click' | 'directions_click' | 'call_click' | 'photo_click' | 'save_click';
+export type VenueActivityType = 'result_returned' | 'presentation' | 'impression' | 'detail_open' | 'menu_click' | 'booking_click' | 'directions_click' | 'call_click' | 'photo_click' | 'save_click';
 export type VenueActivitySurface = 'discovery' | 'banging' | 'panda_ai' | 'map' | 'planner' | 'saved';
 export type VenueActivityContext = { surface?: VenueActivitySurface; placement?: 'suggestions' | 'promoted_discovery' | 'banging' | 'other' };
 export type ActivityVenue = { id: string; name: string; promoted?: boolean; premium?: boolean; activityContext?: VenueActivityContext };
@@ -12,7 +12,30 @@ export function withVenueActivityContext<T extends ActivityVenue>(venue: T, surf
   return { ...venue, activityContext: venueActivityContext(venue, surface) };
 }
 const KEY = 'panda_venue_activity_pending_v1';
-const TYPES = new Set<VenueActivityType>(['presentation', 'impression', 'detail_open', 'menu_click', 'booking_click', 'directions_click', 'call_click', 'photo_click', 'save_click']);
+const TYPES = new Set<VenueActivityType>(['result_returned', 'presentation', 'impression', 'detail_open', 'menu_click', 'booking_click', 'directions_click', 'call_click', 'photo_click', 'save_click']);
+/** Count list membership, not photo/detail fetches or React rerenders.
+ * Pagination adds only new IDs; a new query or visit starts a new result set.
+ */
+export function createVenueResultTracker() {
+  let lastScope: string | undefined;
+  let listed = new Set<string>();
+  return {
+    reset() { lastScope = undefined; listed.clear(); },
+    capture(venues: ActivityVenue[], surface: VenueActivitySurface, scope: string): VenueActivityInput[] {
+      if (scope !== lastScope) { listed.clear(); lastScope = scope; }
+      const events: VenueActivityInput[] = [];
+      for (const venue of venues) {
+        if (!venue.id) continue;
+        const context = venueActivityContext(venue, surface);
+        const key = `${venue.id}:${context.placement}`;
+        if (listed.has(key)) continue;
+        listed.add(key);
+        events.push({ type: 'result_returned', venue, context });
+      }
+      return events;
+    },
+  };
+}
 function eventId() {
   return `panda-${Date.now().toString(36)}-${Math.random().toString(36).slice(2).padEnd(13, '0')}-${Math.random().toString(36).slice(2).padEnd(13, '0')}`;
 }

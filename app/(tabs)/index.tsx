@@ -22,6 +22,7 @@ import Svg, { Path } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BangingDrawer } from '@/components/BangingDrawer';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
+import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
 import { FilterDropdown } from '@/components/FilterDropdown';
 import { PandaPlannerSheet, type PlannerMode, venueFromSearchResult } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
@@ -1338,6 +1339,8 @@ export default function DiscoverScreen() {
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
     ));
   }, [category, displayVenues, categoryMembership, priceFilter, sortBy]);
+  useVenueResultAppearances(filteredVenues, 'discovery', !bangingIsOpen,
+    `${discoveryGeneration.current}:${category}:${priceFilter}:${sortBy}`);
   const { setListedVenues } = useLiveVenues();
   useEffect(() => { setListedVenues(filteredVenues); }, [filteredVenues, setListedVenues]);
 

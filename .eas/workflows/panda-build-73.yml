@@ -1,0 +1,12 @@
+name: Panda Android 73 - Venue Exposure Analytics
+on:
+  push:
+    branches:
+      - panda-build-73-venue-exposure
+jobs:
+  build_android:
+    name: Build Android preview
+    type: build
+    params:
+      platform: android
+      profile: preview

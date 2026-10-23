@@ -19,6 +19,7 @@ import { VenueCard } from '@/components/VenueCard';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
+import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
 import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
 const DRAWER_OPEN_HEIGHT = 272;
@@ -55,6 +56,7 @@ export function BangingDrawer({
   const [activeIndex, setActiveIndex] = useState(0);
   // The parent owns daily selection and timed ordering; do not reorder it here.
   const bangingVenues = venues.filter(venue => venue.banging);
+  useVenueResultAppearances(bangingVenues, 'banging', open, 'banging');
   const cardWidth = Math.min(194, Math.max(174, width - 156));
   const cardGap = 10;
   const sidePadding = 16;
