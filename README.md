@@ -18,6 +18,7 @@ Panda helps people discover London restaurants, bars, pubs and coffee spots, ask
 ## Start here
 
 - Plain-language project guide: docs/panda-native/README.md
+- Current Build 73 architecture (APIs, data handling, Google review): docs/panda-native/ARCHITECTURE.md
 - Build plan: docs/panda-native/BUILD_PLAN.md
 - Technical handover: docs/panda-native-app-handover.md
 - Current status: PANDA_NATIVE_STATUS.md
