@@ -242,7 +242,7 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="credit-card"
             title="Panda Credit"
-            subtitle="Application, balance and payments"
+            subtitle="Coming Soon · card preview"
             colors={colors}
             onPress={() => router.push('/credit')}
           />

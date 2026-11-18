@@ -127,12 +127,13 @@ export default function NativeGoogleMap({
       ) : null}
       {visible.map(({ venue, coordinate }) => {
         const isSelected = selectedVenue?.id === venue.id;
+        const routeIndex = routeVenues.findIndex((stop) => stop.id === venue.id);
         return (
           <Marker
-            key={`${venue.id}-${isSelected}`}
+            key={`${venue.id}-${isSelected}-${routeIndex}`}
             coordinate={coordinate}
             title={venue.name}
-            description={venue.fullAddress}
+            description={routeVenues.length > 1 && routeIndex >= 0 ? `Stop ${routeIndex + 1} · ${venue.fullAddress || venue.name}` : venue.fullAddress}
             onPress={() => onSelectVenue(venue)}
             tracksViewChanges={false}
           >
@@ -141,7 +142,7 @@ export default function NativeGoogleMap({
               { backgroundColor: isSelected ? colors.green600 : colors.green800 },
             ]}>
               <Text style={[styles.pinText, { color: colors.primaryForeground }]}>
-                {venue.price || '●'}
+                {routeVenues.length > 1 && routeIndex >= 0 ? String(routeIndex + 1) : venue.price || '●'}
               </Text>
             </View>
           </Marker>

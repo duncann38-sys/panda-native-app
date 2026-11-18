@@ -339,7 +339,7 @@ export function PandaPlannerSheet({
   );
   const proposedPlan = !open ? [] : remotePlan && remoteLocation === locationQuery
     ? choosePlanStops(config.stops, remotePlan, price, 0, { origin: coordinates, excludedIds }) : locationQuery ? [] : localPlan;
-   const selectionKey = `${choiceScope}:${shuffle}:${coordinates?.latitude.toFixed(4)}:${coordinates?.longitude.toFixed(4)}`;
+   const selectionKey = `${choiceScope}:${shuffle}`;
    const selection = stablePlannerSelection(selectionRef.current, selectionKey, proposedPlan, config.stops.length, excludedIds);
    const candidatePlan = selection.plan;
    const candidateKey = `${mode}:${searchArea}:${price}:${coordinates?.latitude.toFixed(4)}:${coordinates?.longitude.toFixed(4)}:${candidatePlan.map(venue => venue.id).join(',')}`;

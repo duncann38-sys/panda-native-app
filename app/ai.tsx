@@ -43,6 +43,7 @@ import {
 } from '@/utils/ai-session-context';
 import {
   advanceOpeningRotation,
+  hasDatedOpeningEvidence,
   isNewOpeningPrompt,
   OPENING_ROTATION_STORAGE_KEY,
   parseOpeningRotationState,
@@ -80,6 +81,7 @@ type AiVenue = {
   openingSourceName?: string;
   openingSourceUrl?: string;
   openingReportedAt?: string;
+  openingDate?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -505,6 +507,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const inputRef = useRef<TextInput>(null);
   const keyboardVisible = useKeyboardState((state) => state.isVisible);
   const voiceRef = useRef<VoiceRecognition | null>(null);
+  const voiceDraftRef = useRef('');
   const finalTranscriptRef = useRef('');
   const submittedPromptRef = useRef('');
   const requestSequenceRef = useRef(0);
@@ -670,6 +673,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             ...(sessionVenueContext.recentVenues.length ? { sessionVenueContext } : {}),
             ...(openingRequestState
               ? {
+                  newOpeningsOnly: true,
                   openingSeenPlaceIds: openingRequestState.seenPlaceIds,
                   openingRotation: openingRequestState.rotation,
                 }
@@ -698,10 +702,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
+      const openingSearch = isNewOpeningSearch || data.newOpeningsSearch === true;
       const eligibleVenues = (data.venues ?? []).filter((venue) =>
         Boolean(venue.photoName)
-        && Number(venue.photoCount) >= (data.newOpeningsSearch ? 1 : 5)
-        && (!data.newOpeningsSearch || Boolean(venue.openingSourceUrl)),
+        && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
+        && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue))),
       );
       if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch) {
         eligibleVenues.sort(
@@ -715,8 +720,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         );
       }
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
-      const baseReply =
-        data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
+      const baseReply = openingSearch && !initialVenues.length
+        ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
+        : data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
       if (referencedVenue) {
         activeAiVenueRef.current = referencedVenue;
       } else if (initialVenues.length) {
@@ -927,8 +933,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
     if (Platform.OS !== 'web') {
       Alert.alert(
-        'Voice input',
-        'Voice input is available in the Panda web preview. Native microphone support will be connected when the mobile build uses a speech-recognition module.',
+        'Dictate to Panda',
+        'You can use your keyboard’s microphone to dictate, if dictation is enabled on your phone. Review your question, then tap Send. You can also type as usual.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open keyboard', onPress: () => inputRef.current?.focus() },
+        ],
       );
       return;
     }
@@ -948,6 +958,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     }
 
     const recognition = new Recognition();
+    voiceDraftRef.current = draft.trim();
     finalTranscriptRef.current = '';
     recognition.continuous = false;
     recognition.interimResults = true;
@@ -962,29 +973,40 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         if (event.results[index].isFinal) finalTranscript += `${phrase} `;
       }
 
-      setDraft(transcript.trim());
+      setDraft([voiceDraftRef.current, transcript.trim()].filter(Boolean).join(' '));
       if (finalTranscript.trim()) finalTranscriptRef.current = finalTranscript.trim();
     };
     recognition.onerror = (event) => {
       setIsListening(false);
       voiceRef.current = null;
+      finalTranscriptRef.current = '';
       if (event.error !== 'aborted') {
-        Alert.alert('Voice input error', 'I could not hear that clearly. Please try again or type your question.');
+        Alert.alert(
+          'Voice input unavailable',
+          event.error === 'not-allowed' || event.error === 'service-not-allowed'
+            ? 'Microphone access was not allowed. Enable microphone access in your browser settings, or type your question. Your draft is still here.'
+            : 'I could not hear that clearly. Please try again or type your question. Your draft is still here.',
+        );
       }
     };
     recognition.onend = () => {
       setIsListening(false);
       voiceRef.current = null;
       const spokenText = finalTranscriptRef.current.trim();
-      if (spokenText) {
-        setDraft('');
-        void sendMessage(spokenText);
-      }
+      if (spokenText) setDraft([voiceDraftRef.current, spokenText].filter(Boolean).join(' '));
+      finalTranscriptRef.current = '';
     };
 
     voiceRef.current = recognition;
     setIsListening(true);
-    recognition.start();
+    try {
+      recognition.start();
+    } catch {
+      setIsListening(false);
+      voiceRef.current = null;
+      finalTranscriptRef.current = '';
+      Alert.alert('Voice input unavailable', 'Panda could not start the microphone. Your draft is unchanged; please try again or type your question.');
+    }
   };
 
   const openAiTransitDirections = (transit: AiTransitContext) => {
@@ -1251,7 +1273,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
            ]}
         />
         <Pressable
-          accessibilityLabel={isListening ? 'Stop listening to Panda' : 'Talk to Panda'}
+          accessibilityLabel={isListening ? 'Stop listening to Panda' : Platform.OS === 'web' ? 'Talk to Panda' : 'Use keyboard dictation to talk to Panda'}
           accessibilityRole="button"
           disabled={sending}
           onPress={startVoiceInput}
@@ -1278,7 +1300,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           style={({ pressed }) => [
             styles.send,
             {
-              backgroundColor: colors.green900,
+              backgroundColor: isNight ? colors.gold : colors.green900,
+              borderColor: isNight ? colors.goldLine : colors.green700,
+              borderWidth: 1,
               opacity: draft.trim() && !sending ? 1 : 0.46,
             },
             pressed && styles.pressed,
@@ -1287,7 +1311,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           <PandaIcon
             name="send"
             size={20}
-            color={colors.primaryForeground}
+            color={isNight ? colors.green950 : colors.primaryForeground}
           />
         </Pressable>
       </View>
@@ -1461,6 +1485,11 @@ function AiVenueCard({
         </Pressable>
         <View style={styles.resultBody}>
           <View style={styles.resultMetaRow}>
+            {hasDatedOpeningEvidence(venue) ? (
+              <View style={[styles.resultMetaChip, { backgroundColor: colors.mint100, borderColor: colors.border }]}>
+                <Text style={[styles.resultMetaChipText, { color: colors.green700 }]}>NEW · REPORTED OPENING</Text>
+              </View>
+            ) : null}
             {typeof venue.rating === 'number' ? (
               <View style={[styles.resultMetaChip, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
                 <Feather name="star" size={12} color={colors.goldDeep} />
@@ -1538,6 +1567,16 @@ function AiVenueCard({
             </Pressable>
           ) : null}
           <View style={styles.resultActions}>
+            <Pressable
+              accessibilityLabel={`View details for ${venue.name ?? 'this venue'}`}
+              accessibilityRole="button"
+              onPress={onOpen}
+              testID={`panda-ai-open-venue-${venue.id ?? 'venue'}`}
+              style={[styles.resultSecondaryAction, { backgroundColor: colors.secondary, borderColor: colors.border }]}
+            >
+              <PandaIcon name="map-pin" size={12} color={colors.green700} />
+              <Text style={[styles.resultActionText, { color: colors.green700 }]}>View venue</Text>
+            </Pressable>
             {venue.mapsUri ? (
               <Pressable
                 accessibilityLabel={`Directions to ${venue.name ?? 'venue'}`}
@@ -1556,7 +1595,7 @@ function AiVenueCard({
                 style={[styles.resultSecondaryAction, { backgroundColor: colors.card, borderColor: colors.border }]}
               >
                 <Feather name="book-open" size={12} color={colors.green700} />
-                <Text style={[styles.resultActionText, { color: colors.green700 }]}>Menu</Text>
+                <Text style={[styles.resultActionText, { color: colors.green700 }]}>{venue.menuLink && venue.menuLink !== venue.website ? 'Menu' : 'Website'}</Text>
               </Pressable>
             ) : null}
             {phoneNumber ? (
@@ -2036,6 +2075,7 @@ const styles = StyleSheet.create({
   resultActions: {
     alignItems: 'center',
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
     justifyContent: 'space-between',
     marginTop: 10,

@@ -1496,14 +1496,14 @@ export default function DiscoverScreen() {
         }
         contentContainerStyle={styles.feedContent}
         ListFooterComponent={
-          <View style={{ padding: 18, alignItems: 'center', gap: 9 }}>
+          <View accessibilityLiveRegion="polite" testID="discovery-next-page-loading" style={{ padding: 18, alignItems: 'center', gap: 9 }}>
             {feedPageLoading || categoryLoading === category ? <>
               <ActivityIndicator color={colors.green700} />
               <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
-                Finding more {category === 'All' ? 'places' : category.toLowerCase()} nearby…
+                {filteredVenues.length} places shown · finding more {category === 'All' ? 'places' : category.toLowerCase()} nearby…
               </Text>
             </> : indexedFeedCursors.current.get(category) && !indexedFeedExhausted.current.has(category) ? (
-              <Pressable accessibilityRole="button" onPress={() => {
+              <Pressable testID="discovery-load-more" accessibilityRole="button" onPress={() => {
                 continuationRetryAt.current.delete(category);
                 void loadMoreFeed();
               }} style={{ paddingVertical: 13, paddingHorizontal: 22, backgroundColor: colors.card, borderRadius: 20 }}>

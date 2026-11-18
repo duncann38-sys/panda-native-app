@@ -2,27 +2,20 @@ import { Feather, Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { createElement, useState } from 'react';
-import { Linking, Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Modal, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { PandaLogo } from '@/components/PandaLogo';
 import { useColors } from '@/hooks/useColors';
 import { ProfileBackButton } from '@/components/ProfileBackButton';
+import { useAuth } from '@/context/auth';
+import { creditCardholderName } from '@/utils/credit-availability';
 
-const creditAmount = 1000;
-const flatRate = 0.12;
-const flatCharge = creditAmount * flatRate;
-const totalRepayment = creditAmount + flatCharge;
-const cardholderName = 'DUNCAN NYANZI';
 const PRIVACY_POLICY_URL = 'https://www.pandaindustry.co/legal/#privacy';
-const PANDA_CREDIT_APPLICATION_URL = 'https://forms.gle/MqtdLzredyJ4SMYk6';
-const paymentSchedule = [
-  { label: 'Payment 1', timing: 'Next month', amount: '£373.33' },
-  { label: 'Payment 2', timing: 'In 2 months', amount: '£373.33' },
-  { label: 'Payment 3', timing: 'In 3 months', amount: '£373.34' },
-];
 
 export default function CreditScreen() {
   const colors = useColors();
+  const { account } = useAuth();
+  const cardholderName = creditCardholderName(account?.name);
   const insets = useSafeAreaInsets();
   const dashboardTopPadding = Platform.OS === 'web' ? 78 : insets.top + 16;
   const [privacyOpen, setPrivacyOpen] = useState(false);
@@ -52,34 +45,30 @@ export default function CreditScreen() {
             <View style={styles.cardChipLine} />
             <View style={styles.cardChipLine} />
           </View>
-          <Text style={[styles.cardNumber, { color: colors.pandaCardInk }]}>•••• 1000</Text>
+          <Text style={[styles.cardNumber, { color: colors.pandaCardInk }]}>•••• ••••</Text>
           <View style={styles.cardholderRow}>
             <View>
-              <Text style={[styles.cardholderLabel, { color: colors.pandaCardMuted }]}>CARDHOLDER</Text>
-              <Text style={[styles.cardholderName, { color: colors.pandaCardInk }]}>{cardholderName}</Text>
+              <Text style={[styles.cardholderLabel, { color: colors.pandaCardMuted }]}>CARD PREVIEW · COMING SOON</Text>
+              <Text testID="credit-cardholder-name" style={[styles.cardholderName, { color: colors.pandaCardInk }]}>{cardholderName}</Text>
             </View>
           </View>
         </LinearGradient>
-        <Pressable
-          accessibilityLabel="Apply for Panda Credit"
-          accessibilityRole="link"
-          onPress={() => void Linking.openURL(PANDA_CREDIT_APPLICATION_URL)}
-          style={({ pressed }) => [
+        <View
+          accessibilityLabel="Panda Credit is coming soon. Applications are not open."
+          style={[
             styles.applyCard,
             { backgroundColor: colors.green800 },
-            pressed && styles.pressed,
           ]}
-          testID="apply-for-panda-credit"
+          testID="credit-coming-soon"
         >
           <View style={[styles.applyIcon, { backgroundColor: colors.honey }]}>
-            <Feather name="arrow-up-right" size={17} color={colors.green900} />
+            <Feather name="clock" size={17} color={colors.green900} />
           </View>
           <View style={styles.applyCopy}>
-            <Text style={[styles.applyTitle, { color: colors.primaryForeground }]}>Apply for Panda Credit</Text>
-            <Text style={[styles.applyBody, { color: colors.mint300 }]}>Complete the short application form to get started.</Text>
+            <Text style={[styles.applyTitle, { color: colors.primaryForeground }]}>Coming Soon</Text>
+            <Text style={[styles.applyBody, { color: colors.mint300 }]}>Applications and card spending are not available yet.</Text>
           </View>
-          <Feather name="chevron-right" size={18} color={colors.primaryForeground} />
-        </Pressable>
+        </View>
         <Pressable
           accessibilityLabel="View Panda privacy policy inside the app"
           accessibilityRole="button"
@@ -95,58 +84,14 @@ export default function CreditScreen() {
           <Text style={[styles.privacyLinkText, { color: colors.green700 }]}>Privacy policy</Text>
           <Feather name="chevron-right" size={16} color={colors.green700} />
         </Pressable>
-        <View style={[styles.planCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.planHeader}>
-            <View>
-              <Text style={[styles.planEyebrow, { color: colors.green700 }]}>PAYMENT PLAN</Text>
-              <Text style={[styles.planTitle, { color: colors.foreground }]}>Next three payments</Text>
-            </View>
-            <View style={[styles.ratePill, { backgroundColor: colors.goldSoft }]}>
-              <Text style={[styles.rateText, { color: colors.honeyInk }]}>12% flat rate</Text>
-            </View>
-          </View>
-          <View style={[styles.planSummary, { backgroundColor: colors.secondary }]}>
-            <View>
-              <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>TOTAL TO REPAY</Text>
-              <Text style={[styles.summaryAmount, { color: colors.foreground }]}>£{totalRepayment.toFixed(2)}</Text>
-            </View>
-            <View style={styles.summaryRight}>
-              <Text style={[styles.summaryLabel, { color: colors.mutedForeground }]}>FLAT CHARGE</Text>
-              <Text style={[styles.summaryCharge, { color: colors.honeyInk }]}>+ £{flatCharge.toFixed(2)}</Text>
-            </View>
-          </View>
-          <Text style={[styles.planNote, { color: colors.mutedForeground }]}>
-            £1,000.00 credit with a single 12% flat charge, split across three monthly payments.
-          </Text>
-          <View style={styles.paymentList}>
-            {paymentSchedule.map((payment, index) => (
-              <View
-                key={payment.label}
-                style={[
-                  styles.paymentRow,
-                  index < paymentSchedule.length - 1 && { borderBottomColor: colors.border, borderBottomWidth: 1 },
-                ]}
-              >
-                <View style={[styles.paymentNumber, { backgroundColor: colors.mint100 }]}>
-                  <Text style={[styles.paymentNumberText, { color: colors.green700 }]}>{index + 1}</Text>
-                </View>
-                <View style={styles.paymentCopy}>
-                  <Text style={[styles.paymentLabel, { color: colors.foreground }]}>{payment.label}</Text>
-                  <Text style={[styles.paymentTiming, { color: colors.mutedForeground }]}>{payment.timing}</Text>
-                </View>
-                <Text style={[styles.paymentAmount, { color: colors.foreground }]}>{payment.amount}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
         <View style={[styles.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
           <View style={[styles.infoIcon, { backgroundColor: colors.secondary }]}>
             <Feather name="zap" size={18} color={colors.green700} />
           </View>
           <View style={styles.infoCopy}>
-            <Text style={[styles.infoTitle, { color: colors.foreground }]}>Simple, flexible spending</Text>
+            <Text style={[styles.infoTitle, { color: colors.foreground }]}>A preview of what’s next</Text>
             <Text style={[styles.infoBody, { color: colors.mutedForeground }]}>
-              Panda Credit will be available for eligible reservations and partner offers.
+              This is a card preview, not an active credit account. No balance, borrowing limit or repayment schedule has been assigned.
             </Text>
           </View>
         </View>
@@ -160,15 +105,15 @@ export default function CreditScreen() {
       >
         <ProfileBackButton />
         <Text style={[styles.eyebrow, { color: colors.green700 }]}>PANDA CREDIT</Text>
-        <Text style={[styles.title, { color: colors.foreground }]}>Your credit</Text>
+        <Text style={[styles.title, { color: colors.foreground }]}>Panda Credit</Text>
         <View style={[styles.balanceCard, { backgroundColor: colors.green800 }]}>
           <View style={styles.balanceTop}>
-            <Text style={[styles.balanceLabel, { color: colors.mint300 }]}>AVAILABLE BALANCE</Text>
+            <Text style={[styles.balanceLabel, { color: colors.mint300 }]}>NOT AVAILABLE YET</Text>
             <Ionicons name="wallet-outline" size={20} color={colors.honey} />
           </View>
-          <Text style={[styles.balance, { color: colors.primaryForeground }]}>£1,000.00</Text>
+          <Text style={[styles.balance, { color: colors.primaryForeground, fontSize: 28 }]}>Coming Soon</Text>
           <Text style={[styles.balanceBody, { color: colors.mint300 }]}>
-            Ready for eligible reservations and partner offers.
+            We’ll let you know when Panda Credit is available.
           </Text>
         </View>
       </View>

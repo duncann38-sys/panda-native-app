@@ -34,7 +34,7 @@ import { useColors } from '@/hooks/useColors';
 import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { fullCardOpenStatus, hydrateVenueDetails } from '@/utils/venue-detail-hydration';
-import { getOfficialVenueLinks, type OfficialVenueLinks } from '@/utils/official-venue-links';
+import { getOfficialVenueLinks, officialPageUrl, type OfficialVenueLinks } from '@/utils/official-venue-links';
 
 type GoogleVenueProfile = {
   id: string;
@@ -468,7 +468,8 @@ export default function VenueDetailScreen() {
       const links = knownUrl ? officialLinks
         : await (officialLinksRequest.current ?? getOfficialVenueLinks(venue.id, true));
       if (links) setOfficialLinks(links);
-      const pageUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
+      const directUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
+      const pageUrl = directUrl || officialPageUrl(links?.website || venue.website);
       if (!pageUrl) {
         recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
         Alert.alert('Verified venue link unavailable',
@@ -476,7 +477,7 @@ export default function VenueDetailScreen() {
         return;
       }
       router.push({ pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
-        params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl } });
+        params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl, websiteFallback: directUrl ? '0' : '1' } });
     } finally {
       openingVenuePageRef.current = false;
       setOpeningVenuePage(false);

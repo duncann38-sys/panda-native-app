@@ -19,6 +19,34 @@ export function isNewOpeningPrompt(text: string): boolean {
   return /\b(?:new restaurants?|new openings?|new & buzzing|new and buzzing|recently opened)\b/i.test(text);
 }
 
+/** A new-opening card needs an actual opening date and dated external evidence. */
+export function hasDatedOpeningEvidence(venue: {
+  id?: string;
+  openingSourceName?: string;
+  openingSourceUrl?: string;
+  openingReportedAt?: string;
+  openingDate?: string;
+}, now = Date.now()): boolean {
+  if (!venue.id || !/^ChI[\w-]+$/.test(venue.id) || !venue.openingSourceName?.trim()) return false;
+  const reportedAt = Date.parse(venue.openingReportedAt ?? '');
+  if (!Number.isFinite(reportedAt) || reportedAt > now) return false;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(now));
+  const value = (type: string) => parts.find((part) => part.type === type)?.value;
+  const today = `${value('year')}-${value('month')}-${value('day')}`;
+  const opened = venue.openingDate ?? '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(opened) || !Number.isFinite(Date.parse(opened))
+    || new Date(opened).toISOString().slice(0, 10) !== opened
+    || opened.slice(0, 7) !== today.slice(0, 7) || opened > today) return false;
+  try {
+    const url = new URL(venue.openingSourceUrl ?? '');
+    return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 export function parseOpeningRotationState(raw: string | null): OpeningRotationState {
   if (!raw) return { ...EMPTY_OPENING_ROTATION_STATE };
 

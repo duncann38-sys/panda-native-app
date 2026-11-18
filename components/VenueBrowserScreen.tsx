@@ -31,7 +31,7 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { id, venueData, pageUrl: providedUrl } = useLocalSearchParams<{ id: string; venueData?: string; pageUrl?: string }>();
+  const { id, venueData, pageUrl: providedUrl, websiteFallback } = useLocalSearchParams<{ id: string; venueData?: string; pageUrl?: string; websiteFallback?: string }>();
   const { liveVenues } = useLiveVenues();
   let passedVenue: ReturnType<typeof getVenue>;
   try { passedVenue = venueData ? JSON.parse(venueData) : undefined; } catch { passedVenue = undefined; }
@@ -42,7 +42,8 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
   const [opening, setOpening] = useState(false);
   const [browserError, setBrowserError] = useState(false);
   const isMenu = kind === 'menu';
-  const title = isMenu ? 'Menu' : 'Reservations';
+  const isWebsiteFallback = websiteFallback === '1';
+  const title = isWebsiteFallback ? 'Venue website' : isMenu ? 'Menu' : 'Reservations';
   const pageUrl = officialPageUrl(providedUrl)?.replace(/^http:\/\/(?=(?:www\.)?sevenrooms\.com(?:\/|$))/i, 'https://');
   const androidPdf = isMenu && Platform.OS === 'android' && Boolean(pageUrl && /\.pdf(?:[?#]|$)/i.test(pageUrl));
 
@@ -130,7 +131,7 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
               ? <ActivityIndicator size="large" color={colors.green800} />
               : <PandaIcon name="globe" size={30} color={colors.goldDeep} />}
             <Text style={[styles.stateTitle, { color: colors.foreground }]}>
-              {!pageUrl || !venue ? 'Official link unavailable' : androidPdf ? 'Your official PDF menu' : failed ? 'This page could not be displayed' : `Opening ${isMenu ? 'the menu' : 'reservations'}…`}
+              {!pageUrl || !venue ? 'Official link unavailable' : androidPdf ? 'Your official PDF menu' : failed ? 'This page could not be displayed' : `Opening ${isWebsiteFallback ? 'the venue website' : isMenu ? 'the menu' : 'reservations'}…`}
             </Text>
             <Text style={[styles.stateText, { color: colors.mutedForeground }]}>
               {androidPdf ? 'Open the original menu in your browser for a clear, zoomable view.'
@@ -147,14 +148,19 @@ export function VenueBrowserScreen({ kind }: { kind: VenueBrowserKind }) {
       </View>
 
       {pageUrl && venue && <View style={[styles.footer, { paddingBottom: Math.max(12, insets.bottom + 8), borderTopColor: colors.border }]}>
+        <Text style={[styles.stateText, { color: colors.mutedForeground }]}>
+          {isWebsiteFallback
+            ? `A direct ${isMenu ? 'menu' : 'table-booking'} link could not be verified. This is the venue’s website.`
+            : 'This opens the venue’s official page. No booking has been made by Panda.'}
+        </Text>
         <View style={styles.source}>
           <PandaIcon name="globe" size={14} color={colors.green700} />
           <Text numberOfLines={1} style={[styles.sourceText, { color: colors.mutedForeground }]}>{new URL(pageUrl).hostname}</Text>
         </View>
-        <Pressable accessibilityRole="button" accessibilityLabel={`Open official ${isMenu ? 'menu' : 'booking page'} in browser`}
+        <Pressable accessibilityRole="button" accessibilityLabel={`Open official ${isWebsiteFallback ? 'venue website' : isMenu ? 'menu' : 'booking page'} in browser`}
           disabled={opening} onPress={() => void openOfficial()}
           style={({ pressed }) => [styles.open, actionStyle, pressed && styles.pressed]}>
-          <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{opening ? 'Opening…' : `Open ${isMenu ? 'menu' : 'booking page'} in browser`}</Text>
+          <Text style={[styles.buttonText, { color: colors.primaryForeground }]}>{opening ? 'Opening…' : `Open ${isWebsiteFallback ? 'venue website' : isMenu ? 'menu' : 'booking page'} in browser`}</Text>
           <PandaIcon name="navigate" size={17} color={colors.primaryForeground} />
         </Pressable>
         {browserError && <Text accessibilityRole="alert" style={[styles.stateText, { color: colors.foreground }]}>The browser could not open. Please try again.</Text>}
