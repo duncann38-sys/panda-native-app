@@ -4,7 +4,6 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   ActivityIndicator,
   AppState,
@@ -22,6 +21,12 @@ import {
 import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
+import { useSandboxReservations } from '@/hooks/useSandboxReservations';
+import { SandboxBookingAiEntry } from '@/components/SandboxBookingAiEntry';
+import { isSandboxBookingPrompt } from '@/utils/sandbox-reservations';
+import { conciergeGreeting, shownConciergeVenueIds } from '@/utils/concierge-session';
+import { isVerifiedTransitStation } from '@/utils/verified-transit-station';
+import { conciergeChatPolish } from '@/utils/concierge-chat-polish';
 import { PandaIcon } from '@/components/PandaIcon';
 import { ReserveButton } from '@/components/ReserveButton';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
@@ -43,13 +48,8 @@ import {
   type SessionVenueCard,
 } from '@/utils/ai-session-context';
 import {
-  advanceOpeningRotation,
   hasDatedOpeningEvidence,
   isNewOpeningPrompt,
-  OPENING_ROTATION_STORAGE_KEY,
-  parseOpeningRotationState,
-  rememberShownOpenings,
-  type OpeningRotationState,
 } from '@/utils/ai-openings';
 
 type AiVenue = {
@@ -463,28 +463,14 @@ function aiVenueToVenue(venue: AiVenue): Venue | null {
   };
 }
 
-function getPandaGreeting(date = new Date()) {
-  const hour = date.getHours();
-
-  if (hour < 5) {
-    return 'Still out, Duncan? I’m Panda 🐼 — looking for something to eat or somewhere that’s still open? We don’t do delivery just yet, but I can recommend open spots nearby.';
-  }
-
-  if (hour < 12) {
-    return 'Good morning, Duncan! I’m Panda 🐼 — fancy breakfast, coffee, or an early start? I’ll find the best spots right by you.';
-  }
-
-  if (hour < 16) {
-    return 'Good afternoon, Duncan! I’m Panda 🐼 — fancy lunch, a coffee, or somewhere to start the afternoon? I’ll find the best spots right by you.';
-  }
-
-  return 'Good evening, Duncan! I’m Panda 🐼 — tell me what you fancy (dinner, a cheeky cocktail, or somewhere lively) and I’ll find the best spots right by you.';
-}
+function getPandaGreeting(date = new Date(),name = '') { return conciergeGreeting(name,date); }
 
 export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
+  const sandboxBookings = useSandboxReservations();
   const timeMode = getPandaTimeMode();
   const isNight = timeMode === 'night';
   const colors = useColors(isNight ? 'dark' : undefined);
+  const polish = conciergeChatPolish(colors);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { coordinates, refreshLocation, liveVenues } = useLiveVenues();
@@ -493,7 +479,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const [messages, setMessages] = useState<Message[]>([
     {
       role: 'model',
-      text: getPandaGreeting(),
+      text: getPandaGreeting(new Date(), sandboxBookings.account?.name),
     },
   ]);
   const suggestionsWithPlanner = [
@@ -517,28 +503,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const primaryPendingRef = useRef(false);
   const primaryControllerRef = useRef<AbortController | null>(null);
   const activeAiVenueRef = useRef<AiVenue | null>(null);
-  const openingRotationRef = useRef<OpeningRotationState>({ seenPlaceIds: [], rotation: 0 });
-  const openingRotationLoadRef = useRef<Promise<void> | null>(null);
-
-  const loadOpeningRotationState = async () => {
-    if (!openingRotationLoadRef.current) {
-      openingRotationLoadRef.current = AsyncStorage.getItem(OPENING_ROTATION_STORAGE_KEY)
-        .then((stored) => {
-          openingRotationRef.current = parseOpeningRotationState(stored);
-        })
-        .catch(() => undefined);
-    }
-    await openingRotationLoadRef.current;
-  };
-
-  const persistOpeningRotationState = (state: OpeningRotationState) => {
-    openingRotationRef.current = state;
-    void AsyncStorage.setItem(OPENING_ROTATION_STORAGE_KEY, JSON.stringify(state)).catch(() => undefined);
-  };
-
-  useEffect(() => {
-    void loadOpeningRotationState();
-  }, []);
 
   useEffect(() => {
     return () => {
@@ -552,6 +516,15 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const sendMessage = async (text = draft) => {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
+    if (isSandboxBookingPrompt(trimmed)) {
+      setDraft('');
+      inputRef.current?.blur();
+      if (sandboxBookings.capabilities.data?.enabled) router.push('/opentable-test');
+      else setMessages(previous => [...previous,{role:'user',text:trimmed},{
+        role:'model',text:'The private OpenTable test connection is not ready for this account yet. I won’t substitute a real restaurant or submit a live booking.',
+      }]);
+      return;
+    }
 
     const isNewOpeningSearch = isNewOpeningPrompt(trimmed);
     const isTransit = isTransitQuestion(trimmed);
@@ -633,7 +606,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     };
 
     try {
-      let openingRequestState: OpeningRotationState | null = null;
       let requestCoordinates = coordinates;
       // Pure chat never waits on GPS; only location-dependent questions refresh.
       if (!requestCoordinates && needsCurrentLocation) {
@@ -655,10 +627,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       }
 
       if (isNewOpeningSearch) {
-        await loadOpeningRotationState();
         if (!isCurrentRequest()) return;
-        openingRequestState = advanceOpeningRotation(openingRotationRef.current);
-        persistOpeningRotationState(openingRequestState);
       }
 
       const controller = new AbortController();
@@ -670,15 +639,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
           body: JSON.stringify({
             contents: buildPandaAiContents(conversation),
+            shownVenueIds: shownConciergeVenueIds(conversation),
             chatContext: { timeZone: localTimeZone() },
             ...(sessionVenueContext.recentVenues.length ? { sessionVenueContext } : {}),
-            ...(openingRequestState
-              ? {
-                  newOpeningsOnly: true,
-                  openingSeenPlaceIds: openingRequestState.seenPlaceIds,
-                  openingRotation: openingRequestState.rotation,
-                }
-              : {}),
+            ...(isNewOpeningSearch ? {newOpeningsOnly:true} : {}),
             generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
             ...(requestCoordinates
               ? {
@@ -715,11 +679,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         );
       }
       eligibleVenues.splice(PANDA_AI_VENUE_LIMIT);
-      if (data.newOpeningsSearch && openingRequestState) {
-        persistOpeningRotationState(
-          rememberShownOpenings(openingRequestState, eligibleVenues.map((venue) => venue.id)),
-        );
-      }
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
       const baseReply = openingSearch && !initialVenues.length
         ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
@@ -832,7 +791,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 transitRoute: AiTransitContext['transitRoute'];
                 venueWalk: { distanceMeters: number; durationMinutes: number } | null;
               };
-              if (!liveTransit.originStation || !liveTransit.destinationStation) {
+              if (!isVerifiedTransitStation(liveTransit.originStation) || !isVerifiedTransitStation(liveTransit.destinationStation)) {
                 updateResult((message) => ({
                   ...message,
                   text: `I couldn’t verify the route to ${venue.name} right now, so I won’t guess its station or journey time.`,
@@ -883,7 +842,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               return;
             }
             const nearest = (await stationResponse.json()) as { station: AiTransitStation };
-            if (!nearest.station) {
+            if (!isVerifiedTransitStation(nearest.station)) {
               updateResult((message) => ({ ...message, text: 'I couldn’t find a live nearby station right now.' }));
               return;
             }
@@ -1077,7 +1036,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     setMessages([
       {
         role: 'model',
-        text: getPandaGreeting(),
+        text: getPandaGreeting(new Date(), sandboxBookings.account?.name),
       },
     ]);
   };
@@ -1089,7 +1048,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
-      <View style={[styles.header, { backgroundColor: colors.green800, paddingTop: insets.top + 12 }]}>
+      <View style={[styles.header, polish.header, { backgroundColor: colors.green800, paddingTop: insets.top + 12 }]}>
         {embedded ? (
           <View style={styles.headerIcon} />
         ) : (
@@ -1102,12 +1061,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             <PandaIcon name="arrow-left" size={22} color={colors.primaryForeground} />
           </Pressable>
         )}
-        <View style={[styles.pandaAvatar, { backgroundColor: colors.ivory }]}>
+        <View style={[styles.pandaAvatar, polish.pandaAvatar, { backgroundColor: colors.ivory }]}>
           <PandaLogo size={42} />
         </View>
         <View style={styles.headerCopy}>
-          <Text style={[styles.headerTitle, { color: colors.primaryForeground }]}>Panda AI</Text>
-          <Text style={[styles.headerSubtitle, { color: colors.mint300 }]}>Your night-out concierge</Text>
+          <Text style={[styles.headerTitle, polish.headerTitle, { color: colors.primaryForeground }]}>Panda AI</Text>
+          <Text style={[styles.headerSubtitle, polish.headerSubtitle, { color: colors.mint300 }]}>Your night-out concierge</Text>
         </View>
         <Pressable
           accessibilityLabel="Clear Panda AI chat"
@@ -1119,6 +1078,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         </Pressable>
       </View>
 
+      <SandboxBookingAiEntry enabled={sandboxBookings.capabilities.data?.enabled === true}
+        onPress={() => router.push('/opentable-test')} />
       <FlatList
         ref={listRef}
         inverted
@@ -1140,10 +1101,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           ) : null
         }
         renderItem={({ item: { message } }) => (
-          <View style={[styles.messageRow, message.role === 'user' && styles.userRow]}>
+          <View style={[styles.messageRow, polish.messageRow, message.role === 'user' && styles.userRow]}>
             <View
               style={[
-                styles.bubble,
+                styles.bubble, polish.bubble,
                 {
                    backgroundColor: message.role === 'user' ? (isNight ? colors.gold : colors.green600) : colors.card,
                   borderBottomRightRadius: message.role === 'user' ? 7 : 20,
@@ -1226,7 +1187,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 : sendMessage('prompt' in suggestion ? suggestion.prompt : suggestion.label)
             }
             style={({ pressed }) => [
-              styles.suggestion,
+              styles.suggestion, polish.suggestion,
               {
                 backgroundColor: suggestion.planner ? colors.gold : colors.card,
                 borderColor: suggestion.planner ? colors.goldLine : colors.border,
@@ -1243,7 +1204,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
       <View
         style={[
-          styles.composer,
+          styles.composer, polish.composer,
           {
              backgroundColor: isNight ? colors.input : colors.background,
             borderTopColor: colors.border,
@@ -1269,7 +1230,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           placeholderTextColor={colors.mutedForeground}
           returnKeyType="send"
            style={[
-             styles.input,
+             styles.input, polish.input,
              { backgroundColor: isNight ? colors.green950 : colors.card, borderColor: colors.border, color: colors.foreground },
            ]}
         />

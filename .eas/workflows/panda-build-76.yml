@@ -1,0 +1,12 @@
+name: Panda 76 - Concierge and Sandbox Reserve
+on:
+  push:
+    branches:
+      - panda-build-76
+jobs:
+  build_android_preview:
+    name: Panda 76 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview

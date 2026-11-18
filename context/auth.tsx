@@ -42,6 +42,7 @@ type AuthContextValue = {
   error: string | null;
   signIn: (provider: PandaAuthProvider) => Promise<boolean>;
   signOut: () => Promise<void>;
+  getIdToken: () => Promise<string>;
   clearError: () => void;
 };
 
@@ -289,6 +290,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const getIdToken = useCallback(async () => {
+    const user = authRef.current?.currentUser;
+    if (!user || user.uid !== account?.uid) throw new Error('Sign in to Panda to continue.');
+    return user.getIdToken();
+  }, [account?.uid]);
   const value = useMemo<AuthContextValue>(() => ({
     account,
     ready,
@@ -296,8 +302,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     error,
     signIn,
     signOut,
+    getIdToken,
     clearError: () => setError(null),
-  }), [account, ready, signingIn, error, signIn, signOut]);
+  }), [account, ready, signingIn, error, signIn, signOut, getIdToken]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

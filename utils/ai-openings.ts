@@ -19,17 +19,29 @@ export function isNewOpeningPrompt(text: string): boolean {
   return /\b(?:new restaurants?|new openings?|new & buzzing|new and buzzing|recently opened)\b/i.test(text);
 }
 
-/** A new-opening card needs an actual opening date and dated external evidence. */
+/** A new-opening card needs dated external evidence, not just an AI description. */
 export function hasDatedOpeningEvidence(venue: {
   id?: string;
   openingSourceName?: string;
   openingSourceUrl?: string;
   openingReportedAt?: string;
   openingDate?: string;
+  openingDesignation?: string;
 }, now = Date.now()): boolean {
   if (!venue.id || !/^ChI[\w-]+$/.test(venue.id) || !venue.openingSourceName?.trim()) return false;
   const reportedAt = Date.parse(venue.openingReportedAt ?? '');
   if (!Number.isFinite(reportedAt) || reportedAt > now) return false;
+  // OpenTable's editorial New designation is not a claim that a venue opened
+  // this calendar month. Keep the older dated-evidence contract for other sources.
+  if (venue.openingDesignation === 'opentable-new') {
+    if (venue.openingSourceName !== 'OpenTable' || now - reportedAt > 30 * 86_400_000) return false;
+    try {
+      const url = new URL(venue.openingSourceUrl ?? '');
+      return url.protocol === 'https:' && !url.username && !url.password
+        && ['www.opentable.co.uk', 'www.opentable.com', 'opentable.co.uk', 'opentable.com'].includes(url.hostname)
+        && /^\/lists\/[^/]+$/.test(url.pathname) && !url.search && !url.hash;
+    } catch { return false; }
+  }
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(new Date(now));
