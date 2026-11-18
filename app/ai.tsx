@@ -23,7 +23,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
 import { SandboxBookingAiEntry } from '@/components/SandboxBookingAiEntry';
-import { isSandboxBookingPrompt } from '@/utils/sandbox-reservations';
+import { useSandboxBookingConversation } from '@/hooks/useSandboxBookingConversation';
+import { SandboxConversationCard } from '@/components/SandboxConversationCard';
 import { conciergeGreeting, shownConciergeVenueIds } from '@/utils/concierge-session';
 import { isVerifiedTransitStation } from '@/utils/verified-transit-station';
 import { conciergeChatPolish } from '@/utils/concierge-chat-polish';
@@ -97,6 +98,7 @@ type Message = {
   role: 'user' | 'model';
   text: string;
   venues?: AiVenue[];
+  newSelection?: boolean;
   transit?: AiTransitContext;
   requestId?: number;
 };
@@ -182,7 +184,7 @@ type VoiceRecognition = {
 type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 const PANDA_AI_URL = `${PANDA_PRODUCTION_API}/api/panda-ai`;
-const PANDA_AI_VENUE_LIMIT = 15;
+const PANDA_AI_VENUE_LIMIT = 10;
 const PANDA_AI_REQUEST_TIMEOUT_MS = 18_000;
 const OPTIONAL_REQUEST_TIMEOUT_MS = 5_000;
 const TRANSIT_REQUEST_TIMEOUT_MS = 9_000;
@@ -467,6 +469,7 @@ function getPandaGreeting(date = new Date(),name = '') { return conciergeGreetin
 
 export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const sandboxBookings = useSandboxReservations();
+  const booking = useSandboxBookingConversation(sandboxBookings);
   const timeMode = getPandaTimeMode();
   const isNight = timeMode === 'night';
   const colors = useColors(isNight ? 'dark' : undefined);
@@ -516,13 +519,17 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const sendMessage = async (text = draft) => {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
-    if (isSandboxBookingPrompt(trimmed)) {
+    if (booking.isBusy) return;
+    if (booking.canHandle(trimmed)) {
       setDraft('');
       inputRef.current?.blur();
-      if (sandboxBookings.capabilities.data?.enabled) router.push('/opentable-test');
-      else setMessages(previous => [...previous,{role:'user',text:trimmed},{
-        role:'model',text:'The private OpenTable test connection is not ready for this account yet. I won’t substitute a real restaurant or submit a live booking.',
-      }]);
+      const generation=chatGenerationRef.current;
+      setMessages(previous=>[...previous,{role:'user',text:trimmed}]);
+      setSending(true);
+      try {
+        const reply=await booking.handleTurn(trimmed);
+        if(generation===chatGenerationRef.current&&reply)setMessages(previous=>[...previous,{role:'model',text:reply}]);
+      } finally { if(generation===chatGenerationRef.current)setSending(false); }
       return;
     }
 
@@ -678,11 +685,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           (left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
         );
       }
-      eligibleVenues.splice(PANDA_AI_VENUE_LIMIT);
+      eligibleVenues.splice(data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
       const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
-      const baseReply = openingSearch && !initialVenues.length
+      const baseReply = data.text?.trim() || (openingSearch && !initialVenues.length
         ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
-        : data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
+        : 'I’m not sure I caught that. Try asking for a place, mood, or time of day.');
       if (referencedVenue) {
         activeAiVenueRef.current = referencedVenue;
       } else if (initialVenues.length) {
@@ -700,11 +707,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           ...message,
           text: isTransit ? 'Checking live station and route information…' : baseReply,
           venues: initialVenues,
+          newSelection: data.newOpeningsSearch === true,
         }));
       } else {
         setMessages((current) => [
           ...current,
-          { role: 'model', requestId, text: baseReply, venues: initialVenues },
+          { role: 'model', requestId, text: baseReply, venues: initialVenues, newSelection: data.newOpeningsSearch === true },
         ]);
       }
       primaryPendingRef.current = false;
@@ -1025,6 +1033,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     Platform.OS === 'web' ? 84 : 78 + (Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0);
 
   const clearChat = () => {
+    if(booking.isSubmitting){Alert.alert('Confirming your test booking','Please wait for the result before clearing the conversation.');return;}
+    booking.reset();
     currentRequestRef.current = ++requestSequenceRef.current;
     chatGenerationRef.current += 1;
     primaryPendingRef.current = false;
@@ -1079,7 +1089,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       </View>
 
       <SandboxBookingAiEntry enabled={sandboxBookings.capabilities.data?.enabled === true}
-        onPress={() => router.push('/opentable-test')} />
+        onPress={() => void sendMessage('Book a table at OpenTable Sandbox — 264001')} />
       <FlatList
         ref={listRef}
         inverted
@@ -1092,13 +1102,18 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         showsVerticalScrollIndicator={false}
         maintainVisibleContentPosition={{ minIndexForVisible: 1, autoscrollToTopThreshold: 80 }}
         ListHeaderComponent={
-          sending ? (
+          <View>
+          <SandboxConversationCard state={booking.state} onChooseTime={time=>void booking.chooseTime(time)}
+            onGuestChange={booking.setGuest} onReview={booking.reviewGuest} onConfirm={()=>void booking.confirm()}
+            onEdit={booking.editGuest} onRefresh={()=>void booking.refresh()} onHistory={()=>void booking.checkHistory()} />
+          {sending ? (
             <View style={styles.messageRow}>
               <View style={[styles.bubble, { backgroundColor: colors.card }]}>
                 <ActivityIndicator color={colors.honeyInk} />
               </View>
             </View>
-          ) : null
+          ) : null}
+          </View>
         }
         renderItem={({ item: { message } }) => (
           <View style={[styles.messageRow, polish.messageRow, message.role === 'user' && styles.userRow]}>
@@ -1123,7 +1138,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             </View>
             {message.venues?.length ? (
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
-                {message.venues.slice(0, PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
+                {message.venues.slice(0, message.newSelection ? 20 : PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
                   const liveMatch = liveVenues.find((candidate) => candidate.id === venue.id);
                   const cardVenue: AiVenue = {
                     ...venue,

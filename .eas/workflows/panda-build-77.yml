@@ -1,0 +1,12 @@
+name: Panda 77 - In-chat Sandbox Booking
+on:
+  push:
+    branches:
+      - panda-build-77
+jobs:
+  build_android_preview:
+    name: Panda 77 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview
