@@ -7,12 +7,13 @@ import { PandaIcon } from '@/components/PandaIcon';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
-import { loadOfficialVenueLinks } from '@/utils/official-venue-links';
+import { loadOfficialVenueLinks, type ReservationLinks } from '@/utils/official-venue-links';
+import { ReservationContactActions } from './ReservationContactActions';
 import { isReserveSurface } from '@/components/ReserveButton';
-import { getReservationTarget, type ReservationTarget } from '@/utils/reservation-target';
+import { getReservationContacts, getReservationTarget, type ReservationTarget } from '@/utils/reservation-target';
 import { isGooglePlaceVenue } from '@/utils/google-place-eligibility';
 
-type Lookup = { status: 'loading' } | { status: 'done'; venueId: string; target: ReservationTarget };
+type Lookup = { status: 'loading' } | { status: 'done'; venueId: string; target: ReservationTarget; links: ReservationLinks | null };
 const LOOKUP_TIMEOUT_MS = 6_000;
 
 export function VenueReservationScreen() {
@@ -40,6 +41,7 @@ export function VenueReservationScreen() {
     }
   }, [venue, surface]);
   const [lookup, setLookup] = useState<Lookup>({ status: 'loading' });
+  const [alternative, setAlternative] = useState<{ venueId: string; target: ReservationTarget } | null>(null);
   const [retryKey, setRetryKey] = useState(0);
   const [pageFailed, setPageFailed] = useState(false);
   const [pageLoading, setPageLoading] = useState(true);
@@ -65,19 +67,21 @@ export function VenueReservationScreen() {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
     setLookup({ status: 'loading' });
+    setAlternative(null);
     setPageFailed(false);
     setPageLoading(true);
     browserCanGoBack.current = false;
     const pending = isGooglePlaceVenue(venue)
       ? loadOfficialVenueLinks(venue.id, controller.signal, undefined, 'reservation')
       : Promise.reject(new Error('A Google venue is required.'));
-    pending.then(links => getReservationTarget(links)).catch(() => getReservationTarget(null)).then(target => {
-      if (active && current === requestId.current) setLookup({ status: 'done', venueId: venue.id, target });
+    pending.then(links => ({ links, target: getReservationTarget(links, venue) }))
+      .catch(() => ({ links: null, target: getReservationTarget(null, venue) })).then(result => {
+      if (active && current === requestId.current) setLookup({ status: 'done', venueId: venue.id, ...result });
     }).finally(() => clearTimeout(timer));
     return () => { active = false; clearTimeout(timer); controller.abort(); };
   }, [venue?.id, retryKey]);
   useEffect(() => {
-    if (lookup.status !== 'done' || !lookup.target.url || !pageLoading || pageFailed) return;
+    if (lookup.status !== 'done' || ['phone', 'maps', 'unavailable'].includes(lookup.target.provider) || !pageLoading || pageFailed) return;
     const timer = setTimeout(() => { setPageLoading(false); setPageFailed(true); }, 15_000);
     return () => clearTimeout(timer);
   }, [lookup, pageLoading, pageFailed, frameKey]);
@@ -88,20 +92,32 @@ export function VenueReservationScreen() {
   if (!venue) return (
     <View style={[styles.center, { backgroundColor: colors.background, paddingTop: topInset }]}>
       <Text style={[styles.stateTitle, { color: colors.foreground }]}>Venue unavailable</Text>
+      {getReservationContacts(null, { id }).maps ? <Pressable accessibilityRole="link"
+        onPress={() => void Linking.openURL(getReservationContacts(null, { id }).maps!).catch(() => undefined)}
+        style={[styles.primaryBtn, { backgroundColor: colors.green800 }]}>
+        <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>View on Google Maps</Text>
+      </Pressable> : null}
       <Pressable testID="reservation-return" accessibilityRole="button" onPress={() => router.replace('/')}
         style={[styles.primaryBtn, { backgroundColor: colors.green800, marginTop: 18 }]}>
         <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>Back to Panda</Text>
       </Pressable>
     </View>
   );
-  const target = lookup.status === 'done' && lookup.venueId === venue.id ? lookup.target : null;
-  const providerLabel = target?.provider === 'opentable' ? 'OpenTable' : 'Venue booking';
+  const target = alternative?.venueId === venue.id ? alternative.target
+    : lookup.status === 'done' && lookup.venueId === venue.id ? lookup.target : null;
+  const contacts = getReservationContacts(lookup.status === 'done' && lookup.venueId === venue.id ? lookup.links : null, venue);
+  const providerLabel = target?.provider === 'opentable' ? 'OpenTable' : target?.provider === 'website' ? 'the venue website' : 'Venue booking';
   const providerHost = target?.url ? new URL(target.url).hostname.replace(/^www\./, '') : '';
-  const showBrowser = Boolean(target?.url);
+  const showBrowser = Boolean(target?.url && !['phone', 'maps'].includes(target.provider));
   const openExternal = () => {
     if (target?.url) void Linking.openURL(target.url).catch(() => setPageFailed(true));
   };
   const retryPage = () => { setPageFailed(false); setPageLoading(true); setFrameKey(k => k + 1); };
+  const openWebsite = () => {
+    if (!contacts.website) return;
+    setAlternative({ venueId: venue.id, target: { provider: 'website', url: contacts.website, reason: null } });
+    retryPage();
+  };
   const meta = [venue.neighborhood, venue.type, venue.price].filter(Boolean).join('  ·  ');
   const header = (
     <View style={[styles.header, { paddingTop: Math.max(12, topInset + 6), backgroundColor: colors.ivory, borderBottomColor: colors.border }]}>
@@ -113,7 +129,7 @@ export function VenueReservationScreen() {
         <Text style={[styles.backText, { color: colors.green800 }]}>{showBrowser ? 'Back to Panda' : 'Back'}</Text>
       </Pressable>
       <View style={styles.headerTitle}>
-        <Text style={[styles.eyebrow, { color: colors.green700 }]}>{showBrowser ? target?.provider === 'opentable' ? 'VIA OPENTABLE' : 'VENUE BOOKING PAGE' : 'PANDA RESERVE'}</Text>
+        <Text style={[styles.eyebrow, { color: colors.green700 }]}>{showBrowser ? target?.provider === 'opentable' ? 'VIA OPENTABLE' : target?.provider === 'website' ? 'VENUE WEBSITE' : 'VENUE BOOKING PAGE' : 'PANDA RESERVE'}</Text>
         <Text numberOfLines={1} style={[styles.headerName, { color: colors.foreground }]}>{venue.name}</Text>
       </View>
       {showBrowser ? <Pressable testID="reservation-open-browser-header" accessibilityRole="link"
@@ -127,9 +143,9 @@ export function VenueReservationScreen() {
       {header}
       <View style={styles.browserBody}>
         {pageFailed ? (
-          <View style={styles.center} testID="reservation-page-error">
+          <ScrollView contentContainerStyle={styles.recovery} testID="reservation-page-error">
             <PandaIcon name="globe" size={28} color={colors.mutedForeground} />
-            <Text style={[styles.stateTitle, { color: colors.foreground }]}>The booking page did not load</Text>
+            <Text style={[styles.stateTitle, { color: colors.foreground }]}>The page couldn’t be opened</Text>
             <Text style={[styles.stateBody, { color: colors.mutedForeground }]}>{providerLabel} may block in-app viewing. You can retry or continue in your browser.</Text>
             <View style={styles.row}>
               <Pressable testID="reservation-page-retry" accessibilityRole="button" onPress={retryPage} style={[styles.secondaryBtn, { borderColor: colors.green800 }]}>
@@ -139,7 +155,9 @@ export function VenueReservationScreen() {
                 <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>Open in browser</Text>
               </Pressable>
             </View>
-          </View>
+            <ReservationContactActions key={venue.id} venue={venue} surface={surface} contacts={contacts}
+              onWebsite={openWebsite} showWebsite={contacts.website !== target.url} />
+          </ScrollView>
         ) : Platform.OS === 'web' ? createElement('iframe', {
           key: frameKey, title: `${providerLabel} for ${venue.name}`, src: target.url,
           referrerPolicy: 'no-referrer-when-downgrade', onLoad: () => setPageLoading(false),
@@ -161,7 +179,9 @@ export function VenueReservationScreen() {
       </View>
       <View style={[styles.attribution, { backgroundColor: colors.ivory, borderTopColor: colors.border, paddingBottom: Math.max(10, bottomInset) }]}>
         <Text numberOfLines={2} style={[styles.smallText, { color: colors.mutedForeground, flex: 1 }]}>
-          {target.provider === 'opentable' ? `Bookings and confirmations are handled by OpenTable (${providerHost}).` : `Bookings and confirmations are handled by the venue at ${providerHost}.`}
+          {target.provider === 'opentable' ? `Bookings and confirmations are handled by OpenTable (${providerHost}).`
+            : target.provider === 'website' ? `Official venue website (${providerHost}). Check its booking or contact options.`
+              : `Bookings and confirmations are handled by the venue at ${providerHost}.`}
         </Text>
         <Pressable testID="reservation-open-browser" accessibilityRole="link" onPress={openExternal} style={styles.linkBtn}>
           <Text style={[styles.linkText, { color: colors.green800 }]}>Open in browser</Text>
@@ -189,25 +209,19 @@ export function VenueReservationScreen() {
             <View style={styles.rowCenter}><ActivityIndicator color={colors.green800} />
               <Text style={[styles.smallText, { color: colors.foreground }]}>Checking the venue’s verified booking link</Text>
             </View>
-          </View> : target.provider === 'unavailable' ? <View testID="reservation-unavailable" style={styles.panelInner}>
-            <Text style={[styles.panelEyebrow, { color: colors.closedForeground }]}>{target.reason === 'lookup_failed' ? 'LOOKUP DID NOT COMPLETE' : 'NO VERIFIED BOOKING LINK'}</Text>
-            <Text style={[styles.panelTitle, { color: colors.foreground }]}>{target.reason === 'lookup_failed' ? 'We couldn’t check bookings just now' : 'Online booking isn’t verified for this venue'}</Text>
+          </View> : <View testID="reservation-contact-fallback" style={styles.panelInner}>
+            <Text style={[styles.panelEyebrow, { color: colors.green700 }]}>CONTACT THE VENUE</Text>
+            <Text style={[styles.panelTitle, { color: colors.foreground }]}>{target.provider === 'phone' ? 'Call to reserve' : 'Find the venue on Google Maps'}</Text>
             <Text style={[styles.stateBody, { color: colors.mutedForeground, textAlign: 'left' }]}>
-              {target.reason === 'lookup_failed' ? 'The venue’s official booking link could not be reached. Try the lookup again.' : 'Panda only opens verified booking pages for the correct venue, and none could be confirmed.'}
-              {venue.phone ? ' Calling ahead is the surest route.' : ''}
+              {target.provider === 'phone' ? 'Speak to the venue about a table. Panda will open your dialler; you choose whether to call.'
+                : 'Check the venue’s Google Maps listing for current contact and booking options.'}
             </Text>
+            <ReservationContactActions key={venue.id} venue={venue} surface={surface} contacts={contacts} onWebsite={openWebsite} />
             <Pressable testID="reservation-retry" accessibilityRole="button" onPress={() => setRetryKey(k => k + 1)}
               style={[styles.secondaryBtn, styles.fullBtn, { borderColor: colors.green800 }]}>
               <Text style={[styles.secondaryBtnText, { color: colors.green800 }]}>Retry lookup</Text>
             </Pressable>
-            {venue.phone ? <Pressable testID="reservation-call" accessibilityRole="button" onPress={() => {
-              recordVenueActivity('call_click', venue, surface);
-              void Linking.openURL(`tel:${venue.phone.replace(/\s/g, '')}`).catch(() => undefined);
-            }} style={[styles.primaryBtn, styles.fullBtn, { backgroundColor: colors.green800 }]}>
-              <PandaIcon name="phone" size={16} color={colors.primaryForeground} />
-              <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>Call {venue.phone}</Text>
-            </Pressable> : null}
-          </View> : null}
+          </View>}
         </View>
       </ScrollView>
     </View>
@@ -216,6 +230,7 @@ export function VenueReservationScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   center: { alignItems: 'center', flex: 1, gap: 12, justifyContent: 'center', padding: 24 },
+  recovery: { alignItems: 'center', flexGrow: 1, gap: 12, justifyContent: 'center', padding: 24 },
   header: { alignItems: 'center', borderBottomWidth: 1, flexDirection: 'row', gap: 10, paddingBottom: 10, paddingHorizontal: 14, zIndex: 5 },
   backBtn: { alignItems: 'center', borderRadius: 14, borderWidth: 1, flexDirection: 'row', gap: 6, minHeight: 44, paddingHorizontal: 12 },
   backText: { fontFamily: 'Inter_700Bold', fontSize: 13 },

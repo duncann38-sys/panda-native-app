@@ -1,7 +1,8 @@
-import { generalVenueActionUrl, safeVenueUrl, type ReservationLinks } from './official-venue-links';
+import { generalVenueActionUrl, safeVenuePhone, safeVenueUrl, type ReservationLinks } from './official-venue-links';
+import { isGooglePlaceVenue } from './google-place-eligibility';
 
 export type ReservationTarget =
-  | { provider: 'opentable' | 'venue'; url: string; reason: null; provenance?: 'opentable_directory' }
+  | { provider: 'opentable' | 'venue' | 'website' | 'phone' | 'maps'; url: string; reason: null; provenance?: 'opentable_directory' }
   | { provider: 'unavailable'; url: null; reason: 'lookup_failed' | 'no_direct_link' | 'invalid_link' };
 
 const OPENTABLE_DOMAINS = [
@@ -11,7 +12,31 @@ const OPENTABLE_DOMAINS = [
   'opentable.sg', 'opentable.ae', 'opentable.nl',
 ];
 
-export function getReservationTarget(links: ReservationLinks | null): ReservationTarget {
+export type ReservationVenueContact = { id?: string; name?: string; website?: unknown; phone?: unknown };
+
+export function getReservationContacts(links: ReservationLinks | null, venue: ReservationVenueContact = {}) {
+  const trusted = links?.source === 'official_website' && (!links.placeId || !venue.id || links.placeId === venue.id) ? links : null;
+  return {
+    website: safeVenueUrl(trusted?.website) ?? safeVenueUrl(venue.website),
+    phone: safeVenuePhone(trusted?.phone) ?? safeVenuePhone(venue.phone),
+    maps: isGooglePlaceVenue({ id: venue.id ?? '' })
+      ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.name || 'Venue')}&query_place_id=${encodeURIComponent(venue.id!)}`
+      : null,
+  };
+}
+
+export function getReservationTarget(links: ReservationLinks | null, venue: ReservationVenueContact = {}): ReservationTarget {
+  const trusted = links?.placeId && venue.id && links.placeId !== venue.id ? null : links;
+  const booking = verifiedBookingTarget(trusted, venue.id ?? trusted?.placeId);
+  if (booking.provider !== 'unavailable') return booking;
+  const contacts = getReservationContacts(trusted, venue);
+  if (contacts.website) return { provider: 'website', url: contacts.website, reason: null };
+  if (contacts.phone) return { provider: 'phone', url: `tel:${contacts.phone}`, reason: null };
+  if (contacts.maps) return { provider: 'maps', url: contacts.maps, reason: null };
+  return booking;
+}
+
+function verifiedBookingTarget(links: ReservationLinks | null, placeId?: string): ReservationTarget {
   if (!links || links.source !== 'official_website' || links.lookupStatus === 'unavailable') {
     return { provider: 'unavailable', url: null, reason: 'lookup_failed' };
   }
@@ -26,7 +51,7 @@ export function getReservationTarget(links: ReservationLinks | null): Reservatio
   if (OPENTABLE_DOMAINS.some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) {
     if (links.reservationSource === 'opentable_directory') {
       const match = links.openTableMatch;
-      if (!match || match.environment !== 'production' || !Number.isFinite(match.expiresAt)
+      if (!match || (placeId && match.placeId !== placeId) || match.environment !== 'production' || !Number.isFinite(match.expiresAt)
         || match.expiresAt <= Date.now() || !Number.isSafeInteger(match.rid) || match.rid <= 0) {
         return { provider: 'unavailable', url: null, reason: 'invalid_link' };
       }

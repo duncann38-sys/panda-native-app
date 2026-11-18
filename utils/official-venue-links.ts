@@ -3,6 +3,8 @@ import { isGooglePlaceVenue } from './google-place-eligibility';
 
 export type OfficialVenueLinks = { menuUrl?: string; reservationUrl?: string; website?: string };
 export type ReservationLinks = {
+  placeId?: string;
+  phone?: string | null;
   website: string | null;
   menuUrl: string | null;
   reservationUrl: string | null;
@@ -12,6 +14,11 @@ export type ReservationLinks = {
   openTableMatch?: { placeId: string; rid: number; environment: 'production'; method: string; expiresAt: number };
   openTableLookup?: string;
 };
+export function safeVenuePhone(value: unknown): string | null {
+  if (typeof value !== 'string' || !/^\+?[\d\s().-]{7,32}$/.test(value.trim())) return null;
+  const number = value.trim().replace(/[^\d+]/g, '');
+  return /^\+?\d{7,15}$/.test(number) ? number : null;
+}
 const reservationCache = new Map<string, { expires: number; links: ReservationLinks }>();
 const cache = new Map<string, { expires: number; links: OfficialVenueLinks }>();
 const pending = new Map<string, Promise<OfficialVenueLinks | null>>();
@@ -108,6 +115,7 @@ export async function loadOfficialVenueLinks(
   if (!response.ok) throw new Error('Official venue links could not be checked.');
   const data = await response.json() as Partial<ReservationLinks>;
   if (data.source !== 'official_website') throw new Error('Official venue links have no verified source.');
+  if (data.placeId && data.placeId !== id) throw new Error('Venue contact identity does not match.');
   const website = safeVenueUrl(data.website);
   const menu = safeVenueUrl(generalVenueActionUrl(data.menuUrl, 'menu'));
   const reservation = safeVenueUrl(generalVenueActionUrl(data.reservationUrl, 'reservation'));
@@ -120,7 +128,7 @@ export async function loadOfficialVenueLinks(
   const reservationUrl = data.lookupStatus === 'unavailable' || reservation === website
     || (data.reservationSource === 'opentable_directory' && !directoryMatchValid) ? null : reservation;
   const links: ReservationLinks = {
-    website, menuUrl, reservationUrl, source: 'official_website',
+    placeId: id, phone: safeVenuePhone(data.phone), website, menuUrl, reservationUrl, source: 'official_website',
     reservationSource: data.reservationSource === 'opentable_directory' ? 'opentable_directory' : 'official_website',
     ...(directoryMatchValid ? { openTableMatch: proof } : {}),
     ...(typeof data.openTableLookup === 'string' ? { openTableLookup: data.openTableLookup } : {}),
