@@ -162,6 +162,7 @@ export function SuggestionRow({
       : card.name;
 
   return <DiscoverVenueCard
+    activitySurface={activitySurface}
     venue={{ ...card, name: cardTitle }}
     saved={saved}
     onPress={onPress}

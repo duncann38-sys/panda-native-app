@@ -744,7 +744,7 @@ export default function VenueDetailScreen() {
 
             <View style={styles.editorialActions}>
               <ActionButton refined fontFamily={fonts.bold} label={openingVenuePage ? 'Finding link…' : 'View menu'} icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
-              <ActionButton refined fontFamily={fonts.bold} label="Reservations" icon="calendar" background={cardColors.secondaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('reservation')} />
+              <ActionButton refined fontFamily={fonts.bold} label="Reserve" icon="calendar" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={() => openVenuePage('reservation')} />
               <ActionButton refined fontFamily={fonts.bold} label="Directions" icon="navigate" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={openWalkingDirections} />
               {venue.phone ? <ActionButton refined fontFamily={fonts.bold} label="Call" icon="phone" background={cardColors.soft} foreground={cardColors.ink} onPress={() => {
                 recordVenueActivity('call_click', venue);

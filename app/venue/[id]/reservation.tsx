@@ -1,5 +1,5 @@
-import { VenueBrowserScreen } from '@/components/VenueBrowserScreen';
+import { VenueReservationScreen } from '@/components/VenueReservationScreen';
 
-export default function VenueReservationScreen() {
-  return <VenueBrowserScreen kind="reservation" />;
+export default function VenueReservationRoute() {
+  return <VenueReservationScreen />;
 }

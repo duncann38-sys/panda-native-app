@@ -15,6 +15,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { ReserveButton } from '@/components/ReserveButton';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { getPandaTimeMode } from '@/constants/panda-time';
 import { venues, type Venue } from '@/data/venues';
@@ -808,6 +809,8 @@ export function PandaPlannerSheet({
                     </View>
                     <Feather name="chevron-right" size={19} color={colors.goldDeep} />
                   </Pressable>
+                  <ReserveButton venue={venue} activitySurface="planner" compact
+                    onBeforeNavigate={() => setOpen(false)} style={{ alignSelf: 'flex-start', marginTop: 10 }} />
                   <Pressable
                     accessibilityLabel={`Walking directions to ${displayName}`}
                     accessibilityRole="button"

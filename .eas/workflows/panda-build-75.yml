@@ -1,0 +1,12 @@
+name: Panda Android 75 - Native Reserve
+on:
+  push:
+    branches:
+      - panda-build-75-reserve
+jobs:
+  build_android:
+    name: Build Android preview
+    type: build
+    params:
+      platform: android
+      profile: preview

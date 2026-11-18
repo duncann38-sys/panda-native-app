@@ -1,6 +1,18 @@
 import { PANDA_RUNTIME_API } from '@/constants/services';
+import { isGooglePlaceVenue } from './google-place-eligibility';
 
 export type OfficialVenueLinks = { menuUrl?: string; reservationUrl?: string; website?: string };
+export type ReservationLinks = {
+  website: string | null;
+  menuUrl: string | null;
+  reservationUrl: string | null;
+  source: 'official_website';
+  lookupStatus: 'verified' | 'no_direct_links' | 'unavailable';
+  reservationSource?: 'official_website' | 'opentable_directory';
+  openTableMatch?: { placeId: string; rid: number; environment: 'production'; method: string; expiresAt: number };
+  openTableLookup?: string;
+};
+const reservationCache = new Map<string, { expires: number; links: ReservationLinks }>();
 const cache = new Map<string, { expires: number; links: OfficialVenueLinks }>();
 const pending = new Map<string, Promise<OfficialVenueLinks | null>>();
 
@@ -68,4 +80,56 @@ export function getOfficialVenueLinks(id: string, refresh = false): Promise<Offi
   });
   pending.set(id, request);
   return request;
+}
+
+// Keep Build 74's menu resolver and cache unchanged. Reserve is an explicit,
+// separately attributed lookup, compatible with both the current API and the
+// prepared production-only OpenTable matching response.
+export function safeVenueUrl(value: unknown): string | null {
+  if (typeof value !== 'string' || value.length > 4096) return null;
+  const safe = officialPageUrl(value);
+  if (!safe) return null;
+  const host = new URL(safe).hostname;
+  if (/^(?:maps\.|maps\.app\.goo\.gl$)/i.test(host) || host.startsWith('[')) return null;
+  return safe;
+}
+
+export async function loadOfficialVenueLinks(
+  id: string, signal: AbortSignal, fetchImpl: typeof fetch = fetch,
+  intent: 'all' | 'reservation' = 'all',
+): Promise<ReservationLinks> {
+  if (!isGooglePlaceVenue({ id })) throw new Error('A Google venue is required.');
+  const key = `${intent}:${id}`;
+  const cached = reservationCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.links;
+  const response = await fetchImpl(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(id)}/links${intent === 'reservation' ? '?intent=reservation' : ''}`, {
+    headers: { Accept: 'application/json' }, signal,
+  });
+  if (!response.ok) throw new Error('Official venue links could not be checked.');
+  const data = await response.json() as Partial<ReservationLinks>;
+  if (data.source !== 'official_website') throw new Error('Official venue links have no verified source.');
+  const website = safeVenueUrl(data.website);
+  const menu = safeVenueUrl(generalVenueActionUrl(data.menuUrl, 'menu'));
+  const reservation = safeVenueUrl(generalVenueActionUrl(data.reservationUrl, 'reservation'));
+  const menuUrl = data.lookupStatus === 'unavailable' || menu === website ? null : menu;
+  const proof = data.openTableMatch;
+  const directoryMatchValid = proof?.placeId === id && proof.environment === 'production'
+    && Number.isSafeInteger(proof.rid) && proof.rid > 0 && Number.isFinite(proof.expiresAt)
+    && proof.expiresAt > Date.now() && ['name_address_coordinates', 'name_phone_coordinates',
+      'name_postcode_number_coordinates', 'name_alias_address_phone_coordinates'].includes(proof.method);
+  const reservationUrl = data.lookupStatus === 'unavailable' || reservation === website
+    || (data.reservationSource === 'opentable_directory' && !directoryMatchValid) ? null : reservation;
+  const links: ReservationLinks = {
+    website, menuUrl, reservationUrl, source: 'official_website',
+    reservationSource: data.reservationSource === 'opentable_directory' ? 'opentable_directory' : 'official_website',
+    ...(directoryMatchValid ? { openTableMatch: proof } : {}),
+    ...(typeof data.openTableLookup === 'string' ? { openTableLookup: data.openTableLookup } : {}),
+    lookupStatus: data.lookupStatus === 'unavailable' ? 'unavailable' : menuUrl || reservationUrl ? 'verified' : 'no_direct_links',
+  };
+  if (reservationUrl) {
+    reservationCache.set(key, { expires: Math.min(Date.now() + 60_000,
+      directoryMatchValid ? proof.expiresAt : Infinity), links });
+    if (reservationCache.size > 128) reservationCache.delete(reservationCache.keys().next().value!);
+  }
+  return links;
 }

@@ -5,6 +5,7 @@ import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { ReserveButton } from '@/components/ReserveButton';
 import { venueCardPalette } from '@/constants/venue-card-design';
 
 type VenueCardProps = {
@@ -118,7 +119,7 @@ export function VenueCard({
         ]}
       >
         <Text
-          numberOfLines={compact ? 1 : undefined}
+          numberOfLines={compact ? 2 : undefined}
           ellipsizeMode="tail"
           style={[
             styles.name,
@@ -170,6 +171,8 @@ export function VenueCard({
         <Text style={[styles.openText, { color: venue.cached || venue.detailsDeferred ? colors.mutedForeground : onGreen ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
           {venue.cached || venue.detailsDeferred ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
         </Text>
+        <ReserveButton venue={venue} activitySurface={editorial ? 'banging' : 'discovery'}
+          tone={premiumCard ? 'soft' : 'solid'} compact={compact} style={{ alignSelf: 'stretch', marginTop: 10 }} />
       </View>
     </Pressable>
   );

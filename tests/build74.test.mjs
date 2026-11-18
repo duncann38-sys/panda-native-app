@@ -12,19 +12,20 @@ async function load(path, fetchImpl = async () => { throw new Error('Unexpected 
   const exports = {};
   new Function('exports', 'require', 'fetch', js)(exports, (name) => {
     if (name === '@/constants/services') return { PANDA_RUNTIME_API: 'https://panda-ai-proxy.vercel.app' };
+    if (name === './google-place-eligibility') return { isGooglePlaceVenue: v => /^[A-Za-z0-9_-]{8,256}$/.test(v?.id ?? '') };
     throw new Error(`Unexpected runtime import: ${name}`);
   }, fetchImpl);
   return exports;
 }
 
-test('release is version 74, the existing package identity and an SDK 54 APK profile', async () => {
+test('release is version 75, the existing package identity and an SDK 54 APK profile', async () => {
   const { expo } = JSON.parse(await source('app.json'));
   const { build } = JSON.parse(await source('eas.json'));
-  assert.equal(expo.android.versionCode, 74);
+  assert.equal(expo.android.versionCode, 75);
   assert.equal(expo.android.package, 'com.panda.pandamobile');
   assert.equal(build.preview.android.buildType, 'apk');
   assert.equal(build.preview.android.image, 'ubuntu-24.04-jdk-17-ndk-r27b');
-  assert.match(await source('.eas/workflows/panda-build-74.yml'), /panda-build-74-native-updates/);
+  assert.match(await source('.eas/workflows/panda-build-75.yml'), /panda-build-75-reserve/);
 });
 
 test('working authentication, root providers, Metro and dependency lock remain unchanged from Build 73', async () => {

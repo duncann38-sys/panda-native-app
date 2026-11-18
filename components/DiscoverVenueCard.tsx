@@ -2,6 +2,7 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { ReserveButton } from '@/components/ReserveButton';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
@@ -12,12 +13,14 @@ export function DiscoverVenueCard({
   onPress,
   onToggleSaved,
   warning,
+  activitySurface = 'discovery',
 }: {
   venue: Venue;
   saved: boolean;
   onPress: () => void;
   onToggleSaved: () => void;
   warning?: string | null;
+  activitySurface?: 'discovery' | 'saved';
 }) {
   const colors = useColors();
   const { cardColors, fonts } = useVenueCardDesign();
@@ -73,6 +76,7 @@ export function DiscoverVenueCard({
           <Text numberOfLines={2} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
           {cardMeta ? <Text numberOfLines={1} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{cardMeta}</Text> : null}
           {warning ? <Text numberOfLines={2} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{warning}</Text> : null}
+          <ReserveButton venue={venue} activitySurface={activitySurface} compact style={{ alignSelf: 'flex-start', marginTop: 7 }} />
         </View>
       </Pressable>
       <View style={styles.rail}>

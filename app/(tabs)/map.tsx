@@ -17,6 +17,7 @@ import {
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { ReserveButton } from '@/components/ReserveButton';
 import NativeGoogleMap from '@/components/NativeGoogleMap';
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import PandaRouteSheet, { type WalkingStep } from '@/components/PandaRouteSheet';
@@ -1038,6 +1039,7 @@ export default function MapScreen() {
                     {venue.distance} · {venue.walkingTime} · {venue.price || '££'}
                   </Text>
                   <View style={styles.venueCardActions}>
+                    <ReserveButton venue={venue} activitySurface="map" compact />
                     <Pressable
                       accessibilityLabel={`Get directions to ${venue.name}`}
                       accessibilityRole="button"

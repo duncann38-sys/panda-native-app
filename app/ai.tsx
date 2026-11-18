@@ -23,6 +23,7 @@ import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-co
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { PandaIcon } from '@/components/PandaIcon';
+import { ReserveButton } from '@/components/ReserveButton';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -1567,6 +1568,7 @@ function AiVenueCard({
             </Pressable>
           ) : null}
           <View style={styles.resultActions}>
+            {photoVenue ? <ReserveButton venue={photoVenue} activitySurface="panda_ai" compact /> : null}
             <Pressable
               accessibilityLabel={`View details for ${venue.name ?? 'this venue'}`}
               accessibilityRole="button"
