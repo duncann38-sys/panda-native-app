@@ -668,9 +668,7 @@ function liveVenueFromResult(
     hasMusic: result.hasMusic,
   });
 
-  const category: Venue['category'] = classification.primary === 'Bar'
-    || classification.primary === 'Coffee' || classification.primary === 'Pub'
-    ? classification.primary : 'Restaurant';
+  const category: Venue['category'] = classification.primary;
 
   return {
     id: result.id,

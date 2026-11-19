@@ -42,6 +42,10 @@ type GooglePlaceCategoryInput = {
 };
 
 const SHOP_TYPES = new Set([
+  'shop', 'retail',
+  'book_store', 'clothing_store', 'department_store', 'electronics_store', 'gift_shop',
+  'home_goods_store', 'jewelry_store', 'shoe_store', 'sporting_goods_store', 'bicycle_store',
+  'furniture_store', 'florist', 'pet_store', 'hardware_store', 'barber_shop',
   'candy_store',
   'convenience_store',
   'dessert_shop',
@@ -56,6 +60,8 @@ const SHOP_TYPES = new Set([
 ]);
 
 const INTEREST_TYPES = new Set([
+  'church', 'mosque', 'synagogue', 'hindu_temple', 'buddhist_temple', 'place_of_worship',
+  'sculpture', 'memorial', 'castle',
   'amusement_center',
   'amphitheatre',
   'amusement_park',
@@ -129,13 +135,15 @@ export function classifyGooglePlace(input: GooglePlaceCategoryInput): {
   categories: DiscoveryCategory[];
 } {
   const placeTypes = new Set((input.types ?? []).map((type) => type.toLowerCase()));
-  const primaryType = (input.primaryType ?? input.types?.[0] ?? '').toLowerCase();
+  const primaryType = (input.primaryType ?? input.types?.[0] ?? input.type ?? '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, '_');
+  if (primaryType) placeTypes.add(primaryType);
   const normalized = `${input.name} ${input.type} ${(input.types ?? []).join(' ')}`.toLowerCase();
   const sourceText = (input.sourceQueries ?? []).join(' ').toLowerCase();
   const hasFoodServiceType = hasAny(placeTypes, FOOD_SERVICE_TYPES)
     || /(?:restaurant|cafe|coffee|bar|pub|night club|food court|takeaway)/.test(input.type.toLowerCase());
   const primaryIsHospitality = FOOD_SERVICE_TYPES.has(primaryType)
-    || /(?:restaurant|cafe|coffee|bar|pub|night club|food court|takeaway)/.test(input.type.toLowerCase());
+    || (!INTEREST_TYPES.has(primaryType) && !SHOP_TYPES.has(primaryType)
+      && /(?:^|[\s_])(?:restaurant|cafe|coffee|bar|pub|night club|food court|takeaway)(?:$|[\s_])/.test(input.type.toLowerCase()));
   const primaryIsInterest = INTEREST_TYPES.has(primaryType);
   const primaryIsShop = SHOP_TYPES.has(primaryType) || primaryType === 'bakery';
   const isShop = hasAny(placeTypes, SHOP_TYPES)

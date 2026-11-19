@@ -1,0 +1,12 @@
+name: Panda 82 - Life Concierge and Visitor Actions
+on:
+  push:
+    branches:
+      - panda-build-82
+jobs:
+  build_android_preview:
+    name: Panda 82 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview

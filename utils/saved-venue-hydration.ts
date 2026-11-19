@@ -1,4 +1,5 @@
 import type { Venue, VenueCategory } from '@/data/venues';
+import { classifyGooglePlace } from '@/data/venue-categories';
 
 export type LiveSavedVenueProfile = {
   id: string;
@@ -24,13 +25,7 @@ export type LiveSavedVenuePhoto = {
 };
 
 function venueCategory(type: string): VenueCategory {
-  const value = type.toLowerCase();
-  if (/\bpub\b/.test(value)) return 'Pub';
-  if (/\b(bar|nightclub|night club|cocktail)\b/.test(value)) return 'Bar';
-  if (/\b(cafe|coffee|tea)\b/.test(value)) return 'Coffee';
-  if (/\b(shop|store|retail)\b/.test(value)) return 'Shop';
-  if (/\b(museum|park|landmark|tourist|gallery|theatre|theater)\b/.test(value)) return 'Place of Interest';
-  return 'Restaurant';
+  return classifyGooglePlace({ name: '', type }).primary;
 }
 
 function photoAttribution(value: LiveSavedVenuePhoto['attribution'], venueName: string): string {

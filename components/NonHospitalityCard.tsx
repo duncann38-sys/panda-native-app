@@ -5,7 +5,8 @@ import type { GestureResponderEvent } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
-import { nonHospitalityActions, openNonHospitalityAction } from '@/utils/non-hospitality-actions';
+import { admissionLabel, nonHospitalityActions, openNonHospitalityAction } from '@/utils/non-hospitality-actions';
+import { venuePresentationCategory } from '@/utils/venue-presentation-category';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { PandaIcon } from '@/components/PandaIcon';
 import type { PandaIconName } from '@/components/PandaIcon';
@@ -24,6 +25,8 @@ type Action = ReturnType<typeof nonHospitalityActions>[number];
 const actionIcon: Record<Action['kind'], PandaIconName> = {
   website: 'globe',
   directions: 'navigate',
+  transit: 'map',
+  dining: 'globe',
   tickets: 'calendar',
 };
 
@@ -42,7 +45,7 @@ export function NonHospitalityCard({
   activitySurface,
 }: NonHospitalityCardProps) {
   const colors = useColors();
-  const isShop = venue.category === 'Shop';
+  const isShop = venuePresentationCategory(venue) === 'Shop';
   const [busy, setBusy] = useState<Action['kind'] | null>(null);
   const actions = nonHospitalityActions(venue);
   const status = statusFor(venue);
@@ -178,6 +181,7 @@ export function NonHospitalityCard({
           </Text>
         ) : null}
 
+        {!!admissionLabel(venue) && <Text numberOfLines={3} style={{ color: colors.green800, fontSize: 12, lineHeight: 17, marginBottom: 8 }}>{admissionLabel(venue)}</Text>}
         {actions.length ? (
           <View style={[styles.actions, compact && styles.compactActions]}>
             {actions.map((action, index) => {

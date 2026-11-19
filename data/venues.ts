@@ -28,6 +28,13 @@ export type Venue = {
   ticketUrl?: string;
   ticketUrlVerified?: boolean;
   ticketPlaceId?: string;
+  officialVisitInfo?: {
+    placeId: string;
+    sourceUrl: string;
+    ticketsUrl?: string | null;
+    diningUrl?: string | null;
+    admission?: { kind: 'free' | 'priced'; text: string } | null;
+  };
   mapsUri: string;
   phone: string;
   premium: boolean;

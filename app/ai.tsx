@@ -1,4 +1,4 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -20,6 +20,7 @@ import {
 } from 'react-native';
 import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { StatusBar } from 'expo-status-bar';
 import { PandaLogo } from '@/components/PandaLogo';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
 import { SandboxBookingAiEntry } from '@/components/SandboxBookingAiEntry';
@@ -34,6 +35,7 @@ import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/consta
 import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
+import { classifyGooglePlace } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { getOfficialVenueLinks } from '@/utils/official-venue-links';
@@ -427,15 +429,7 @@ async function enrichAiVenue(venue: AiVenue): Promise<AiVenue> {
 function aiVenueToVenue(venue: AiVenue): Venue | null {
   if (!venue.id || !venue.name) return null;
   const tier = getPartnerTier(venue.id);
-  const normalizedType = venue.type?.toLowerCase() ?? '';
-  const category: Venue['category'] =
-    normalizedType.includes('coffee') || normalizedType.includes('cafe')
-      ? 'Coffee'
-      : normalizedType.includes('pub')
-        ? 'Pub'
-        : normalizedType.includes('bar')
-          ? 'Bar'
-          : 'Restaurant';
+  const category: Venue['category'] = classifyGooglePlace({ name: venue.name, type: venue.type || '' }).primary;
   const mapsUri =
     venue.mapsUri
     || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(venue.name)}&query_place_id=${encodeURIComponent(venue.id)}`;
@@ -486,6 +480,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const isNight = timeMode === 'night';
   const colors = useColors(isNight ? 'dark' : undefined);
   const polish = conciergeChatPolish(colors);
+  const navigation = useNavigation();
+  const subscribeToFocus = useCallback((notify: () => void) => {
+    const focus = navigation.addListener('focus', notify);
+    const blur = navigation.addListener('blur', notify);
+    return () => { focus(); blur(); };
+  }, [navigation]);
+  const isRouteFocused = React.useSyncExternalStore(subscribeToFocus, navigation.isFocused, navigation.isFocused);
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { coordinates, refreshLocation, liveVenues } = useLiveVenues();
@@ -1075,33 +1076,37 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       keyboardVerticalOffset={0}
       style={[styles.screen, { backgroundColor: colors.background }]}
     >
-      <View style={[styles.header, polish.header, { backgroundColor: colors.green800, paddingTop: insets.top + 12 }]}>
+      <View style={[styles.header, polish.header, { backgroundColor: colors.green800, paddingTop: insets.top + 8 }]}>
+        {isRouteFocused ? <StatusBar style="light" /> : null}
         {embedded ? (
           <View style={styles.headerIcon} />
         ) : (
           <Pressable
             accessibilityLabel="Close Panda AI"
             accessibilityRole="button"
+            hitSlop={6}
             onPress={() => router.back()}
-            style={styles.headerIcon}
+            style={({ pressed }) => [styles.headerIcon, pressed && styles.headerIconPressed]}
           >
             <PandaIcon name="arrow-left" size={22} color={colors.primaryForeground} />
           </Pressable>
         )}
-        <View style={[styles.pandaAvatar, polish.pandaAvatar, { backgroundColor: colors.ivory }]}>
-          <PandaLogo size={42} />
+        <View accessible accessibilityLabel="Panda logo" accessibilityRole="image" style={[styles.pandaAvatar, polish.pandaAvatar, { backgroundColor: colors.ivory, borderColor: colors.goldLine }]}>
+          <PandaLogo size={36} />
         </View>
-        <View style={styles.headerCopy}>
-          <Text style={[styles.headerTitle, polish.headerTitle, { color: colors.primaryForeground }]}>Panda AI</Text>
-          <Text style={[styles.headerSubtitle, polish.headerSubtitle, { color: colors.mint300 }]}>Your night-out concierge</Text>
+        <View accessible accessibilityRole="header" accessibilityLabel="Panda AI, Your life concierge" style={styles.headerCopy}>
+          <Text numberOfLines={1} style={[styles.headerTitle, polish.headerTitle, styles.headerTitleRefined, { color: colors.primaryForeground }]}>Panda AI</Text>
+          <Text numberOfLines={1} style={[styles.headerSubtitle, polish.headerSubtitle, styles.headerSubtitleRefined, { color: colors.mint300 }]}>Your life concierge</Text>
         </View>
         <Pressable
           accessibilityLabel="Clear Panda AI chat"
+          accessibilityHint="Removes the current conversation"
           accessibilityRole="button"
+          hitSlop={6}
           onPress={clearChat}
-          style={styles.headerIcon}
+          style={({ pressed }) => [styles.headerIcon, pressed && styles.headerIconPressed]}
         >
-          <PandaIcon name="trash" size={19} color={colors.primaryForeground} />
+          <PandaIcon name="trash" size={20} color={colors.primaryForeground} />
         </Pressable>
       </View>
 
@@ -1774,16 +1779,22 @@ const styles = StyleSheet.create({
   },
   headerIcon: {
     alignItems: 'center',
-    height: 38,
+    height: 44,
     justifyContent: 'center',
-    width: 36,
+    marginHorizontal: -4,
+    width: 44,
+  },
+  headerIconPressed: {
+    opacity: 0.55,
   },
   pandaAvatar: {
     alignItems: 'center',
-    borderRadius: 21,
-    height: 42,
+    borderRadius: 23,
+    borderWidth: 1.5,
+    height: 46,
     justifyContent: 'center',
-    width: 42,
+    overflow: 'hidden',
+    width: 46,
   },
   headerCopy: {
     flex: 1,
@@ -1796,6 +1807,16 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 11,
     marginTop: 2,
+  },
+  headerTitleRefined: {
+    fontSize: 20,
+    lineHeight: 24,
+  },
+  headerSubtitleRefined: {
+    fontSize: 11,
+    letterSpacing: 0.6,
+    lineHeight: 14,
+    marginTop: 1,
   },
   messages: {
     gap: 13,

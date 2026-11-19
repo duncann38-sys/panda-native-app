@@ -1,4 +1,5 @@
 import type { Venue } from '@/data/venues';
+import { venuePresentationCategory } from './venue-presentation-category';
 
 type Profile = {
   id: string;
@@ -18,7 +19,7 @@ type Profile = {
 };
 
 export function hydrateVenueDetails(venue: Venue, profile: Profile | null): Venue {
-  if (!profile || profile.id !== venue.id) return venue;
+  if (!profile || profile.id !== venue.id) return { ...venue, category: venuePresentationCategory(venue) };
   const photos = profile.photoNames?.filter(photo => Boolean(photo.name));
   return {
     ...venue,
@@ -26,6 +27,7 @@ export function hydrateVenueDetails(venue: Venue, profile: Profile | null): Venu
     ratingCount: profile.ratingCount ?? venue.ratingCount,
     fullAddress: profile.address || venue.fullAddress,
     type: profile.primaryType || venue.type,
+    category: venuePresentationCategory({ ...venue, type: profile.primaryType || venue.type }),
     price: profile.price || venue.price,
     hours: profile.todayHours || venue.hours,
     openNow: profile.openNow ?? venue.openNow,

@@ -28,7 +28,8 @@ import { VenuePhoto, useVenuePhotos, type VenuePhotoItem } from '@/components/Ve
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { VenueGallery } from '@/components/VenueGallery';
 import { PANDA_RUNTIME_API } from '@/constants/services';
-import { NonHospitalityDetails } from '@/components/NonHospitalityDetails';
+import { NonHospitalityActions } from '@/components/NonHospitalityActions';
+import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
@@ -445,7 +446,6 @@ export default function VenueDetailScreen() {
     );
   }
 
-  if (venue.category === 'Shop' || venue.category === 'Place of Interest') return <NonHospitalityDetails venue={venue} />;
   const displayedRating =
     googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : venue.rating;
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;
@@ -667,7 +667,7 @@ export default function VenueDetailScreen() {
               <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
               {venue.premium && venue.banging ? <View style={[styles.paidPremiumUnderline, { backgroundColor: colors.gold }]} /> : null}
             </View>
-            {venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
+            {!isNonHospitalityVenue(venue) && venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
               <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
             </View> : null}
           </View>
@@ -744,7 +744,7 @@ export default function VenueDetailScreen() {
               </View>
             </View>
 
-            <View style={styles.editorialActions}>
+            {isNonHospitalityVenue(venue) ? <NonHospitalityActions venue={venue} /> : <View style={styles.editorialActions}>
               <ActionButton refined fontFamily={fonts.bold} label={openingVenuePage ? 'Finding link…' : 'View menu'} icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
               <ActionButton refined fontFamily={fonts.bold} label="Reserve" icon="calendar" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={() => openVenuePage('reservation')} />
               <ActionButton refined fontFamily={fonts.bold} label="Directions" icon="navigate" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={openWalkingDirections} />
@@ -752,7 +752,7 @@ export default function VenueDetailScreen() {
                 recordVenueActivity('call_click', venue);
                 openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
               }} /> : null}
-            </View>
+            </View>}
             {weatherStatus !== 'idle' ? (
               <View
                 style={[
@@ -1042,11 +1042,11 @@ function PlannerVenuePreview({
               background={colors.goldSoft}
               foreground={colors.honeyInk}
             />
-            <MetaChip
+            {!isNonHospitalityVenue(venue) ? <MetaChip
               label={venue.price || '££'}
               background={colors.muted}
               foreground={colors.green800}
-            />
+            /> : null}
             <MetaChip
               icon="clock"
               label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
@@ -1079,7 +1079,7 @@ function PlannerVenuePreview({
             status={transitStatus}
           />
 
-          <View style={styles.plannerPreviewActions}>
+          {isNonHospitalityVenue(venue) ? <NonHospitalityActions venue={venue} /> : <View style={styles.plannerPreviewActions}>
             <ActionButton
               label="View menu"
               icon="globe"
@@ -1101,7 +1101,7 @@ function PlannerVenuePreview({
               foreground={colors.primaryForeground}
               onPress={onDirections}
             />
-          </View>
+          </View>}
 
           <Pressable
             accessibilityLabel="Back to the same Panda planner"
