@@ -28,6 +28,7 @@ import { VenuePhoto, useVenuePhotos, type VenuePhotoItem } from '@/components/Ve
 import { googleDirectionsUrl } from '@/utils/venue-actions';
 import { VenueGallery } from '@/components/VenueGallery';
 import { PANDA_RUNTIME_API } from '@/constants/services';
+import { NonHospitalityDetails } from '@/components/NonHospitalityDetails';
 import { useLiveVenues } from '@/context/live-venues';
 import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
@@ -444,6 +445,7 @@ export default function VenueDetailScreen() {
     );
   }
 
+  if (venue.category === 'Shop' || venue.category === 'Place of Interest') return <NonHospitalityDetails venue={venue} />;
   const displayedRating =
     googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : venue.rating;
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;

@@ -22,6 +22,7 @@ export type ReserveButtonProps = {
 export function ReserveButton({ venue, activitySurface, compact = false, tone = 'solid', style, onBeforeNavigate }: ReserveButtonProps) {
   const colors = useColors();
   const router = useRouter();
+  if (venue.category === 'Shop' || venue.category === 'Place of Interest') return null;
   const surface = isReserveSurface(activitySurface) ? activitySurface : undefined;
   const bg = tone === 'soft' ? colors.mint100 : colors.green800;
   const fg = tone === 'soft' ? colors.green900 : colors.primaryForeground;

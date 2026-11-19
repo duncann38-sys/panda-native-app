@@ -1,0 +1,12 @@
+name: Panda 80 - Categories Places and Booking Reminders
+on:
+  push:
+    branches:
+      - panda-build-80
+jobs:
+  build_android_preview:
+    name: Panda 80 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview

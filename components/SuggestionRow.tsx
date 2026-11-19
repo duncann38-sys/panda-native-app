@@ -5,6 +5,8 @@ import { VenuePhoto } from '@/components/VenuePhoto';
 import type { Venue } from '@/data/venues';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { useColors } from '@/hooks/useColors';
+import { NonHospitalityCard } from '@/components/NonHospitalityCard';
+import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
 import { PANDA_PRODUCTION_API } from '@/constants/services';
 import { DiscoverVenueCard } from '@/components/DiscoverVenueCard';
 
@@ -155,6 +157,7 @@ export function SuggestionRow({
   }, [venue.id, venue.detailsDeferred, isVisible]);
 
   const card = hydratedVenue ?? venue;
+  if (isNonHospitalityVenue(card)) return <NonHospitalityCard venue={card} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} activitySurface={activitySurface} />;
   const cardTitle = card.name.trim()
     ? card.name
     : card.detailsDeferred

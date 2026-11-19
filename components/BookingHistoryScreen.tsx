@@ -5,6 +5,7 @@ import { PandaIcon } from '@/components/PandaIcon';
 import { PandaLogo } from '@/components/PandaLogo';
 import { useColors } from '@/hooks/useColors';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
+import { BookingReminderControl } from '@/context/booking-reminders';
 import { confirmationEmailLabel, type SandboxConfirmation } from '@/utils/sandbox-reservations';
 
 // startDateTime is a floating restaurant-local "YYYY-MM-DDTHH:mm". Never pass it to new Date()
@@ -126,6 +127,7 @@ export function BookingHistoryScreen() {
                     <Text selectable style={[styles.mono, { color: colors.green800 }]}>{b.confirmationNumber}</Text>
                   </View>
                   <Text style={[styles.muted, { color: colors.mutedForeground }]}>{emailLabel(b.emailStatus)}</Text>
+                  <BookingReminderControl booking={b} />
                   {sandbox ? (
                     <Text style={[styles.muted, { color: colors.mutedForeground }]}>Test booking only. No restaurant is expecting you and cancellation is not available here.</Text>
                   ) : null}

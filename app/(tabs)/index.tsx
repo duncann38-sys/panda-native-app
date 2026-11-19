@@ -3,10 +3,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { fetch as expoFetch } from 'expo/fetch';
 import * as Location from 'expo-location';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { discoveryDayPart, orderDiscoveryCategories } from '@/utils/discovery-category-order';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LatestDiscoverySelection, shouldFillDiscovery } from '@/utils/discovery-continuity';
 import { DiscoveryRequestLane, discoveryDeadline } from '@/utils/discovery-request';
 import {
+  AppState,
   ActivityIndicator,
   FlatList,
   Platform,
@@ -76,6 +78,7 @@ const categories: Array<{
   { label: 'Burgers', emoji: '🍔', terms: ['burger'] },
   { label: 'Coffee', emoji: '☕', terms: ['coffee', 'cafe', 'café'] },
   { label: 'Breakfast', emoji: '🍳', terms: ['breakfast'] },
+  { label: 'Brunch', emoji: '🍳', terms: ['brunch'] },
   { label: 'Lunch', emoji: '🥗', terms: ['lunch'] },
   { label: 'Bottomless', emoji: '🍾', terms: ['bottomless'] },
   { label: 'Dinner', emoji: '🍽️', terms: ['dinner', 'restaurant'] },
@@ -86,13 +89,6 @@ const categories: Array<{
   { label: 'Shops', emoji: '🛍️', terms: [] },
   { label: 'Places of Interest', emoji: '🏛️', terms: [] },
 ];
-
-const categoryPriority: Record<'morning' | 'midday' | 'evening' | 'late', TopCategory[]> = {
-  morning: ['Breakfast', 'Brunch', 'Coffee', 'Lunch', 'Meat', 'Bar'],
-  midday: ['Lunch', 'Brunch', 'Bottomless', 'Coffee', 'Dinner', 'Meat', 'Bar'],
-  evening: ['Dinner', 'Meat', 'Pubs', 'Bar', 'Drinks', 'Sports', 'Live Music', 'Nightlife'],
-  late: ['Nightlife', 'Pubs', 'Bar', 'Drinks', 'Sports', 'Live Music'],
-};
 
 type LiveVenueResult = {
   id: string;
@@ -718,6 +714,14 @@ function liveVenueFromResult(
 }
 
 export default function DiscoverScreen() {
+  const [categoryDayPart, setCategoryDayPart] = useState(discoveryDayPart);
+  useFocusEffect(useCallback(() => {
+    setCategoryDayPart(discoveryDayPart());
+    const listener = AppState.addEventListener('change', state => {
+      if (state === 'active') setCategoryDayPart(discoveryDayPart());
+    });
+    return () => listener.remove();
+  }, []));
   const [bangingIsOpen, setBangingIsOpen] = useState(false);
   const discoveryImpressions = useVenueImpressions('discovery', !bangingIsOpen);
   const colors = useColors();
@@ -1278,20 +1282,8 @@ export default function DiscoverScreen() {
   }, [locationStatus, setLiveArea, setLiveVenues]);
 
   const orderedCategories = useMemo(() => {
-    const hour = new Date().getHours();
-    const timeKey = hour < 11 ? 'morning' : hour < 16 ? 'midday' : hour < 23 ? 'evening' : 'late';
-    const priority = categoryPriority[timeKey];
-    const rank = (label: TopCategory) => {
-      const position = priority.indexOf(label);
-      return position === -1 ? Number.MAX_SAFE_INTEGER : position;
-    };
-    return [
-      categories[0],
-      ...categories
-        .slice(1)
-        .sort((first, second) => rank(first.label) - rank(second.label)),
-    ];
-  }, []);
+    return orderDiscoveryCategories(categories, categoryDayPart);
+  }, [categoryDayPart]);
 
   const displayVenues = useMemo(() => {
     const combined = new Map<string, Venue>(liveVenues.map(venue => [venue.id, venue]));

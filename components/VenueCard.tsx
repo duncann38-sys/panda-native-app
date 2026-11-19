@@ -6,6 +6,8 @@ import type { Venue } from '@/data/venues';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { ReserveButton } from '@/components/ReserveButton';
+import { NonHospitalityCard } from '@/components/NonHospitalityCard';
+import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
 import { venueCardPalette } from '@/constants/venue-card-design';
 
 type VenueCardProps = {
@@ -30,6 +32,7 @@ export function VenueCard({
   onPhotoInteraction,
 }: VenueCardProps) {
   const colors = useColors();
+  if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={presentation === 'banging' ? 'banging' : undefined} />;
   const editorial = presentation === 'banging';
   const premiumCard = venue.premium;
   const tierLabel = venue.premium ? (editorial && venue.banging ? 'Premium' : 'Promoted') : null;

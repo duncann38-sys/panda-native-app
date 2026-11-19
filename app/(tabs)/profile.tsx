@@ -10,6 +10,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth, type PandaAuthProvider } from '@/context/auth';
+import { useBookingReminders } from '@/context/booking-reminders';
 import { useSavedVenues } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
 import {
@@ -46,6 +47,7 @@ const PROFILE_ICON_TONES: Partial<Record<FeatherName, ProfileIconTone>> = {
 };
 
 export default function ProfileScreen() {
+  const bookingReminders = useBookingReminders();
   const colors = useColors();
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -140,6 +142,7 @@ export default function ProfileScreen() {
       const next = await profileStore.update(account?.uid, { notificationsEnabled: enabled });
       if (ownerKey.current !== preferencesKey) return;
       setProfilePreferences(next);
+      await bookingReminders.notificationsChanged(enabled);
     } catch {
       Alert.alert('Setting not saved', 'Your notification preference could not be saved on this device.');
     }
@@ -242,7 +245,8 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="calendar"
             title="My bookings"
-            subtitle="Bookings confirmed in Panda"
+            subtitle={bookingReminders.countLabel}
+            badge={bookingReminders.count === null ? '—' : String(bookingReminders.count)}
             colors={colors}
             onPress={() => router.push('/bookings')}
           />
@@ -403,6 +407,7 @@ function ProfileMenuRow({
   icon,
   title,
   subtitle,
+  badge,
   colors,
   onPress,
   last = false,
@@ -410,6 +415,7 @@ function ProfileMenuRow({
   icon: FeatherName;
   title: string;
   subtitle: string;
+  badge?: string;
   colors: ReturnType<typeof useColors>;
   onPress: () => void;
   last?: boolean;
@@ -439,6 +445,9 @@ function ProfileMenuRow({
           {subtitle}
         </Text>
       </View>
+      {badge !== undefined && <View style={{ minWidth: 30, paddingHorizontal: 9, paddingVertical: 5, borderRadius: 15, backgroundColor: colors.secondary }}>
+        <Text testID="profile-booking-count" style={{ color: colors.green800, fontFamily: 'Inter_700Bold', textAlign: 'center' }}>{badge}</Text>
+      </View>}
       <Feather name="chevron-right" size={20} color={colors.mutedForeground} />
     </Pressable>
   );

@@ -18,6 +18,7 @@ import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
 import { SavedVenuesProvider } from '@/context/saved-venues';
 import { AuthProvider, useAuth } from '@/context/auth';
+import { BookingRemindersProvider } from '@/context/booking-reminders';
 import { canEnterPanda } from '@/utils/auth-access';
 import { useColors } from '@/hooks/useColors';
 import { startVenueActivityDelivery } from '@/utils/record-venue-activity';
@@ -93,10 +94,12 @@ export default function RootLayout() {
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <AuthProvider>
+                <BookingRemindersProvider>
                 <AuthenticatedVenueProviders>
                     <StatusBar style={pathname === '/' || colorScheme !== 'dark' ? 'dark' : 'light'} backgroundColor={colors.background} />
                     <RootLayoutNav />
                 </AuthenticatedVenueProviders>
+                </BookingRemindersProvider>
               </AuthProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>

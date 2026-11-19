@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.panda.pandamobile",
-      "versionCode": 79,
+      "versionCode": 80,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",
@@ -29,6 +29,7 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
+      "expo-notifications",
       "expo-router",
       "expo-font",
       "expo-web-browser",

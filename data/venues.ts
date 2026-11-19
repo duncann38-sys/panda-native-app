@@ -25,6 +25,9 @@ export type Venue = {
   openNow: boolean;
   cached?: boolean;
   website: string;
+  ticketUrl?: string;
+  ticketUrlVerified?: boolean;
+  ticketPlaceId?: string;
   mapsUri: string;
   phone: string;
   premium: boolean;
