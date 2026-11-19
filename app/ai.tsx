@@ -60,6 +60,7 @@ type AiVenue = {
   fullAddress?: string;
   type?: string;
   rating?: number;
+  ratingCount?: number;
   distanceMeters?: number;
   latitude?: number;
   longitude?: number;
@@ -184,7 +185,7 @@ type VoiceRecognition = {
 type VoiceRecognitionConstructor = new () => VoiceRecognition;
 
 const PANDA_AI_URL = `${PANDA_PRODUCTION_API}/api/panda-ai`;
-const PANDA_AI_VENUE_LIMIT = 10;
+const PANDA_AI_VENUE_LIMIT = 15;
 const PANDA_AI_REQUEST_TIMEOUT_MS = 18_000;
 const OPTIONAL_REQUEST_TIMEOUT_MS = 5_000;
 const TRANSIT_REQUEST_TIMEOUT_MS = 9_000;
@@ -224,7 +225,18 @@ function localTimeZone() {
   }
 }
 
-const suggestions = ['Nearest station & directions', 'What’s open now?', 'Dinner tonight', 'Cocktails nearby', 'Cheap eats'];
+const suggestions = ['Nearest station & directions', 'Open right now', 'Dinner tonight', 'Nearby bars', 'Cheap eats', 'Pint'];
+const nearbyShortcutPrompts: Record<string, string> = {
+  'Open right now': 'Restaurants open right now near me',
+  'Nearby bars': 'Bars near me',
+  'Cheap eats': 'Cheap eats near me',
+  'Dinner tonight': 'Dinner tonight near me',
+  Pint: 'Pubs near me',
+};
+function isNearbyShortcut(text: string) {
+  return Object.values(nearbyShortcutPrompts).includes(text)
+    || Object.prototype.hasOwnProperty.call(nearbyShortcutPrompts, text);
+}
 
 async function fetchWithTimeout(
   url: string,
@@ -678,11 +690,16 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const eligibleVenues = (data.venues ?? []).filter((venue) =>
         Boolean(venue.photoName)
         && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
+        && (!isNearbyShortcut(trimmed) || (Number.isFinite(venue.distanceMeters)
+          && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000))
         && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue))),
       );
       if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch) {
         eligibleVenues.sort(
-          (left, right) => Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
+          (left, right) => (isNearbyShortcut(trimmed)
+            ? Number(right.rating ?? 0) - Number(left.rating ?? 0)
+              || Number(right.ratingCount ?? 0) - Number(left.ratingCount ?? 0) : 0)
+            || Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
         );
       }
       eligibleVenues.splice(data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
@@ -1199,7 +1216,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             onPress={() =>
               suggestion.planner
                 ? router.push({ pathname: '/', params: { openPlanner: timeMode } })
-                : sendMessage('prompt' in suggestion ? suggestion.prompt : suggestion.label)
+                : sendMessage('prompt' in suggestion ? suggestion.prompt : nearbyShortcutPrompts[suggestion.label] ?? suggestion.label)
             }
             style={({ pressed }) => [
               styles.suggestion, polish.suggestion,

@@ -22,7 +22,7 @@ import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
 import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
-const DRAWER_OPEN_HEIGHT = 272;
+const DRAWER_OPEN_HEIGHT = 372;
 const DRAWER_CLOSED_HEIGHT = 44;
 const DRAWER_CLOSED_OFFSET = DRAWER_OPEN_HEIGHT - DRAWER_CLOSED_HEIGHT;
 
@@ -305,7 +305,7 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   carouselViewport: {
-    height: 208,
+    height: 308,
     position: 'relative',
   },
   frostedEdge: {

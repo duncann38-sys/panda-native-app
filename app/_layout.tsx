@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useColorScheme } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -11,7 +12,7 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack } from 'expo-router';
+import { Stack, usePathname } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
@@ -66,6 +67,8 @@ function AuthenticatedVenueProviders({ children }: { children: React.ReactNode }
 }
 
 export default function RootLayout() {
+  const colorScheme = useColorScheme();
+  const pathname = usePathname();
   useEffect(startVenueActivityDelivery, []);
   const colors = useColors();
   const [fontsLoaded, fontError] = useFonts({
@@ -91,7 +94,7 @@ export default function RootLayout() {
             <KeyboardProvider>
               <AuthProvider>
                 <AuthenticatedVenueProviders>
-                    <StatusBar style="light" backgroundColor={colors.green800} />
+                    <StatusBar style={pathname === '/' || colorScheme !== 'dark' ? 'dark' : 'light'} backgroundColor={colors.background} />
                     <RootLayoutNav />
                 </AuthenticatedVenueProviders>
               </AuthProvider>
