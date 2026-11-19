@@ -1,6 +1,7 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { bangingDrawerLayout } from '@/utils/banging-drawer-layout';
 import {
   Animated,
   FlatList,
@@ -22,10 +23,6 @@ import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
 import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
-const DRAWER_OPEN_HEIGHT = 372;
-const DRAWER_CLOSED_HEIGHT = 44;
-const DRAWER_CLOSED_OFFSET = DRAWER_OPEN_HEIGHT - DRAWER_CLOSED_HEIGHT;
-
 export function BangingDrawer({
   venues,
   status,
@@ -44,15 +41,37 @@ export function BangingDrawer({
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const androidBottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0;
-  const { width } = useWindowDimensions();
+  const { width, fontScale } = useWindowDimensions();
+  const measurementKey = `${width}:${fontScale}`;
+  const [measurements, setMeasurements] = useState({ key: measurementKey, card: 0, header: 64 });
+  const measured = measurements.key === measurementKey ? measurements : { card: 0, header: 64 };
+  const geometry = bangingDrawerLayout(measured.header, measured.card);
+  const closedOffset = geometry.closedOffset;
   const [open, setOpen] = useState(false);
   const bangingImpressions = useVenueImpressions('banging', open);
   const bangingViewabilityPairs = useRef([bangingImpressions.presentationPair, bangingImpressions]).current;
   const [carouselVisible, setCarouselVisible] = useState(false);
   const [photoInteracting, setPhotoInteracting] = useState(false);
-  const translateY = useRef(new Animated.Value(DRAWER_CLOSED_OFFSET)).current;
-  const settledOffset = useRef(DRAWER_CLOSED_OFFSET);
-  const gestureStartOffset = useRef(DRAWER_CLOSED_OFFSET);
+  const translateY = useRef(new Animated.Value(closedOffset)).current;
+  const settledOffset = useRef(closedOffset);
+  const gestureStartOffset = useRef(closedOffset);
+  const openRef = useRef(open);
+  openRef.current = open;
+  useLayoutEffect(() => {
+    const target = openRef.current ? 0 : closedOffset;
+    translateY.setValue(target);
+    settledOffset.current = target;
+    gestureStartOffset.current = target;
+  }, [closedOffset, translateY]);
+  const measure = (kind: 'card' | 'header', height: number) => {
+    const next = Math.ceil(height);
+    if (!Number.isFinite(next) || next <= 0) return;
+    setMeasurements(previous => {
+      const current = previous.key === measurementKey ? previous : { key: measurementKey, card: 0, header: 64 };
+      const value = kind === 'card' ? Math.max(current.card, next) : next;
+      return current[kind] === value && previous.key === measurementKey ? previous : { ...current, [kind]: value };
+    });
+  };
   const [activeIndex, setActiveIndex] = useState(0);
   // The parent owns daily selection and timed ordering; do not reorder it here.
   const bangingVenues = venues.filter(venue => venue.banging);
@@ -64,7 +83,7 @@ export function BangingDrawer({
 
   const settleDrawer = useCallback(
     (nextOpen: boolean) => {
-      const nextOffset = nextOpen ? 0 : DRAWER_CLOSED_OFFSET;
+      const nextOffset = nextOpen ? 0 : closedOffset;
       settledOffset.current = nextOffset;
       setOpen(nextOpen);
       onOpenChange?.(nextOpen);
@@ -80,7 +99,7 @@ export function BangingDrawer({
         if (finished && !nextOpen) setCarouselVisible(false);
       });
     },
-    [translateY, onOpenChange],
+    [translateY, onOpenChange, closedOffset],
   );
 
   const panResponder = useMemo(
@@ -96,7 +115,7 @@ export function BangingDrawer({
         onPanResponderMove: (_, gestureState) => {
           const nextOffset = Math.max(
             0,
-            Math.min(DRAWER_CLOSED_OFFSET, gestureStartOffset.current + gestureState.dy),
+            Math.min(closedOffset, gestureStartOffset.current + gestureState.dy),
           );
           translateY.setValue(nextOffset);
         },
@@ -107,14 +126,14 @@ export function BangingDrawer({
               ? true
               : gestureState.dy > 36 || gestureState.vy > 0.5
                 ? false
-                : projectedOffset < DRAWER_CLOSED_OFFSET / 2;
+                : projectedOffset < closedOffset / 2;
           settleDrawer(nextOpen);
         },
         onPanResponderTerminate: () => {
           settleDrawer(settledOffset.current === 0);
         },
       }),
-    [settleDrawer, translateY],
+    [settleDrawer, translateY, closedOffset],
   );
 
   const onMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -128,6 +147,7 @@ export function BangingDrawer({
         styles.drawer,
         {
           bottom: 78 + (Platform.OS === 'ios' ? insets.bottom : androidBottomInset),
+          height: geometry.height,
           backgroundColor: drawerSurface,
           borderColor: colors.goldLine,
           borderBottomColor: colors.border,
@@ -138,6 +158,7 @@ export function BangingDrawer({
       ]}
     >
       <Pressable
+        onLayout={event => { if (open) measure('header', event.nativeEvent.layout.height); }}
         accessibilityLabel={open ? 'Collapse Banging venues' : 'Expand Banging venues'}
         accessibilityHint="Swipe up to open or down to close"
         accessibilityRole="button"
@@ -167,7 +188,7 @@ export function BangingDrawer({
           <Feather name={open ? 'chevron-down' : 'chevron-up'} size={open ? 22 : 18} color={colors.goldDeep} />
         </View>
       </Pressable>
-      <View style={styles.carouselViewport}>
+      <View style={[styles.carouselViewport, { height: geometry.carouselHeight }]}>
         {carouselVisible ? <FlatList
           viewabilityConfigCallbackPairs={bangingViewabilityPairs}
           data={bangingVenues}
@@ -189,7 +210,7 @@ export function BangingDrawer({
           maxToRenderPerBatch={5}
           windowSize={5}
           renderItem={({ item: venue, index }) => (
-            <View style={[styles.cardSlot, { marginRight: cardGap, width: cardWidth }]}>
+            <View onLayout={event => measure('card', event.nativeEvent.layout.height)} style={[styles.cardSlot, { alignSelf: 'flex-start', marginRight: cardGap, width: cardWidth }]}>
               <VenueCard
                 venue={venue}
                 saved={isSaved(venue.id)}
@@ -224,7 +245,6 @@ const styles = StyleSheet.create({
     borderTopRightRadius: 26,
     borderTopWidth: 1,
     elevation: 15,
-    height: DRAWER_OPEN_HEIGHT,
     left: 0,
     overflow: 'hidden',
     position: 'absolute',
@@ -305,7 +325,6 @@ const styles = StyleSheet.create({
     paddingBottom: 8,
   },
   carouselViewport: {
-    height: 308,
     position: 'relative',
   },
   frostedEdge: {
