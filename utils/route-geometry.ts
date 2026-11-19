@@ -1,5 +1,14 @@
 export type MapCoordinate = { latitude: number; longitude: number };
 
+/** An itinerary fits its stops, like WAP; a distant phone must not shrink it. */
+export function mapRouteFitPoints(
+  route: MapCoordinate[], stations: MapCoordinate[], geometry: MapCoordinate[],
+  user?: MapCoordinate | null,
+): MapCoordinate[] {
+  const points = [...route, ...stations, ...geometry];
+  return route.length > 1 || !user ? points : [user, ...points];
+}
+
 export function distanceBetweenCoordinates(a: MapCoordinate, b: MapCoordinate): number {
   const radians = Math.PI / 180;
   const latitudeDelta = (b.latitude - a.latitude) * radians;

@@ -5,6 +5,7 @@ import * as Location from 'expo-location';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LatestDiscoverySelection, shouldFillDiscovery } from '@/utils/discovery-continuity';
+import { DiscoveryRequestLane, discoveryDeadline } from '@/utils/discovery-request';
 import {
   ActivityIndicator,
   FlatList,
@@ -39,7 +40,6 @@ import { venues, type Venue } from '@/data/venues';
 import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
 import { recordVenueActivity, withVenueActivityContext } from '@/utils/record-venue-activity';
-import { loadProgressiveDiscovery } from '@/utils/discovery-loading';
 import {
   advanceLiveSearchCursor,
   liveDiscoveryNearbyTypes,
@@ -496,7 +496,9 @@ async function fetchIndexedFeedPage(
   location: { lat: number; lng: number },
   cursor?: string | null,
   reserveRequest?: () => boolean,
+  signal?: AbortSignal,
 ): Promise<IndexedFeedPage> {
+  if (signal?.aborted) return { venues: [], nextCursor: cursor ?? null, indexExhausted: false };
   let searchCursor: LiveSearchCursor | undefined;
   if (cursor) {
     try {
@@ -518,20 +520,19 @@ async function fetchIndexedFeedPage(
   }
   const request = liveSearchRequest(searchCursor);
   const query = liveDiscoverySearchQuery(category);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 20_000);
+  const deadline = discoveryDeadline(signal, 20_000);
+  const startedAt = Date.now();
   try {
     const response = await fetch(PANDA_DISCOVERY_API + '/api/panda-ai', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         venuesOnly: true,
-        discoveryMode: 'cover',
         query,
         location,
         ...request,
       }),
-      signal: controller.signal,
+      signal: deadline.signal,
     });
     if (!response.ok) {
       return {
@@ -569,7 +570,12 @@ async function fetchIndexedFeedPage(
       failure: { code: error instanceof Error && error.name === 'AbortError' ? 'API-TIMEOUT' : 'API-NETWORK' },
     };
   } finally {
-    clearTimeout(timeout);
+    deadline.dispose();
+    console.info('[Panda discovery]', JSON.stringify({
+      stage: cursor ? 'next-page' : 'first-page',
+      elapsedMs: Date.now() - startedAt,
+      cancelled: signal?.aborted === true,
+    }));
   }
 }
 
@@ -717,9 +723,10 @@ export default function DiscoverScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { openPlanner, plannerIds, plannerLocation, plannerPrice, plannerReturn } = useLocalSearchParams<{
+  const { openPlanner, plannerIds, plannerVenues, plannerLocation, plannerPrice, plannerReturn } = useLocalSearchParams<{
     openPlanner?: string;
     plannerIds?: string;
+    plannerVenues?: string;
     plannerLocation?: string;
     plannerPrice?: string;
     plannerReturn?: string;
@@ -805,7 +812,13 @@ export default function DiscoverScreen() {
   const displayedOrigin = useRef<{ latitude: number; longitude: number } | null>(null);
   const cachedNearbyAtRef = useRef<number | null>(null);
   const categoryLoadInFlight = useRef(false);
-  const pendingCategory = useRef(new LatestDiscoverySelection<DiscoveryCategory>());
+  const pendingCategory = useRef(new LatestDiscoverySelection<TopCategory>());
+  const foregroundDiscovery = useRef(new DiscoveryRequestLane());
+  const initialDiscovery = useRef(new DiscoveryRequestLane());
+  useEffect(() => () => {
+    foregroundDiscovery.current.cancel();
+    initialDiscovery.current.cancel();
+  }, []);
   const [categoryRequestVersion, setCategoryRequestVersion] = useState(0);
   const continuationRetryAt = useRef(new Map<TopCategory, number>());
   const automaticPages = useRef(new Map<TopCategory, number>());
@@ -855,6 +868,8 @@ export default function DiscoverScreen() {
   const loadLiveVenues = useCallback(async (requestPermission: boolean) => {
     if (liveLoadInFlight.current) return;
     liveLoadInFlight.current = true;
+    const request = initialDiscovery.current.begin();
+    let located = false;
     const generation = discoveryGeneration.current + 1;
     discoveryGeneration.current = generation;
     setLiveDiscoveryState('loading');
@@ -889,6 +904,8 @@ export default function DiscoverScreen() {
         setLiveDiscoveryState(denied ? 'permission-denied' : 'error');
         return;
       }
+      located = true;
+      if (!initialDiscovery.current.isCurrent(request)) return;
 
       const origin = {
         latitude: location.coordinates.latitude,
@@ -989,8 +1006,8 @@ export default function DiscoverScreen() {
       published = true;
       void writeNearbyCache({ savedAt: providerCachedAt ?? Date.now(), area, origin, venues: nextVenues });
       };
-      const indexed = await fetchIndexedFeedPage('All', locationPayload, null, reserveDiscoveryRequest);
-      if (discoveryGeneration.current !== generation) return;
+      const indexed = await fetchIndexedFeedPage('All', locationPayload, null, reserveDiscoveryRequest, request.signal);
+      if (discoveryGeneration.current !== generation || !initialDiscovery.current.isCurrent(request)) return;
       if (indexed.failure) {
         setLiveDiscoveryFailure(indexed.failure.code);
         setLiveDiscoveryState('error');
@@ -1002,21 +1019,24 @@ export default function DiscoverScreen() {
         publishPages([{ venues: indexed.venues }], true);
         return;
       }
-      await loadProgressiveDiscovery({
-        queries: LIVE_DISCOVERY_QUERIES,
-        loadFirst: (query) => fetchDiscoveryPage(
-          query, locationPayload, undefined, undefined, reserveDiscoveryRequest, 'system',
-        ),
-        loadMore: (queries) => fetchDiscoveryBatch(queries, locationPayload, reserveDiscoveryRequest),
-        onResults: publishPages,
-        isCurrent: () => discoveryGeneration.current === generation,
-      });
-      allLiveFallbackLoaded.current = true;
+      // This legacy-named helper already calls WAP's live Text Search endpoint.
+      // An empty first page is not a reason to fan out into fourteen searches.
+      // Keep its cursor and let the normal serial continuation expand the area.
+      setLiveArea(area);
+      displayedOrigin.current = origin;
+      setLiveDiscoveryFailure(indexed.nextCursor ? null : 'API-EMPTY');
+      setLiveDiscoveryState(indexed.nextCursor ? 'ready' : 'error');
     } catch {
-      setLiveDiscoveryFailure('API-RESPONSE');
-      setLiveDiscoveryState('error');
+      if (initialDiscovery.current.isCurrent(request)) {
+        setLiveDiscoveryFailure('API-RESPONSE');
+        setLiveDiscoveryState('error');
+      }
     } finally {
+      initialDiscovery.current.finish(request);
       liveLoadInFlight.current = false;
+      if (request.signal.aborted && located && discoveryGeneration.current === generation) {
+        setLiveDiscoveryState('ready');
+      }
     }
   }, [coordinates, refreshLocation, reserveDiscoveryRequest, setLiveArea, setLiveVenues]);
 
@@ -1042,6 +1062,7 @@ export default function DiscoverScreen() {
       || categoryLoading === selectedCategory || categoryLoadInFlight.current || liveLoadInFlight.current) return;
 
     categoryLoadInFlight.current = true;
+    const request = foregroundDiscovery.current.begin();
     const generation = discoveryGeneration.current;
     setCategoryLoading(selectedCategory);
     try {
@@ -1085,8 +1106,8 @@ export default function DiscoverScreen() {
 
       // Render the first valid Google text-search cards immediately. If its
       // category match is sparse, make one serial, type-filtered Nearby request.
-      const page = await fetchIndexedFeedPage(selectedCategory, location, null, reserveDiscoveryRequest);
-      if (discoveryGeneration.current !== generation) return;
+      const page = await fetchIndexedFeedPage(selectedCategory, location, null, reserveDiscoveryRequest, request.signal);
+      if (discoveryGeneration.current !== generation || !foregroundDiscovery.current.isCurrent(request)) return;
       if (page.failure) {
         setLiveDiscoveryFailure(page.failure.code);
         return;
@@ -1105,28 +1126,35 @@ export default function DiscoverScreen() {
       loadedCategories.current.add(selectedCategory);
       writeCategoryFeedCache(origin, selectedCategory, venuesForCategory, nextCursor, !nextCursor, true);
     } catch {
-      setLiveDiscoveryFailure('API-RESPONSE');
+      if (foregroundDiscovery.current.isCurrent(request)) setLiveDiscoveryFailure('API-RESPONSE');
     } finally {
+      foregroundDiscovery.current.finish(request);
       categoryLoadInFlight.current = false;
       setCategoryLoading(null);
     }
   }, [categoryLoading, coordinates, liveArea, reserveDiscoveryRequest, setLiveVenues]);
 
   const selectCategory = useCallback((nextCategory: TopCategory) => {
+    if (nextCategory !== category) {
+      foregroundDiscovery.current.cancel();
+      if (nextCategory !== 'All') initialDiscovery.current.cancel();
+      setLiveDiscoveryFailure(null);
+    }
     setCategory(nextCategory);
     automaticPages.current.set(nextCategory, 0);
-    if (nextCategory === 'All') pendingCategory.current.clear();
+    if (nextCategory === 'All' && (indexedFeedCursors.current.has('All') || indexedFeedExhausted.current.has('All'))) pendingCategory.current.clear();
     else pendingCategory.current.request(nextCategory);
     setCategoryRequestVersion(version => version + 1);
-  }, []);
+  }, [category]);
 
   useEffect(() => {
     const next = pendingCategory.current.take(
       categoryLoadInFlight.current || liveLoadInFlight.current || indexedFeedInFlight.current
       || !coordinates || !screenActive || liveDiscoveryState === 'loading' || feedPageLoading,
     );
-    if (next) void loadExpandedCategory(next);
-  }, [categoryRequestVersion, categoryLoading, feedPageLoading, liveDiscoveryState, loadExpandedCategory, coordinates, screenActive]);
+    if (next === 'All') void loadLiveVenues(false);
+    else if (next) void loadExpandedCategory(next);
+  }, [categoryRequestVersion, categoryLoading, feedPageLoading, liveDiscoveryState, loadExpandedCategory, loadLiveVenues, coordinates, screenActive]);
 
   const loadMoreFeed = useCallback(async () => {
     if (!discoveryFocused.current || indexedFeedInFlight.current || feedPageLoading || categoryLoadInFlight.current
@@ -1134,6 +1162,7 @@ export default function DiscoverScreen() {
     const initialCursor = indexedFeedCursors.current.get(category);
     if (!coordinates || !initialCursor || indexedFeedExhausted.current.has(category)) return;
     indexedFeedInFlight.current = true;
+    const request = foregroundDiscovery.current.begin();
     setFeedPageLoading(true);
     const generation = discoveryGeneration.current;
     try {
@@ -1147,8 +1176,9 @@ export default function DiscoverScreen() {
           { lat: origin.latitude, lng: origin.longitude },
           requestCursor,
           reserveDiscoveryRequest,
+          request.signal,
         );
-        if (discoveryGeneration.current !== generation) return;
+        if (discoveryGeneration.current !== generation || !foregroundDiscovery.current.isCurrent(request)) return;
         if (page.failure) {
           continuationRetryAt.current.set(category, Date.now() + 30_000);
           setLiveDiscoveryFailure(page.failure.code);
@@ -1199,9 +1229,12 @@ export default function DiscoverScreen() {
         setLiveDiscoveryFailure(null);
       }
     } catch {
-      continuationRetryAt.current.set(category, Date.now() + 30_000);
-      setLiveDiscoveryFailure('API-RESPONSE');
+      if (foregroundDiscovery.current.isCurrent(request)) {
+        continuationRetryAt.current.set(category, Date.now() + 30_000);
+        setLiveDiscoveryFailure('API-RESPONSE');
+      }
     } finally {
+      foregroundDiscovery.current.finish(request);
       indexedFeedInFlight.current = false;
       setFeedPageLoading(false);
     }
@@ -1354,6 +1387,7 @@ export default function DiscoverScreen() {
       exhausted: indexedFeedExhausted.current.has(category),
       attempts: automaticPages.current.get(category) ?? 0,
       retryAt: continuationRetryAt.current.get(category) ?? 0,
+      providerPage: Boolean(JSON.parse(indexedFeedCursors.current.get(category) || '{}').pageToken),
     })) return;
     automaticPages.current.set(category, (automaticPages.current.get(category) ?? 0) + 1);
     void loadMoreFeed();
@@ -1361,6 +1395,7 @@ export default function DiscoverScreen() {
     liveDiscoveryState, loadMoreFeed]);
 
   const onRefresh = async () => {
+    foregroundDiscovery.current.cancel();
     setRefreshing(true);
     if (category !== 'All') pendingCategory.current.request(category);
     await loadLiveVenues(true);
@@ -1685,6 +1720,7 @@ export default function DiscoverScreen() {
         initialLocation={plannerLocation}
         initialMode={plannerMode}
         initialPlanIds={typeof plannerIds === 'string' ? plannerIds : undefined}
+        initialPlanVenues={typeof plannerVenues === 'string' ? plannerVenues : undefined}
         initialPrice={plannerPrice}
         onOpenMap={(plan, mode: PlannerMode, context) =>
           router.push({

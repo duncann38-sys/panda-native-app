@@ -8,7 +8,7 @@ import { PandaLogo } from '@/components/PandaLogo';
 import { useColors } from '@/hooks/useColors';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
 import {
-  SANDBOX_RESTAURANT_NAME, SandboxBookingError, sandboxBookingErrorText,
+  SANDBOX_RESTAURANT_NAME, SandboxBookingError, sandboxBookingErrorText, confirmationEmailLabel,
   type SandboxConfirmation, type SandboxReview,
 } from '@/utils/sandbox-reservations';
 
@@ -255,7 +255,7 @@ export function SandboxBookingScreen() {
         <Text selectable style={[styles.confNum, { color: colors.primaryForeground }]}>{result.confirmationNumber}</Text>
       </View>
       <Text style={[styles.heroMeta, { color: colors.mint100 }]}>
-        {result.emailStatus === 'sent' ? `Confirmation email sent to ${email}.` : 'No confirmation email has been sent. Keep this number.'}
+        {confirmationEmailLabel(result.emailStatus)} Find this confirmation in Profile → My bookings.
       </Text>
     </View>
     {historyBlock}

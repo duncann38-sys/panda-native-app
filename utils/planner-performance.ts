@@ -1,5 +1,16 @@
 export const PLANNER_FACT_TTL_MS = 3 * 60 * 60 * 1000;
 
+/** A deferred gallery is not a reason to fetch already available live facts again. */
+export function canReusePlannerFacts(venue: {
+  cached?: boolean; photoName?: string; photoNames?: unknown[];
+  latitude?: number; longitude?: number;
+}, eligible: boolean): boolean {
+  return !venue.cached && eligible
+    && Boolean(venue.photoName?.trim() || venue.photoNames?.length)
+    && typeof venue.latitude === 'number' && Number.isFinite(venue.latitude) && Math.abs(venue.latitude) <= 90
+    && typeof venue.longitude === 'number' && Number.isFinite(venue.longitude) && Math.abs(venue.longitude) <= 180;
+}
+
 /** Share pending work as well as successful facts; failed requests are retryable. */
 export class PlannerResourceCache<T> {
   private values = new Map<string, { value: T; expires: number }>();

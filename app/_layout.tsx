@@ -51,6 +51,7 @@ function RootLayoutNav() {
       <Stack.Screen name="venue/[id]/reservation" options={{ headerShown: false }} />
       <Stack.Screen name="ai" options={{ headerShown: false }} />
       <Stack.Screen name="opentable-test" options={{ headerShown: false }} />
+      <Stack.Screen name="bookings" options={{ headerShown: false }} />
       <Stack.Screen name="new-restaurants" options={{ headerShown: false }} />
       </Stack.Protected>
       <Stack.Screen name="auth" options={{ headerShown: false }} />

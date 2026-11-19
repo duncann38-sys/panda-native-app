@@ -9,6 +9,29 @@ export type SandboxAvailability = {times:string[];partySize:number;expiresAt:num
 export type SandboxReview = SandboxSelection & {reviewId:string;guest:SandboxGuest;expiresAt:number;confirmationRequired:true};
 export type SandboxConfirmation = SandboxSelection & {id:string;status:'confirmed';environment:'sandbox';
   confirmationNumber:string;createdAt:number;emailStatus:string;venueName:string;timeZone:string|null};
+
+export function parseSandboxHistory(value:unknown):SandboxConfirmation[]{
+  if(!Array.isArray(value) || value.some(item=>!item || typeof item!=='object'
+    || typeof item.id!=='string' || !item.id || item.status!=='confirmed' || item.environment!=='sandbox'
+    || item.rid!==264001 || !Number.isInteger(item.partySize) || item.partySize<1 || item.partySize>20
+    || typeof item.confirmationNumber!=='string' || !/^[1-9]\d{0,19}$/.test(item.confirmationNumber)
+    || typeof item.startDateTime!=='string' || !/^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d$/.test(item.startDateTime)
+    || !Number.isFinite(item.createdAt) || typeof item.venueName!=='string'
+    || typeof item.emailStatus!=='string' || !(item.timeZone===null || typeof item.timeZone==='string')
+  ))throw new Error('Invalid booking history response');
+  return value;
+}
+
+export function confirmationEmailLabel(status:string):string{
+  switch(status){
+    case 'provider_managed': return 'OpenTable handles confirmation emails. Panda does not track their delivery.';
+    case 'accepted': case 'sent': return 'Panda email accepted for sending. Inbox delivery has not been confirmed.';
+    case 'pending': case 'sending': return 'Panda email delivery is pending. Your confirmation is saved here.';
+    case 'unknown_do_not_resend': return 'Panda email delivery is unconfirmed. Keep this reference; do not book again.';
+    case 'not_configured': case 'not_requested': return 'No Panda email was sent. Your confirmation is saved here.';
+    default: return 'Email delivery is unconfirmed. Your confirmation is saved here.';
+  }
+}
 export class SandboxBookingError extends Error {
   constructor(public code:string,public uncertain=false){super(sandboxBookingErrorText(code));}
 }

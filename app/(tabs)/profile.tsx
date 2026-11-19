@@ -240,6 +240,13 @@ export default function ProfileScreen() {
             onPress={() => router.push('/saved')}
           />
           <ProfileMenuRow
+            icon="calendar"
+            title="My bookings"
+            subtitle="Bookings confirmed in Panda"
+            colors={colors}
+            onPress={() => router.push('/bookings')}
+          />
+          <ProfileMenuRow
             icon="credit-card"
             title="Panda Credit"
             subtitle="Coming Soon · card preview"

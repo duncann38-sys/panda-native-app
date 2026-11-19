@@ -23,7 +23,9 @@ import { useColors } from '@/hooks/useColors';
 import { useLiveVenues } from '@/context/live-venues';
 import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget, plannerVenueEligible, isLateNightVenue } from '@/utils/venue-actions';
 import { fetchWithDeadline } from '@/utils/banging-area-search';
-import { PLANNER_FACT_TTL_MS, PlannerResourceCache, stablePlannerSelection, type PlannerSelection } from '@/utils/planner-performance';
+import { PLANNER_FACT_TTL_MS, PlannerResourceCache, stablePlannerSelection, canReusePlannerFacts, type PlannerSelection } from '@/utils/planner-performance';
+import { restorePlannerSnapshot } from '@/utils/planner-snapshot';
+import { isGooglePlaceVenue } from '@/utils/google-place-eligibility';
 
 export type PlannerMode = 'morning' | 'lunch' | 'night';
 const plannerRoutes = new PlannerResourceCache<{ durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }>();
@@ -261,6 +263,7 @@ export function PandaPlannerSheet({
   initialLocation,
   initialMode,
   initialPlanIds,
+  initialPlanVenues,
   initialPrice,
   onOpenMap,
   onOpenDirections,
@@ -270,6 +273,7 @@ export function PandaPlannerSheet({
   initialLocation?: string;
   initialMode?: PlannerMode;
   initialPlanIds?: string;
+  initialPlanVenues?: string;
   initialPrice?: string;
   onOpenMap: (
     plan: Venue[],
@@ -310,11 +314,9 @@ export function PandaPlannerSheet({
   const selectionRef = useRef<PlannerSelection<Venue> | null>(null);
   const restoredPlan = useMemo(() => {
     const ids = String(initialPlanIds || '').split(',').filter(Boolean);
-    if (ids.length !== 3) return null;
-    const restored = ids.map((id) => venues.find((venue) => venue.id === id));
-    return restored.every(Boolean) ? (restored as Venue[]) : null;
-  }, [initialPlanIds]);
-  const { liveVenues, coordinates } = useLiveVenues();
+    return restorePlannerSnapshot(initialPlanVenues, ids);
+  }, [initialPlanIds, initialPlanVenues]);
+  const { liveVenues, listedVenues, coordinates } = useLiveVenues();
   const config = PLAN_MODES[mode];
   const locationQuery = plannerLocationQuery(location);
   const searchArea = locationQuery || (coordinates ? `${coordinates.latitude.toFixed(2)}, ${coordinates.longitude.toFixed(2)}` : '');
@@ -328,19 +330,26 @@ export function PandaPlannerSheet({
     if (!open) return [];
     // Reuse real Google venues already visible in Discovery, including
     // resolved partner cards, rather than silently omitting those choices.
-    const visible = venues.filter(venue => venue.photoNames?.length &&
-      /^(ChIJ|Ei)[A-Za-z0-9_-]+$/.test(venue.id));
+    const visible = (listedVenues ?? []).filter(venue =>
+      (venue.photoName || venue.photoNames?.length) && isGooglePlaceVenue(venue));
     const source = [...liveVenues, ...visible,
       ...(!locationQuery && remotePlan && remoteLocation === searchArea ? remotePlan : [])];
     return [...new Map(source.slice().reverse().map(venue => [venue.id, venue])).values()];
-  }, [open, liveVenues, venues, remotePlan, remoteLocation, searchArea, locationQuery]);
+  }, [open, liveVenues, listedVenues, remotePlan, remoteLocation, searchArea, locationQuery]);
   const localPlan = useMemo(
     () => choosePlanStops(config.stops, sourceVenues, price, 0, { origin: coordinates, excludedIds }),
     [config.stops, sourceVenues, price, coordinates, seenChoices, blockedChoices, choiceScope],
   );
-  const proposedPlan = !open ? [] : remotePlan && remoteLocation === locationQuery
-    ? choosePlanStops(config.stops, remotePlan, price, 0, { origin: coordinates, excludedIds }) : locationQuery ? [] : localPlan;
-   const selectionKey = `${choiceScope}:${shuffle}`;
+  const restoredForScope = shuffle === 0 && mode === initialMode
+    && price === initialPrice
+    && locationQuery === plannerLocationQuery(initialLocation || 'Current location')
+    && restoredPlan?.length === config.stops.length
+    && restoredPlan.every(venue => plannerVenueEligible(venue, price) && !excludedIds.includes(venue.id))
+      ? restoredPlan.map(venue => ({ ...venue, cached: true })) : null;
+  const proposedPlan = !open ? [] : restoredForScope ?? (remotePlan && remoteLocation === locationQuery
+    ? choosePlanStops(config.stops, remotePlan, price, 0, { origin: coordinates, excludedIds }) : locationQuery ? [] : localPlan
+  );
+   const selectionKey = `${choiceScope}:${shuffle}:${initialPlanIds || ''}`;
    const selection = stablePlannerSelection(selectionRef.current, selectionKey, proposedPlan, config.stops.length, excludedIds);
    const candidatePlan = selection.plan;
    const candidateKey = `${mode}:${searchArea}:${price}:${coordinates?.latitude.toFixed(4)}:${coordinates?.longitude.toFixed(4)}:${candidatePlan.map(venue => venue.id).join(',')}`;
@@ -362,13 +371,14 @@ export function PandaPlannerSheet({
     setPlanCheck('loading');
     setPlanError(null);
     setPlanProgress('Checking venue details…');
+    const checkStartedAt = Date.now();
+    let profilesFinishedAt = checkStartedAt;
     void (async () => {
       const profiles = await Promise.all(candidatePlan.map(async venue => {
         return plannerProfiles.get(venue.id, async () => {
         // Nearby discovery and planner search already contain verified provider facts.
         // Do not block every plan on three redundant detail requests.
-        if (!venue.cached && venue.photoNames?.length &&
-          plannerVenueEligible(venue, price) && Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude)) {
+        if (canReusePlannerFacts(venue, plannerVenueEligible(venue, price))) {
           return {
             id: venue.id, name: venue.name, address: venue.fullAddress, primaryType: venue.type,
             price: venue.price, rating: Number(venue.rating), ratingCount: venue.ratingCount,
@@ -385,6 +395,7 @@ export function PandaPlannerSheet({
         });
       }));
       if (!active) return;
+      profilesFinishedAt = Date.now();
       const proofExpiries = candidatePlan.map(venue => plannerProfiles.expiresAt(venue.id));
       const invalidIndex = profiles.findIndex((profile, index) => !knownPriceWithinBudget(profile.price, price) ||
         !plannerVenueEligible({ ...candidatePlan[index], price: profile.price || '', rating: String(profile.rating ?? '') }, price) ||
@@ -394,10 +405,10 @@ export function PandaPlannerSheet({
           { blockedId: candidatePlan[invalidIndex].id });
       }
       const verifiedVenues = candidatePlan.map((venue, index) => ({
-        ...venue, name: profiles[index].name, fullAddress: profiles[index].address,
+        ...venue, name: profiles[index].name || venue.name, fullAddress: profiles[index].address || venue.fullAddress,
         price: profiles[index].price!, latitude: profiles[index].latitude!,
-        longitude: profiles[index].longitude!, mapsUri: profiles[index].googleMapsUrl,
-        website: profiles[index].website || venue.website, photoNames: profiles[index].photoNames,
+        longitude: profiles[index].longitude!, mapsUri: profiles[index].googleMapsUrl || venue.mapsUri,
+        website: profiles[index].website || venue.website, photoNames: profiles[index].photoNames || venue.photoNames,
       }));
       const legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }> = {};
       setPlanProgress('Checking walking and public transport…');
@@ -454,6 +465,10 @@ export function PandaPlannerSheet({
       setGoogleProfiles(current => ({ ...current, ...Object.fromEntries(profiles.map(profile => [profile.id, profile])) }));
       setVerified({ key: candidateKey, expires: Math.min(Date.now() + PLANNER_FACT_TTL_MS, ...proofExpiries), plan: verifiedVenues, legs });
       setPlanCheck('ready');
+      console.info('[Panda planner]', JSON.stringify({
+        stage: 'verification', profilesMs: profilesFinishedAt - checkStartedAt,
+        journeysMs: Date.now() - profilesFinishedAt, totalMs: Date.now() - checkStartedAt,
+      }));
     })().catch(error => { if (active) {
       setVerified(null); setPlanCheck('error');
       setPlanError(error?.name === 'AbortError' || error?.name === 'TimeoutError'
@@ -475,7 +490,7 @@ export function PandaPlannerSheet({
 
   useEffect(() => {
     if (!open || locationFocused) return;
-    if (!searchArea || (!locationQuery && candidatePlan.length === config.stops.length && !wide)) {
+    if (!searchArea || restoredForScope || (!locationQuery && candidatePlan.length === config.stops.length && !wide)) {
       setRemoteSearchState('idle');
       return undefined;
     }
@@ -496,6 +511,7 @@ export function PandaPlannerSheet({
         ? `${searchArea}, London` : searchArea;
       let request = plannerSearchInFlight.get(cacheKey);
       if (!request) {
+        const searchStartedAt = Date.now();
         const params = new URLSearchParams({ planner_pool: '1', mode,
           budget: String(price.length), stage: wide ? 'wide' : 'near',
           area: locationQuery ? namedArea : '' });
@@ -508,7 +524,9 @@ export function PandaPlannerSheet({
         if (!response.ok) throw new Error('Planner venue search failed');
         const payload = await response.json() as { results?: PlannerSearchResult[] };
         return [...new Map((payload.results ?? []).map(result => [result.id, result])).values()];
-        });
+        }).finally(() => console.info('[Panda planner]', JSON.stringify({
+          stage: 'candidate-search', elapsedMs: Date.now() - searchStartedAt,
+        })));
         plannerSearchInFlight.set(cacheKey, request);
         void request.then(values => plannerSearches.set(cacheKey, { values, expires: Date.now() + 3 * 60 * 60 * 1000 }))
           .catch(() => {}).finally(() => plannerSearchInFlight.delete(cacheKey));
@@ -533,7 +551,7 @@ export function PandaPlannerSheet({
       active = false;
       clearTimeout(timer);
     };
-   }, [locationQuery, searchArea, mode, open, price, locationFocused, wide, candidatePlan.length, retryVersion]);
+   }, [locationQuery, searchArea, mode, open, price, locationFocused, wide, candidatePlan.length, retryVersion, Boolean(restoredForScope)]);
 
   useEffect(() => {
     if (open && !locationFocused && remoteSearchState === 'ready' &&
@@ -549,8 +567,13 @@ export function PandaPlannerSheet({
     if (initialLocation) setLocation(initialLocation);
     if (initialPrice === '££' || initialPrice === '£££' || initialPrice === '££££') setPrice(initialPrice);
     else setPrice('££££');
+    if (initialPlanIds) {
+      setShuffle(0);
+      setSeenChoices({ scope: '', ids: [] });
+      setBlockedChoices({ scope: '', ids: [] });
+    }
     setOpen(true);
-  }, [initialLocation, initialMode, initialPrice, openRequest]);
+  }, [initialLocation, initialMode, initialPrice, initialPlanIds, initialPlanVenues, openRequest]);
 
   return (
     <>

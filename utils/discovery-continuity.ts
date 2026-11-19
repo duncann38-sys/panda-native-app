@@ -13,8 +13,11 @@ export class LatestDiscoverySelection<T> {
 
 export function shouldFillDiscovery(input: {
   count: number; busy: boolean; hasCursor: boolean; exhausted: boolean;
-  attempts: number; retryAt: number; now?: number;
+  attempts: number; retryAt: number; now?: number; providerPage?: boolean;
 }) {
-  return input.count < 8 && !input.busy && input.hasCursor && !input.exhausted
+  // WAP renders page one, then warms the next two provider pages. Do not
+  // automatically scan every distance ring just to meet an arbitrary count.
+  const warmProviderPages = input.providerPage === true && input.attempts < 2;
+  return (input.count < 8 || warmProviderPages) && !input.busy && input.hasCursor && !input.exhausted
     && input.attempts < 3 && (input.now ?? Date.now()) >= input.retryAt;
 }

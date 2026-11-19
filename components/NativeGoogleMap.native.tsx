@@ -3,7 +3,7 @@ import { Platform, StyleSheet, Text, View } from 'react-native';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE, type LatLng } from 'react-native-maps';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
-import { decodeRoutePolyline } from '@/utils/route-geometry';
+import { decodeRoutePolyline, mapRouteFitPoints } from '@/utils/route-geometry';
 import type { NativeGoogleMapProps } from './NativeGoogleMap';
 
 const LONDON: LatLng = { latitude: 51.49, longitude: -0.14 };
@@ -65,7 +65,7 @@ export default function NativeGoogleMap({
       return;
     }
     if ((route.length || mappedPoints.length) && userCoordinates) {
-      map.current.fitToCoordinates([userCoordinates, ...route, ...stationPoints, ...mappedPoints], {
+      map.current.fitToCoordinates(mapRouteFitPoints(route, stationPoints, mappedPoints, userCoordinates), {
         edgePadding: { top: 115, right: 65, bottom: 360, left: 65 },
         animated: true,
       });
