@@ -15,6 +15,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { KeyboardAvoidingView, useKeyboardState } from 'react-native-keyboard-controller';
@@ -106,6 +107,7 @@ type Message = {
   venues?: AiVenue[];
   sources?: AiSource[];
   newSelection?: boolean;
+  rideRequest?: boolean;
   transit?: AiTransitContext;
   requestId?: number;
 };
@@ -679,20 +681,31 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         customItinerary?: boolean;
         customPubCrawl?: boolean;
         newOpeningsSearch?: boolean;
+        rideRequest?: boolean;
       };
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
       const openingSearch = isNewOpeningSearch || data.newOpeningsSearch === true;
+      const rideRequest = data.rideRequest === true;
       const sources = safeAiSources(data.sources);
-      const eligibleVenues = (data.venues ?? []).filter((venue) =>
-        Boolean(venue.photoName)
-        && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
-        && (!isNearbyShortcut(trimmed) || (Number.isFinite(venue.distanceMeters)
-          && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000))
-        && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue))),
-      );
-      if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch) {
+      const eligibleVenues = (data.venues ?? []).filter((venue) => {
+        if (rideRequest) {
+          const latitude = venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat;
+          const longitude = venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng;
+          return Boolean(venue.id)
+            && Number.isFinite(latitude)
+            && Number.isFinite(longitude)
+            && Number.isFinite(venue.distanceMeters)
+            && Number(venue.distanceMeters) > 0;
+        }
+        return Boolean(venue.photoName)
+          && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
+          && (!isNearbyShortcut(trimmed) || (Number.isFinite(venue.distanceMeters)
+            && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000))
+          && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue)));
+      });
+      if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch && !rideRequest) {
         eligibleVenues.sort(
           (left, right) => (isNearbyShortcut(trimmed)
             ? Number(right.rating ?? 0) - Number(left.rating ?? 0)
@@ -700,9 +713,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             || Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
         );
       }
-      eligibleVenues.splice(data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
+      eligibleVenues.splice(rideRequest ? 1 : data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
       const onlyOpenNow = wantsOpenVenues(trimmed);
-      const initialVenues = isNearestStationOnly(trimmed) ? [] : openVenueSelection(eligibleVenues, onlyOpenNow);
+      const initialVenues = rideRequest
+        ? eligibleVenues.slice(0, 1)
+        : isNearestStationOnly(trimmed) ? [] : openVenueSelection(eligibleVenues, onlyOpenNow);
       const baseReply = onlyOpenNow && !initialVenues.length && !openingSearch
         ? NO_OPEN_VENUES_REPLY
         : data.text?.trim() || (openingSearch && !initialVenues.length
@@ -727,18 +742,19 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           venues: initialVenues,
           sources,
           newSelection: data.newOpeningsSearch === true,
+          rideRequest,
         }));
       } else {
         setMessages((current) => [
           ...current,
-          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, newSelection: data.newOpeningsSearch === true },
+          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, newSelection: data.newOpeningsSearch === true, rideRequest },
         ]);
       }
       primaryPendingRef.current = false;
       setSending(false);
       primaryControllerRef.current = null;
 
-      void Promise.all(initialVenues.map(enrichAiVenue))
+      if (!rideRequest) void Promise.all(initialVenues.map(enrichAiVenue))
         .then((enrichedVenues) => {
           const visibleVenues = openVenueSelection(enrichedVenues, onlyOpenNow);
           updateResult((message) => ({
@@ -1141,65 +1157,71 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             {message.role === 'model' && messages[index - 1]?.role !== 'model' ? (
               <Text style={[polish.speaker, { color: isNight ? colors.goldLine : colors.green700 }]}>Panda</Text>
             ) : null}
-            <View
-              style={[
-                styles.bubble, polish.bubble,
-                message.role === 'user' ? polish.userBubble : polish.modelBubble,
-                {
-                  borderColor: message.role === 'user' ? 'transparent' : isNight ? colors.border : colors.goldLine,
-                   backgroundColor: message.role === 'user' ? (isNight ? colors.gold : colors.green600) : colors.card,
-                  borderBottomRightRadius: message.role === 'user' ? 7 : 20,
-                  borderBottomLeftRadius: message.role === 'model' ? 7 : 20,
-                },
-              ]}
-            >
-               <Text
-                 style={[
-                   styles.bubbleText, polish.bubbleText,
-                   { color: message.role === 'user' && isNight ? colors.accentForeground : message.role === 'user' ? colors.primaryForeground : colors.foreground },
-                 ]}
-               >
-                {message.text}
-              </Text>
-            </View>
+            {!(message.role === 'model' && message.rideRequest && message.venues?.length) ? (
+              <View
+                style={[
+                  styles.bubble, polish.bubble,
+                  message.role === 'user' ? polish.userBubble : polish.modelBubble,
+                  {
+                    borderColor: message.role === 'user' ? 'transparent' : isNight ? colors.border : colors.goldLine,
+                     backgroundColor: message.role === 'user' ? (isNight ? colors.gold : colors.green600) : colors.card,
+                    borderBottomRightRadius: message.role === 'user' ? 7 : 20,
+                    borderBottomLeftRadius: message.role === 'model' ? 7 : 20,
+                  },
+                ]}
+              >
+                 <Text
+                   style={[
+                     styles.bubbleText, polish.bubbleText,
+                     { color: message.role === 'user' && isNight ? colors.accentForeground : message.role === 'user' ? colors.primaryForeground : colors.foreground },
+                   ]}
+                 >
+                  {message.text}
+                </Text>
+              </View>
+            ) : null}
             {message.venues?.length ? (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
-                {message.venues.slice(0, message.newSelection ? 20 : PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
-                  const liveMatch = liveVenues.find((candidate) => candidate.id === venue.id);
-                  const cardVenue: AiVenue = {
-                    ...venue,
-                    latitude: venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat ?? liveMatch?.latitude,
-                    longitude: venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng ?? liveMatch?.longitude,
-                    distanceMeters:
-                      typeof venue.distanceMeters === "number"
-                      && Number.isFinite(venue.distanceMeters)
-                      && venue.distanceMeters > 0
-                        ? venue.distanceMeters
-                        : liveMatch?.distanceMeters ?? venue.distanceMeters,
-                  };
-                  return (
-                  <AiVenueCard
-                    key={`${venue.id ?? venue.name}-${venueIndex}`}
-                    venue={cardVenue}
-                    colors={colors}
-                    onDirections={() => void openAiVenueDirections(venue)}
-                    onEvidence={() => {
-                      if (!venue.openingSourceUrl) return;
-                      void Linking.openURL(venue.openingSourceUrl).catch(() =>
-                        Alert.alert('Opening source', 'This source link could not be opened right now.'),
-                      );
-                    }}
-                    onMenu={() => void openAiVenueMenu(venue)}
-                    onOpen={() => openAiVenue(venue)}
-                  />
-                );
-                })}
-              </ScrollView>
+              message.role === 'model' && message.rideRequest ? (
+                <UberJourneyCard venue={message.venues[0]} colors={colors} />
+              ) : (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
+                  {message.venues.slice(0, message.newSelection ? 20 : PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
+                    const liveMatch = liveVenues.find((candidate) => candidate.id === venue.id);
+                    const cardVenue: AiVenue = {
+                      ...venue,
+                      latitude: venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat ?? liveMatch?.latitude,
+                      longitude: venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng ?? liveMatch?.longitude,
+                      distanceMeters:
+                        typeof venue.distanceMeters === "number"
+                        && Number.isFinite(venue.distanceMeters)
+                        && venue.distanceMeters > 0
+                          ? venue.distanceMeters
+                          : liveMatch?.distanceMeters ?? venue.distanceMeters,
+                    };
+                    return (
+                    <AiVenueCard
+                      key={`${venue.id ?? venue.name}-${venueIndex}`}
+                      venue={cardVenue}
+                      colors={colors}
+                      onDirections={() => void openAiVenueDirections(venue)}
+                      onEvidence={() => {
+                        if (!venue.openingSourceUrl) return;
+                        void Linking.openURL(venue.openingSourceUrl).catch(() =>
+                          Alert.alert('Opening source', 'This source link could not be opened right now.'),
+                        );
+                      }}
+                      onMenu={() => void openAiVenueMenu(venue)}
+                      onOpen={() => openAiVenue(venue)}
+                    />
+                  );
+                  })}
+                </ScrollView>
+              )
             ) : null}
             {message.sources?.length ? (
               <View style={styles.aiEventSources}>
                 <Text style={[styles.aiEventSourcesLabel, { color: isNight ? colors.goldLine : colors.green700 }]}>
-                  LIVE SHOW LINKS
+                  LIVE SOURCES
                 </Text>
                 {message.sources.slice(0, 6).map((source) => (
                   <Pressable
@@ -1208,7 +1230,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                     accessibilityLabel={`Open ${source.title}`}
                     onPress={() => {
                       void Linking.openURL(source.url).catch(() =>
-                        Alert.alert('Event source', 'This source link could not be opened right now.'),
+                        Alert.alert('Panda source', 'This source link could not be opened right now.'),
                       );
                     }}
                     style={({ pressed }) => [
@@ -1223,7 +1245,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                         {source.title}
                       </Text>
                       <Text numberOfLines={1} style={[styles.aiEventSourceDomain, { color: colors.mutedForeground }]}>
-                        {source.domain || 'Event source'}
+                        {source.domain || 'Source'}
                       </Text>
                     </View>
                   </Pressable>
@@ -1359,6 +1381,99 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
 export default function PandaAiRoute() {
   return <PandaAiScreen />;
+}
+
+function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType<typeof useColors> }) {
+  const { width: windowWidth } = useWindowDimensions();
+  const cardWidth = Math.max(260, Math.min(326, windowWidth - 40));
+  const latitude = venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat;
+  const longitude = venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng;
+  const rideEstimate = buildUberEstimate({
+    latitude,
+    longitude,
+    distanceMeters: venue.distanceMeters,
+    driveDurationMinutes: venue.driveDurationMinutes,
+    venueName: venue.name ?? 'Panda destination',
+  });
+  if (!rideEstimate) return null;
+
+  const openUber = () => {
+    void Linking.openURL(rideEstimate.deepLink).catch(() =>
+      Alert.alert('Uber unavailable', 'Panda could not open Uber. You can still use Directions.'),
+    );
+  };
+  const destinationAddress = venue.fullAddress || venue.address || 'Verified destination';
+
+  return (
+    <LinearGradient
+      colors={[colors.green950, colors.green900, colors.green800]}
+      start={{ x: 0, y: 0 }}
+      end={{ x: 1, y: 1 }}
+      style={[styles.rideJourneyCard, { borderColor: colors.goldLine, width: cardWidth }]}
+      testID="panda-ai-uber-journey-card"
+    >
+      <View style={styles.rideJourneyHeader}>
+        <View style={[styles.rideJourneyIcon, { backgroundColor: colors.gold }]}>
+          <Feather name="navigation" size={18} color={colors.green950} />
+        </View>
+        <View style={styles.rideJourneyHeaderCopy}>
+          <Text style={[styles.rideJourneyEyebrow, { color: colors.goldLine }]}>PANDA RIDE PREVIEW</Text>
+          <Text style={[styles.rideJourneyHeaderText, { color: colors.primaryForeground }]}>Your destination is ready</Text>
+        </View>
+        <Text style={styles.rideJourneyEmoji}>🚗</Text>
+      </View>
+
+      <View style={[styles.rideJourneyRoute, { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.14)' }]}>
+        <View style={styles.rideJourneyRail}>
+          <View style={[styles.rideJourneyPickupDot, { borderColor: colors.mint300 }]} />
+          <View style={[styles.rideJourneyTrack, { backgroundColor: 'rgba(255,255,255,0.32)' }]} />
+          <View style={[styles.rideJourneyDropDot, { backgroundColor: colors.gold }]} />
+        </View>
+        <View style={styles.rideJourneyStops}>
+          <Text style={[styles.rideJourneyStopLabel, { color: colors.mint300 }]}>PICKUP · YOUR LOCATION</Text>
+          <Text style={[styles.rideJourneyStopLabel, { color: colors.goldLine, marginTop: 16 }]}>DESTINATION</Text>
+          <Text style={[styles.rideJourneyDestination, { color: colors.primaryForeground }]}>{venue.name}</Text>
+          <Text numberOfLines={2} style={[styles.rideJourneyAddress, { color: colors.mint100 }]}>{destinationAddress}</Text>
+        </View>
+      </View>
+
+      <View style={styles.rideJourneyStats}>
+        <View style={[styles.rideJourneyStat, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
+          <Text style={[styles.rideJourneyStatLabel, { color: colors.mint300 }]}>ESTIMATED DRIVE</Text>
+          <Text style={[styles.rideJourneyStatValue, { color: colors.primaryForeground }]}>~{rideEstimate.minutes} min</Text>
+        </View>
+        <View style={[styles.rideJourneyStat, styles.rideJourneyFare, { backgroundColor: 'rgba(255,226,153,0.14)', borderColor: 'rgba(255,226,153,0.34)' }]}>
+          <Text style={[styles.rideJourneyStatLabel, { color: colors.goldLine }]}>PANDA ESTIMATE</Text>
+          <Text style={[styles.rideJourneyFareValue, { color: colors.goldLine }]}>£{rideEstimate.minFare}–£{rideEstimate.maxFare}</Text>
+        </View>
+      </View>
+
+      {rideEstimate.peakTime ? (
+        <View style={[styles.rideJourneyPeakNote, { backgroundColor: 'rgba(255,226,153,0.12)' }]}>
+          <Feather name="zap" size={12} color={colors.goldLine} />
+          <Text style={[styles.rideJourneyPeakText, { color: colors.goldLine }]}>Includes extra £5 peak-time buffer</Text>
+        </View>
+      ) : null}
+
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={`Open Uber for ${venue.name}. Estimated ${rideEstimate.minutes} minutes, ${rideEstimate.label}.`}
+        accessibilityHint="Opens Uber with this destination. Review the live fare there before confirming; no ride has been booked."
+        onPress={openUber}
+        testID="panda-ai-uber-journey-open"
+        style={({ pressed }) => [
+          styles.rideJourneyAction,
+          { backgroundColor: colors.gold, opacity: pressed ? 0.88 : 1 },
+        ]}
+      >
+        <Text style={[styles.rideJourneyActionText, { color: colors.green950 }]}>Continue in Uber</Text>
+        <Feather name="arrow-up-right" size={18} color={colors.green950} />
+      </Pressable>
+      <Text style={[styles.rideJourneyDisclaimer, { color: colors.mint100 }]}>
+        Indicative only · Uber shows the live fare · Nothing is booked yet
+      </Text>
+    </LinearGradient>
+  );
 }
 
 function AiVenueCard({
@@ -1575,7 +1690,7 @@ function AiVenueCard({
           {rideEstimate ? (
             <Pressable
               accessibilityLabel={`Open Uber for ${venue.name ?? 'this venue'}. ${rideEstimate.label}`}
-              accessibilityHint="Indicative local estimate only; Uber will show the live fare before you confirm."
+              accessibilityHint="Panda's local estimate is not a live Uber quote. It includes an extra £5 planning buffer during weekday peak hours; Uber will show the live fare before you confirm."
               accessibilityRole="button"
               onPress={openUber}
               testID={`panda-ai-uber-${venue.id ?? 'venue'}`}
@@ -1597,7 +1712,9 @@ function AiVenueCard({
                   {rideEstimate.label}
                 </Text>
                 <Text style={[styles.uberDisclaimer, { color: colors.mint100 }]}>
-                  Indicative only · Uber shows the live fare
+                  {rideEstimate.peakTime
+                    ? 'Includes an extra £5 peak buffer · Uber shows live fare'
+                    : 'Indicative only · Uber shows the live fare'}
                 </Text>
               </View>
               <Feather name="arrow-up-right" size={17} color={colors.mint300} />
@@ -2207,6 +2324,164 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_500Medium',
     fontSize: 8,
     lineHeight: 11,
+  },
+  rideJourneyCard: {
+    borderRadius: 26,
+    borderWidth: 1,
+    elevation: 7,
+    marginTop: 8,
+    overflow: 'hidden',
+    padding: 16,
+    shadowColor: '#071E18',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.2,
+    shadowRadius: 15,
+    width: 326,
+  },
+  rideJourneyHeader: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+  },
+  rideJourneyIcon: {
+    alignItems: 'center',
+    borderRadius: 15,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  rideJourneyHeaderCopy: {
+    flex: 1,
+    gap: 3,
+  },
+  rideJourneyEyebrow: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 8,
+    letterSpacing: 1.3,
+  },
+  rideJourneyHeaderText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+  },
+  rideJourneyEmoji: {
+    fontSize: 23,
+  },
+  rideJourneyRoute: {
+    borderRadius: 19,
+    borderWidth: 1,
+    flexDirection: 'row',
+    marginTop: 16,
+    padding: 13,
+  },
+  rideJourneyRail: {
+    alignItems: 'center',
+    paddingTop: 2,
+    width: 17,
+  },
+  rideJourneyPickupDot: {
+    borderRadius: 6,
+    borderWidth: 2,
+    height: 11,
+    width: 11,
+  },
+  rideJourneyTrack: {
+    borderRadius: 2,
+    height: 27,
+    marginVertical: 3,
+    width: 2,
+  },
+  rideJourneyDropDot: {
+    borderRadius: 6,
+    height: 11,
+    width: 11,
+  },
+  rideJourneyStops: {
+    flex: 1,
+    paddingLeft: 8,
+  },
+  rideJourneyStopLabel: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 8,
+    letterSpacing: 0.95,
+  },
+  rideJourneyDestination: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 17,
+    lineHeight: 22,
+    marginTop: 2,
+  },
+  rideJourneyAddress: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 10,
+    lineHeight: 14,
+    marginTop: 3,
+  },
+  rideJourneyStats: {
+    flexDirection: 'row',
+    gap: 9,
+    marginTop: 12,
+  },
+  rideJourneyStat: {
+    borderColor: 'rgba(255,255,255,0.12)',
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    justifyContent: 'center',
+    minHeight: 65,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  rideJourneyFare: {
+    borderWidth: 1,
+  },
+  rideJourneyStatLabel: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 7,
+    letterSpacing: 0.9,
+  },
+  rideJourneyStatValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 17,
+    marginTop: 5,
+  },
+  rideJourneyFareValue: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 16,
+    marginTop: 5,
+  },
+  rideJourneyPeakNote: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 6,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  rideJourneyPeakText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 9,
+  },
+  rideJourneyAction: {
+    alignItems: 'center',
+    borderRadius: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 13,
+    minHeight: 49,
+    paddingHorizontal: 15,
+  },
+  rideJourneyActionText: {
+    fontFamily: 'Inter_700Bold',
+    fontSize: 14,
+  },
+  rideJourneyDisclaimer: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 8,
+    lineHeight: 12,
+    marginTop: 9,
+    textAlign: 'center',
   },
   resultPrimaryAction: {
     alignItems: 'center',

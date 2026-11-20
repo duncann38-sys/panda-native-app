@@ -1,0 +1,12 @@
+name: Panda 87 - Prices and Ride-Only Uber Cards
+on:
+  push:
+    branches:
+      - panda-build-87
+jobs:
+  build_android_preview:
+    name: Panda 87 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview
