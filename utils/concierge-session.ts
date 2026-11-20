@@ -12,8 +12,8 @@ export function conciergeGreeting(name = '', date = new Date()): string {
   const firstName = name.trim().split(/\s+/)[0]?.replace(/[^\p{L}\p{M}'’-]/gu, '').slice(0, 35);
   const address = firstName ? `, ${firstName}` : '';
   const hour = date.getHours();
-  if (hour < 5) return `Still out${address}? Something to eat, a last drink, or a sensible journey home?`;
-  if (hour < 12) return `Good morning${address}. Coffee first, or shall we make a proper breakfast of it?`;
-  if (hour < 17) return `Good afternoon${address}. A long lunch, a quiet glass, or plans for later?`;
-  return `Good evening${address}. Dinner, drinks, or a little of both? Tell me what you fancy.`;
+  if (hour < 5) return `Still up${address}? A late plan, a thought to untangle, or just a chat?`;
+  if (hour < 12) return `Good morning${address}. A fresh day, and no need to have it all worked out. What’s on your mind?`;
+  if (hour < 17) return `Good afternoon${address}. How’s your day going—making plans, or taking a moment for yourself?`;
+  return `Good evening${address}. What would make the rest of your day a good one?`;
 }

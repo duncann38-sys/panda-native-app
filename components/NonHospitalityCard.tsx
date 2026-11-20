@@ -82,6 +82,121 @@ export function NonHospitalityCard({
     onToggleSaved();
   };
 
+  if (isShop) {
+    const shopActions = actions.filter((action) => action.kind === 'directions' || action.kind === 'transit' || action.kind === 'website');
+    const thumb = compact ? 92 : 112;
+    const meta = [venue.rating ? `${venue.rating} rating` : '', venue.walkingTime || '', status.label].filter(Boolean).join(', ');
+    return (
+      <Pressable
+        testID={`non-hospitality-card-${venue.id}`}
+        accessibilityRole="button"
+        accessibilityLabel={`${venue.name}, shop, ${venue.type || venue.category}${meta ? `, ${meta}` : ''}`}
+        onPress={onPress}
+        style={({ pressed }) => [
+          styles.card,
+          shopStyles.card,
+          compact && styles.compactCard,
+          { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.green950 },
+          pressed && styles.pressed,
+        ]}
+      >
+        <View style={shopStyles.top}>
+          <View style={[shopStyles.thumb, { width: thumb, height: thumb, backgroundColor: colors.secondary }]}>
+            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={thumb} />
+          </View>
+          <View style={shopStyles.info}>
+            <View style={shopStyles.eyebrowRow}>
+              <View style={[shopStyles.eyebrowDot, { backgroundColor: colors.honey }]} />
+              <Text numberOfLines={1} style={[shopStyles.eyebrow, { color: colors.honeyInk }]}>
+                {(venue.type || venue.category || 'Shop').toUpperCase()}
+              </Text>
+            </View>
+            <Text
+              numberOfLines={compact ? 2 : 3}
+              ellipsizeMode="tail"
+              style={[shopStyles.name, compact && shopStyles.compactName, { color: colors.foreground }]}
+            >
+              {venue.name}
+            </Text>
+            <View style={shopStyles.metaRow}>
+              {venue.rating ? (
+                <View style={styles.metaItem}>
+                  <PandaIcon name="star" size={12} color={colors.honey} strokeWidth={2.2} />
+                  <Text style={[shopStyles.metaText, { color: colors.foreground }]}>{venue.rating}</Text>
+                </View>
+              ) : null}
+              {venue.walkingTime ? (
+                <View style={[styles.metaItem, styles.shrink]}>
+                  <PandaIcon name="walk" size={12} color={colors.mutedForeground} />
+                  <Text numberOfLines={1} style={[shopStyles.metaText, styles.shrink, { color: colors.mutedForeground }]}>
+                    {venue.walkingTime}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <View style={styles.metaItem}>
+              <View style={[shopStyles.statusDot, { backgroundColor: statusColor }]} />
+              <Text style={[shopStyles.status, { color: statusColor }]}>{status.label}</Text>
+            </View>
+          </View>
+          <Pressable
+            testID={`save-${venue.id}`}
+            accessibilityLabel={saved ? `Remove ${venue.name} from saved places` : `Save ${venue.name}`}
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={onSave}
+            style={({ pressed }) => [
+              shopStyles.save,
+              { backgroundColor: saved ? colors.closedBackground : colors.secondary },
+              pressed && styles.iconPressed,
+            ]}
+          >
+            <Ionicons name={saved ? 'heart' : 'heart-outline'} size={18} color={saved ? colors.destructive : colors.honeyInk} />
+          </Pressable>
+        </View>
+
+        {venue.sourceAttribution ? (
+          <Text numberOfLines={1} style={[shopStyles.attribution, { color: colors.mutedForeground }]}>
+            {venue.sourceAttribution}
+          </Text>
+        ) : null}
+
+        {shopActions.length ? (
+          <View style={[shopStyles.actions, { borderTopColor: colors.border }]}>
+            {shopActions.map((action, index) => {
+              const isBusy = busy === action.kind;
+              const primary = index === 0;
+              const fg = primary ? colors.primaryForeground : colors.green800;
+              return (
+                <Pressable
+                  key={`${action.kind}-${action.url}`}
+                  testID={`nh-action-${action.kind}-${venue.id}`}
+                  accessibilityRole="link"
+                  accessibilityLabel={`${action.label} for ${venue.name}`}
+                  accessibilityState={{ busy: isBusy, disabled: !!busy }}
+                  disabled={!!busy}
+                  onPress={(event) => { void runAction(event, action); }}
+                  style={({ pressed }) => [
+                    shopStyles.action,
+                    primary
+                      ? { backgroundColor: colors.green800 }
+                      : { backgroundColor: colors.secondary },
+                    (pressed || isBusy) && styles.iconPressed,
+                  ]}
+                >
+                  <PandaIcon name={actionIcon[action.kind]} size={13} color={fg} strokeWidth={2} />
+                  <Text numberOfLines={1} style={[shopStyles.actionText, { color: fg }]}>
+                    {isBusy ? 'Opening' : action.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+      </Pressable>
+    );
+  }
+
   const photoHeight = compact ? 96 : isShop ? 124 : 140;
 
   return (
@@ -307,4 +422,26 @@ const styles = StyleSheet.create({
   compactAction: { borderRadius: 10, gap: 4, minHeight: 32, minWidth: 0, paddingHorizontal: 6 },
   actionText: { flexShrink: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
   compactActionText: { fontSize: 10.5 },
+});
+
+
+const shopStyles = StyleSheet.create({
+  card: { borderRadius: 18, padding: 10, elevation: 2, shadowOpacity: 0.07, shadowRadius: 10, shadowOffset: { width: 0, height: 4 } },
+  top: { flexDirection: 'row', gap: 12, alignItems: 'flex-start' },
+  thumb: { borderRadius: 13, overflow: 'hidden' },
+  info: { flex: 1, minWidth: 0, gap: 5, paddingTop: 2 },
+  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: 4 },
+  eyebrowDot: { width: 5, height: 5, borderRadius: 3 },
+  eyebrow: { flexShrink: 1, fontFamily: 'Inter_700Bold', fontSize: 9.5, letterSpacing: 1 },
+  name: { fontFamily: 'Inter_700Bold', fontSize: 16, lineHeight: 20, letterSpacing: -0.2 },
+  compactName: { fontSize: 14, lineHeight: 18 },
+  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 10 },
+  metaText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  statusDot: { width: 6, height: 6, borderRadius: 3 },
+  status: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5 },
+  save: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  attribution: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 6 },
+  actions: { flexDirection: 'row', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
+  action: { flex: 1, minHeight: 44, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 6 },
+  actionText: { flexShrink: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
 });

@@ -41,12 +41,42 @@ export function conciergeChatPolish(colors: ConciergePalette) {
       textTransform: 'uppercase',
     },
     messageRow: {
-      paddingVertical: 1,
+      paddingVertical: 2,
+    },
+    speaker: {
+      fontFamily: 'Inter_600SemiBold',
+      fontSize: 10,
+      letterSpacing: 1.1,
+      textTransform: 'uppercase',
+      marginLeft: 6,
+      marginBottom: 4,
+      marginTop: 6,
+    },
+    modelBubble: {
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      borderBottomRightRadius: 22,
+    },
+    userBubble: {
+      borderTopLeftRadius: 22,
+      borderTopRightRadius: 22,
+      borderBottomLeftRadius: 22,
+      borderWidth: 0,
+    },
+    bubbleText: {
+      fontSize: 15.5,
+      lineHeight: 23,
+      letterSpacing: 0.05,
+    },
+    suggestionText: {
+      fontFamily: 'Inter_500Medium',
+      fontSize: 13,
     },
     bubble: {
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
-      paddingHorizontal: 16,
+      paddingHorizontal: 17,
+      paddingVertical: 12,
       shadowColor: colors.green950,
       shadowOffset: { width: 0, height: 2 },
       shadowOpacity: 0.06,
@@ -54,8 +84,10 @@ export function conciergeChatPolish(colors: ConciergePalette) {
       elevation: 1,
     },
     suggestion: {
-      paddingHorizontal: 14,
+      paddingHorizontal: 15,
       paddingVertical: 10,
+      minHeight: 44,
+      justifyContent: 'center',
       shadowColor: colors.green950,
       shadowOffset: { width: 0, height: 1 },
       shadowOpacity: 0.05,
@@ -70,8 +102,12 @@ export function conciergeChatPolish(colors: ConciergePalette) {
       shadowRadius: 10,
     },
     input: {
-      borderRadius: 18,
+      borderRadius: 22,
       borderColor: colors.mint300,
+      minHeight: 48,
+      paddingHorizontal: 18,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 15,
     },
   });
 }

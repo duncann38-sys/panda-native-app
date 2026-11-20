@@ -5,7 +5,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
   AppState,
   Alert,
   FlatList,
@@ -27,11 +26,13 @@ import { SandboxBookingAiEntry } from '@/components/SandboxBookingAiEntry';
 import { useSandboxBookingConversation } from '@/hooks/useSandboxBookingConversation';
 import { SandboxConversationCard } from '@/components/SandboxConversationCard';
 import { conciergeGreeting, shownConciergeVenueIds } from '@/utils/concierge-session';
+import { isGeneralLifeConversation, wantsOpenVenues, openVenueSelection, NO_OPEN_VENUES_REPLY } from '@/utils/concierge-conversation';
+import { ConciergeTypingIndicator } from '@/components/ConciergeTypingIndicator';
 import { isVerifiedTransitStation } from '@/utils/verified-transit-station';
 import { conciergeChatPolish } from '@/utils/concierge-chat-polish';
 import { PandaIcon } from '@/components/PandaIcon';
 import { ReserveButton } from '@/components/ReserveButton';
-import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
+import { getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
@@ -280,6 +281,7 @@ function isTransitQuestion(text: string) {
 }
 
 function requiresCurrentLocation(text: string) {
+  if (isGeneralLifeConversation(text)) return false;
   if (
     isTransitQuestion(text)
     || /\b(near(?:by)?|near me|around (?:me|here)|local|closest|nearest|recommend(?:ation)?|suggest(?:ion)?|find me|looking for|where can i|where should i|where to go|where am i|what(?:'s|’s| is) happening here|what(?:'s|’s| is) around here|places?|spots?|somewhere|venues?|restaurants?|caf(?:e|é)s?|coffee|pubs?|bars?|food|eat|dinner|lunch|breakfast|brunch|drinks?|open now|open tonight|tonight|this evening|how far|this area|this place|here)\b/i.test(text)
@@ -499,7 +501,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     },
   ]);
   const suggestionsWithPlanner = [
-    { label: `${getPandaTimeEmoji(timeMode)} Plan my ${getPandaTimeLabel(timeMode)}`, planner: true },
+    { label: 'Make me smile', prompt: 'Make me smile', planner: false },
+    { label: 'Talk it through', prompt: 'Can we talk something through?', planner: false },
+    { label: `Plan my ${getPandaTimeLabel(timeMode)}`, planner: true },
     { label: 'New restaurants', prompt: 'New restaurants near me', planner: false },
     ...suggestions.map((suggestion) => ({ label: suggestion, planner: false })),
   ];
@@ -704,8 +708,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         );
       }
       eligibleVenues.splice(data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
-      const initialVenues = isNearestStationOnly(trimmed) ? [] : eligibleVenues;
-      const baseReply = data.text?.trim() || (openingSearch && !initialVenues.length
+      const onlyOpenNow = wantsOpenVenues(trimmed);
+      const initialVenues = isNearestStationOnly(trimmed) ? [] : openVenueSelection(eligibleVenues, onlyOpenNow);
+      const baseReply = onlyOpenNow && !initialVenues.length && !openingSearch
+        ? NO_OPEN_VENUES_REPLY
+        : data.text?.trim() || (openingSearch && !initialVenues.length
         ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
         : 'I’m not sure I caught that. Try asking for a place, mood, or time of day.');
       if (referencedVenue) {
@@ -739,18 +746,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
       void Promise.all(initialVenues.map(enrichAiVenue))
         .then((enrichedVenues) => {
-          const verifiedHours = enrichedVenues
-            .filter((venue) => venue.name && venue.todayHours)
-            .slice(0, 3)
-            .map((venue) => `${venue.name} — ${venue.todayHours}`)
-            .join('; ');
+          const visibleVenues = openVenueSelection(enrichedVenues, onlyOpenNow);
           updateResult((message) => ({
             ...message,
-            venues: enrichedVenues,
-            text:
-              !isTransit && verifiedHours && /\b(open|opening|close|closing|hours|time)\b/i.test(trimmed)
-                ? `${baseReply}\n\nToday’s verified hours: ${verifiedHours}.`
-                : message.text,
+            venues: visibleVenues,
+            text: onlyOpenNow && !visibleVenues.length && !isTransit
+              ? NO_OPEN_VENUES_REPLY
+              : message.text,
           }));
         })
         .catch(() => {
@@ -1130,19 +1132,27 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             onEdit={booking.editGuest} onRefresh={()=>void booking.refresh()} onHistory={()=>void booking.checkHistory()} />
           {sending ? (
             <View style={styles.messageRow}>
-              <View style={[styles.bubble, { backgroundColor: colors.card }]}>
-                <ActivityIndicator color={colors.honeyInk} />
-              </View>
+              <ConciergeTypingIndicator
+                dotColor={isNight ? colors.goldLine : colors.green600}
+                labelColor={colors.mutedForeground}
+                backgroundColor={colors.card}
+                borderColor={isNight ? colors.border : colors.goldLine}
+              />
             </View>
           ) : null}
           </View>
         }
-        renderItem={({ item: { message } }) => (
+        renderItem={({ item: { message, index } }) => (
           <View style={[styles.messageRow, polish.messageRow, message.role === 'user' && styles.userRow]}>
+            {message.role === 'model' && messages[index - 1]?.role !== 'model' ? (
+              <Text style={[polish.speaker, { color: isNight ? colors.goldLine : colors.green700 }]}>Panda</Text>
+            ) : null}
             <View
               style={[
                 styles.bubble, polish.bubble,
+                message.role === 'user' ? polish.userBubble : polish.modelBubble,
                 {
+                  borderColor: message.role === 'user' ? 'transparent' : isNight ? colors.border : colors.goldLine,
                    backgroundColor: message.role === 'user' ? (isNight ? colors.gold : colors.green600) : colors.card,
                   borderBottomRightRadius: message.role === 'user' ? 7 : 20,
                   borderBottomLeftRadius: message.role === 'model' ? 7 : 20,
@@ -1151,7 +1161,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             >
                <Text
                  style={[
-                   styles.bubbleText,
+                   styles.bubbleText, polish.bubbleText,
                    { color: message.role === 'user' && isNight ? colors.accentForeground : message.role === 'user' ? colors.primaryForeground : colors.foreground },
                  ]}
                >
@@ -1232,7 +1242,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               pressed && styles.pressed,
             ]}
           >
-            <Text style={[styles.suggestionText, { color: suggestion.planner ? colors.accentForeground : colors.foreground }]}>
+            <Text style={[styles.suggestionText, polish.suggestionText, { color: suggestion.planner ? colors.accentForeground : colors.foreground }]}>
               {suggestion.label}
             </Text>
           </Pressable>
@@ -1263,7 +1273,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           onSubmitEditing={() => void sendMessage()}
           submitBehavior="submit"
           blurOnSubmit={false}
-          placeholder="Ask Panda anything…"
+          placeholder="What’s on your mind?"
           placeholderTextColor={colors.mutedForeground}
           returnKeyType="send"
            style={[

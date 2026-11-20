@@ -1,0 +1,12 @@
+name: Panda 83 - Positive Life Concierge and Refined Shops
+on:
+  push:
+    branches:
+      - panda-build-83
+jobs:
+  build_android_preview:
+    name: Panda 83 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview
