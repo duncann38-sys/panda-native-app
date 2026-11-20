@@ -55,6 +55,7 @@ import {
   hasDatedOpeningEvidence,
   isNewOpeningPrompt,
 } from '@/utils/ai-openings';
+import { requiresCurrentLocation } from '@/utils/location-intent';
 
 type AiVenue = {
   id?: string;
@@ -278,25 +279,6 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutValue: T)
 
 function isTransitQuestion(text: string) {
   return /\b(station|tube|underground|train|transport|directions?|get there|how do i get)\b/i.test(text);
-}
-
-function requiresCurrentLocation(text: string) {
-  if (isGeneralLifeConversation(text)) return false;
-  if (
-    isTransitQuestion(text)
-    || /\b(near(?:by)?|near me|around (?:me|here)|local|closest|nearest|recommend(?:ation)?|suggest(?:ion)?|find me|looking for|where can i|where should i|where to go|where am i|what(?:'s|’s| is) happening here|what(?:'s|’s| is) around here|places?|spots?|somewhere|venues?|restaurants?|caf(?:e|é)s?|coffee|pubs?|bars?|food|eat|dinner|lunch|breakfast|brunch|drinks?|open now|open tonight|tonight|this evening|how far|this area|this place|here)\b/i.test(text)
-  ) {
-    return true;
-  }
-
-  const normalizedText = text.trim();
-  const clearlyGeneral =
-    /^(?:hi|hello|hey|thanks|thank you|cheers|goodbye|bye|ok|okay)[!.?]*$/i.test(normalizedText)
-    || /^(?:what (?:is|are|does|did|was|were)|who (?:is|are|was|were)|when\b|why\b|how (?:do|does|did|is|are|to)\b|explain\b|define\b|translate\b|summari[sz]e\b|write\b|draft\b|calculate\b|solve\b|tell me (?:about|a joke)\b)/i.test(normalizedText);
-
-  // Panda is primarily a local concierge: ambiguous follow-ups should keep
-  // using real location rather than silently returning empty nearby results.
-  return !clearlyGeneral;
 }
 
 function formatOpeningReportDate(value?: string) {
@@ -611,7 +593,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     primaryPendingRef.current = true;
     const chatGeneration = chatGenerationRef.current;
     const conversation = [...messages, { role: 'user' as const, text: trimmed }];
-    const needsCurrentLocation = requiresCurrentLocation(trimmed) || isNewOpeningSearch;
+    const needsCurrentLocation = requiresCurrentLocation(
+      trimmed,
+      isGeneralLifeConversation,
+      isTransitQuestion,
+    ) || isNewOpeningSearch;
     setMessages([
       ...conversation,
       ...(needsCurrentLocation

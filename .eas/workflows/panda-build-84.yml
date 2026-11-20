@@ -1,0 +1,12 @@
+name: Panda 84 - Global Venue Search and Destination Cards
+on:
+  push:
+    branches:
+      - panda-build-84
+jobs:
+  build_android_preview:
+    name: Panda 84 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview

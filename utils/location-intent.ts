@@ -1,0 +1,33 @@
+type TextClassifier = (text: string) => boolean;
+
+const EXPLICIT_AREA = /\b(?:in|near|around|within)\s+(?!me\b|here\b|there\b|my\b|your\b|this\s+area\b|that\s+area\b|the\s+area\b|a\s+city\b|the\s+city\b|somewhere\b|anywhere\b|nearby\b)[\p{L}\p{M}][\p{L}\p{M}\d'’.-]*(?:[\s-]+[\p{L}\p{M}\d][\p{L}\p{M}\d'’.-]*){0,3}/iu;
+const DEVICE_AREA = /\b(?:near\s+me|around\s+me|nearby|around\s+here|near\s+here|my\s+(?:area|home|work)|this\s+area|local(?:ly)?)\b/i;
+
+export function hasExplicitSearchArea(text: string): boolean {
+  return EXPLICIT_AREA.test(String(text ?? ''));
+}
+
+export function requiresCurrentLocation(
+  text: string,
+  isGeneralLifeConversation: TextClassifier,
+  isTransitQuestion: TextClassifier,
+): boolean {
+  if (isTransitQuestion(text)) return true;
+
+  const hasExplicitArea = hasExplicitSearchArea(text);
+  if (hasExplicitArea && !DEVICE_AREA.test(text) && !/\bhow far\b/i.test(text)) return false;
+  if (isGeneralLifeConversation(text)) return false;
+
+  if (
+    /\b(near(?:by)?|near me|around (?:me|here)|local|closest|nearest|recommend(?:ation)?|suggest(?:ion)?|find me|looking for|where can i|where should i|where to go|where am i|what(?:'s|’s| is) happening here|what(?:'s|’s| is) around here|places?|spots?|somewhere|venues?|restaurants?|caf(?:e|é)s?|coffee|pubs?|bars?|food|eat|dinner|lunch|breakfast|brunch|drinks?|open now|open tonight|tonight|this evening|how far|this area|this place|here)\b/i.test(text)
+  ) {
+    return true;
+  }
+
+  const normalizedText = text.trim();
+  const clearlyGeneral =
+    /^(?:hi|hello|hey|thanks|thank you|cheers|goodbye|bye|ok|okay)[!.?]*$/i.test(normalizedText)
+    || /^(?:what (?:is|are|does|did|was|were)|who (?:is|are|was|were)|when\b|why\b|how (?:do|does|did|is|are|to)\b|explain\b|define\b|translate\b|summari[sz]e\b|write\b|draft\b|calculate\b|solve\b|tell me (?:about|a joke)\b)/i.test(normalizedText);
+
+  return !clearlyGeneral;
+}

@@ -1,4 +1,5 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import type { GestureResponderEvent } from 'react-native';
@@ -50,9 +51,6 @@ export function NonHospitalityCard({
   const actions = nonHospitalityActions(venue);
   const status = statusFor(venue);
 
-  const accent = isShop ? colors.honey : colors.green700;
-  const accentSoft = isShop ? colors.honeySoft : colors.mint100;
-  const accentInk = isShop ? colors.honeyInk : colors.green800;
   const statusColor = status.tone === 'muted'
     ? colors.mutedForeground
     : status.tone === 'open' ? colors.openForeground : colors.closedForeground;
@@ -197,112 +195,130 @@ export function NonHospitalityCard({
     );
   }
 
-  const photoHeight = compact ? 96 : isShop ? 124 : 140;
+  const photoHeight = compact ? 116 : 188;
+  const attractionMeta = [
+    venue.type || venue.category,
+    venue.neighborhood,
+    venue.rating ? `${venue.rating} stars` : '',
+    status.label,
+  ].filter(Boolean).join(', ');
 
   return (
     <Pressable
       testID={`non-hospitality-card-${venue.id}`}
       accessibilityRole="button"
-      accessibilityLabel={`${venue.name}, ${isShop ? 'shop' : 'place of interest'}`}
+      accessibilityLabel={`${venue.name}, place of interest${attractionMeta ? `, ${attractionMeta}` : ''}`}
       onPress={onPress}
       style={({ pressed }) => [
-        styles.card,
-        compact && styles.compactCard,
-        {
-          backgroundColor: isShop ? colors.card : colors.secondary,
-          borderColor: isShop ? colors.goldLine : colors.mint300,
-        },
+        attractionStyles.card,
+        compact && attractionStyles.compactCard,
+        { backgroundColor: colors.card, borderColor: colors.border, shadowColor: colors.green950 },
         pressed && styles.pressed,
       ]}
     >
-      <View style={styles.photo}>
+      <View style={[attractionStyles.hero, { height: photoHeight, backgroundColor: colors.secondary }]}>
         <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={photoHeight} />
-        <View
-          style={[
-            styles.kindTag,
-            compact && styles.compactKindTag,
-            isShop
-              ? { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }
-              : { backgroundColor: colors.photoOverlay, borderColor: colors.mint300 },
-          ]}
-        >
-          {isShop
-            ? <Feather name="shopping-bag" size={compact ? 9 : 11} color={colors.honeyInk} />
-            : <PandaIcon name="map-pin" size={compact ? 10 : 12} color={colors.photoCredit} strokeWidth={2.2} />}
-          <Text
-            numberOfLines={1}
-            style={[styles.kindText, compact && styles.compactKindText, { color: isShop ? colors.honeyInk : colors.photoCredit }]}
+        <LinearGradient
+          pointerEvents="none"
+          colors={['transparent', colors.photoOverlay]}
+          locations={[0.38, 1]}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <View style={attractionStyles.heroTop}>
+          <View style={[attractionStyles.kindTag, { backgroundColor: colors.photoOverlay, borderColor: colors.photoCredit }]}>
+            <PandaIcon name="map-pin" size={compact ? 11 : 13} color={colors.photoCredit} strokeWidth={2.2} />
+            <Text style={[attractionStyles.kindText, compact && attractionStyles.compactKindText, { color: colors.photoCredit }]}>
+              SIGHTSEEING
+            </Text>
+          </View>
+          <Pressable
+            testID={`save-${venue.id}`}
+            accessibilityLabel={saved ? `Remove ${venue.name} from saved places` : `Save ${venue.name}`}
+            accessibilityRole="button"
+            hitSlop={10}
+            onPress={onSave}
+            style={({ pressed }) => [
+              attractionStyles.heartButton,
+              compact && attractionStyles.compactHeart,
+              { backgroundColor: colors.ivory },
+              pressed && styles.iconPressed,
+            ]}
           >
-            {isShop ? 'SHOP' : 'SIGHTSEEING'}
-          </Text>
+            <Ionicons name={saved ? 'heart' : 'heart-outline'} size={compact ? 17 : 19} color={saved ? colors.destructive : colors.green800} />
+          </Pressable>
         </View>
-        <Pressable
-          testID={`save-${venue.id}`}
-          accessibilityLabel={saved ? `Remove ${venue.name} from saved places` : `Save ${venue.name}`}
-          accessibilityRole="button"
-          hitSlop={10}
-          onPress={onSave}
-          style={({ pressed }) => [
-            styles.heartButton,
-            compact && styles.compactHeart,
-            { backgroundColor: colors.ivory },
-            pressed && styles.iconPressed,
-          ]}
-        >
-          <Ionicons name={saved ? 'heart' : 'heart-outline'} size={compact ? 16 : 19} color={saved ? colors.destructive : accent} />
-        </Pressable>
+        {(venue.rating || venue.walkingTime) ? (
+          <View style={attractionStyles.heroFacts}>
+            {venue.rating ? (
+              <View style={[attractionStyles.heroFact, { backgroundColor: colors.photoOverlay, borderColor: colors.photoCredit }]}>
+                <PandaIcon name="star" size={compact ? 12 : 14} color={colors.honey} strokeWidth={2.2} />
+                <Text style={[attractionStyles.heroFactText, compact && attractionStyles.compactHeroFactText, { color: colors.photoCredit }]}>
+                  {venue.rating}
+                  {venue.ratingCount > 0 ? ` · ${venue.ratingCount.toLocaleString()}` : ''}
+                </Text>
+              </View>
+            ) : null}
+            {venue.walkingTime ? (
+              <View style={[attractionStyles.heroFact, { backgroundColor: colors.photoOverlay, borderColor: colors.photoCredit }]}>
+                <PandaIcon name="walk" size={compact ? 12 : 14} color={colors.photoCredit} strokeWidth={2} />
+                <Text numberOfLines={1} style={[attractionStyles.heroFactText, compact && attractionStyles.compactHeroFactText, { color: colors.photoCredit }]}>
+                  {venue.walkingTime}
+                </Text>
+              </View>
+            ) : null}
+          </View>
+        ) : null}
       </View>
 
-      {!isShop ? <View style={[styles.band, { backgroundColor: colors.goldLine }]} /> : null}
+      <View style={[attractionStyles.body, compact && attractionStyles.compactBody]}>
+        <View style={attractionStyles.titleRow}>
+          <View style={attractionStyles.titleBlock}>
+            <Text
+              numberOfLines={2}
+              ellipsizeMode="tail"
+              style={[attractionStyles.name, compact && attractionStyles.compactName, { color: colors.foreground }]}
+            >
+              {venue.name}
+            </Text>
+            <Text numberOfLines={1} style={[attractionStyles.typeText, compact && attractionStyles.compactTypeText, { color: colors.green700 }]}>
+              {venue.type || 'Place to visit'}
+            </Text>
+          </View>
+          <View style={[attractionStyles.detailCue, compact && attractionStyles.compactDetailCue, { backgroundColor: colors.secondary }]}>
+            <Feather name="arrow-up-right" size={compact ? 15 : 17} color={colors.green800} />
+          </View>
+        </View>
 
-      <View style={[styles.body, compact && styles.compactBody, isShop && { borderLeftWidth: 4, borderLeftColor: colors.honey }]}>
-        <Text
-          numberOfLines={compact ? 2 : 3}
-          ellipsizeMode="tail"
-          style={[styles.name, compact && styles.compactName, { color: colors.foreground }]}
-        >
-          {venue.name}
-        </Text>
-
-        <Text numberOfLines={1} style={[styles.typeText, compact && styles.compactMeta, { color: accentInk }]}>
-          {venue.type || venue.category}
-        </Text>
-
-        <View style={[styles.metaRow, compact && styles.compactMetaRow]}>
-          {venue.rating ? (
-            <View style={styles.metaItem}>
-              <Ionicons name="star" size={compact ? 11 : 13} color={colors.honey} />
-              <Text style={[styles.metaText, compact && styles.compactMeta, { color: colors.foreground }]}>{venue.rating}</Text>
-            </View>
-          ) : null}
-          {venue.walkingTime ? (
-            <View style={[styles.metaItem, styles.shrink]}>
-              <PandaIcon name="walk" size={compact ? 11 : 13} color={colors.mutedForeground} />
-              <Text numberOfLines={1} style={[styles.metaText, compact && styles.compactMeta, styles.shrink, { color: colors.mutedForeground }]}>
-                {venue.walkingTime}
+        <View style={attractionStyles.infoRow}>
+          {(venue.neighborhood || venue.fullAddress) ? (
+            <View style={[attractionStyles.location, { backgroundColor: colors.secondary }]}>
+              <PandaIcon name="map-pin" size={12} color={colors.green800} strokeWidth={2.1} />
+              <Text numberOfLines={1} style={[attractionStyles.locationText, { color: colors.foreground }]}>
+                {venue.neighborhood || venue.fullAddress}
               </Text>
             </View>
           ) : null}
+          <View style={[attractionStyles.statusPill, { backgroundColor: statusBg }]}>
+            <View style={[attractionStyles.statusDot, { backgroundColor: statusColor }]} />
+            <Text numberOfLines={1} style={[attractionStyles.statusText, { color: statusColor }]}>{status.label}</Text>
+          </View>
         </View>
 
-        <View style={[styles.statusPill, compact && styles.compactStatus, { backgroundColor: statusBg }]}>
-          <PandaIcon name="clock" size={compact ? 10 : 11} color={statusColor} strokeWidth={2.2} />
-          <Text style={[styles.statusText, compact && styles.compactMeta, { color: statusColor }]}>{status.label}</Text>
-        </View>
+        {!!admissionLabel(venue) && (
+          <View style={[attractionStyles.admission, { backgroundColor: colors.honeySoft }]}>
+            <PandaIcon name="calendar" size={13} color={colors.honeyInk} strokeWidth={2} />
+            <Text numberOfLines={2} style={[attractionStyles.admissionText, { color: colors.honeyInk }]}>
+              {admissionLabel(venue)}
+            </Text>
+          </View>
+        )}
 
-        {venue.sourceAttribution ? (
-          <Text numberOfLines={2} style={[styles.attribution, { color: colors.mutedForeground }]}>
-            {venue.sourceAttribution}
-          </Text>
-        ) : null}
-
-        {!!admissionLabel(venue) && <Text numberOfLines={3} style={{ color: colors.green800, fontSize: 12, lineHeight: 17, marginBottom: 8 }}>{admissionLabel(venue)}</Text>}
         {actions.length ? (
-          <View style={[styles.actions, compact && styles.compactActions]}>
+          <View style={[attractionStyles.actions, compact && attractionStyles.compactActions]}>
             {actions.map((action, index) => {
-              const primary = index === 0;
+              const primary = action.kind === 'directions' || (index === 0 && !actions.some(item => item.kind === 'directions'));
               const isBusy = busy === action.kind;
-              const fg = primary ? (isShop ? colors.honeyInk : colors.primaryForeground) : accentInk;
+              const fg = primary ? colors.primaryForeground : colors.green800;
               return (
                 <Pressable
                   key={`${action.kind}-${action.url}`}
@@ -313,22 +329,30 @@ export function NonHospitalityCard({
                   disabled={!!busy}
                   onPress={(event) => { void runAction(event, action); }}
                   style={({ pressed }) => [
-                    styles.actionButton,
-                    compact && styles.compactAction,
+                    attractionStyles.actionButton,
+                    compact && attractionStyles.compactAction,
+                    primary && attractionStyles.primaryAction,
                     primary
-                      ? { backgroundColor: isShop ? colors.honeySoft : colors.green700, borderColor: isShop ? colors.honey : colors.green700 }
-                      : { backgroundColor: accentSoft, borderColor: colors.border },
+                      ? { backgroundColor: colors.green800, borderColor: colors.green800 }
+                      : { backgroundColor: colors.card, borderColor: colors.border },
                     (pressed || isBusy) && styles.iconPressed,
                   ]}
                 >
-                  <PandaIcon name={actionIcon[action.kind]} size={compact ? 12 : 14} color={fg} strokeWidth={2} />
-                  <Text numberOfLines={1} style={[styles.actionText, compact && styles.compactActionText, { color: fg }]}>
+                  <PandaIcon name={actionIcon[action.kind]} size={compact ? 13 : 15} color={fg} strokeWidth={2} />
+                  <Text numberOfLines={1} style={[attractionStyles.actionText, compact && attractionStyles.compactActionText, { color: fg }]}>
                     {isBusy ? 'Opening' : action.label}
                   </Text>
+                  {primary ? <Feather name="arrow-right" size={14} color={fg} /> : null}
                 </Pressable>
               );
             })}
           </View>
+        ) : null}
+
+        {venue.sourceAttribution ? (
+          <Text numberOfLines={1} style={[attractionStyles.attribution, { color: colors.mutedForeground }]}>
+            {venue.sourceAttribution}
+          </Text>
         ) : null}
       </View>
     </Pressable>
@@ -444,4 +468,92 @@ const shopStyles = StyleSheet.create({
   actions: { flexDirection: 'row', gap: 6, marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth },
   action: { flex: 1, minHeight: 44, borderRadius: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 5, paddingHorizontal: 6 },
   actionText: { flexShrink: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
+});
+
+const attractionStyles = StyleSheet.create({
+  card: {
+    borderRadius: 24,
+    borderWidth: 1,
+    elevation: 4,
+    overflow: 'hidden',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    width: '100%',
+  },
+  compactCard: { borderRadius: 18, shadowOpacity: 0.08, shadowRadius: 12 },
+  hero: { overflow: 'hidden', position: 'relative', width: '100%' },
+  heroTop: {
+    alignItems: 'flex-start',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    left: 12,
+    position: 'absolute',
+    right: 12,
+    top: 12,
+  },
+  kindTag: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  kindText: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.15 },
+  compactKindText: { fontSize: 8, letterSpacing: 0.8 },
+  heartButton: { alignItems: 'center', borderRadius: 22, height: 44, justifyContent: 'center', width: 44 },
+  compactHeart: { borderRadius: 18, height: 36, width: 36 },
+  heroFacts: { alignItems: 'center', bottom: 12, flexDirection: 'row', flexWrap: 'wrap', gap: 8, left: 13, position: 'absolute', right: 13 },
+  heroFact: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexDirection: 'row',
+    gap: 6,
+    maxWidth: '100%',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  heroFactText: { fontFamily: 'Inter_600SemiBold', fontSize: 11.5 },
+  compactHeroFactText: { fontSize: 10 },
+  body: { gap: 12, padding: 16 },
+  compactBody: { gap: 8, padding: 11 },
+  titleRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  titleBlock: { flex: 1, minWidth: 0 },
+  name: { fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: -0.55, lineHeight: 25 },
+  compactName: { fontSize: 16, lineHeight: 20 },
+  typeText: { fontFamily: 'Inter_600SemiBold', fontSize: 12, letterSpacing: 0.2, marginTop: 4, textTransform: 'uppercase' },
+  compactTypeText: { fontSize: 10.5, marginTop: 2 },
+  detailCue: { alignItems: 'center', borderRadius: 18, height: 36, justifyContent: 'center', width: 36 },
+  compactDetailCue: { borderRadius: 15, height: 30, width: 30 },
+  infoRow: { alignItems: 'center', flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  location: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', flex: 1, gap: 5, minWidth: 120, paddingHorizontal: 10, paddingVertical: 7 },
+  locationText: { flexShrink: 1, fontFamily: 'Inter_500Medium', fontSize: 11.5 },
+  statusPill: { alignItems: 'center', borderRadius: 999, flexDirection: 'row', gap: 6, paddingHorizontal: 10, paddingVertical: 7 },
+  statusDot: { borderRadius: 4, height: 7, width: 7 },
+  statusText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+  admission: { alignItems: 'flex-start', borderRadius: 13, flexDirection: 'row', gap: 8, paddingHorizontal: 11, paddingVertical: 9 },
+  admissionText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 11.5, lineHeight: 16 },
+  actions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  compactActions: { gap: 6 },
+  actionButton: {
+    alignItems: 'center',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexBasis: '45%',
+    flexDirection: 'row',
+    flexGrow: 1,
+    gap: 7,
+    justifyContent: 'center',
+    minHeight: 44,
+    minWidth: 132,
+    paddingHorizontal: 10,
+  },
+  primaryAction: { flexBasis: '100%', justifyContent: 'space-between', minHeight: 48, paddingHorizontal: 15 },
+  compactAction: { borderRadius: 11, gap: 5, minHeight: 38, minWidth: 120, paddingHorizontal: 8 },
+  actionText: { flexShrink: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12.5 },
+  compactActionText: { fontSize: 10.5 },
+  attribution: { fontFamily: 'Inter_400Regular', fontSize: 9.5, marginTop: -2 },
 });
