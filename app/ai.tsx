@@ -55,7 +55,8 @@ import {
   hasDatedOpeningEvidence,
   isNewOpeningPrompt,
 } from '@/utils/ai-openings';
-import { requiresCurrentLocation } from '@/utils/location-intent';
+import { safeAiSources, type AiSource } from '@/utils/ai-source-links';
+import { isWeatherIntent, requiresCurrentLocation } from '@/utils/location-intent';
 
 type AiVenue = {
   id?: string;
@@ -103,6 +104,7 @@ type Message = {
   role: 'user' | 'model';
   text: string;
   venues?: AiVenue[];
+  sources?: AiSource[];
   newSelection?: boolean;
   transit?: AiTransitContext;
   requestId?: number;
@@ -627,8 +629,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         if (!isCurrentRequest()) return;
         requestCoordinates = locationResult?.coordinates ?? null;
         if (!requestCoordinates) {
-          const locationError =
-            locationResult?.status === 'permission-denied'
+          const locationError = isWeatherIntent(trimmed)
+            ? locationResult?.status === 'permission-denied'
+              ? 'To check the weather where you are, allow Panda to use your location. Or just tell me your town or city.'
+              : 'I couldn’t get your location for a local forecast. Turn on device location services, or tell me your town or city.'
+            : locationResult?.status === 'permission-denied'
               ? 'Panda needs location permission to find nearby places. Allow location access for Panda in your device settings, then try again.'
               : 'I couldn’t get your current location. Turn on device location services and allow Panda to use your location, then try again.';
           updateResult((message) => ({ ...message, text: locationError, venues: [] }));
@@ -670,6 +675,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const data = (await response.json()) as {
         text?: string;
         venues?: AiVenue[];
+        sources?: unknown;
         customItinerary?: boolean;
         customPubCrawl?: boolean;
         newOpeningsSearch?: boolean;
@@ -678,6 +684,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!isCurrentRequest()) return;
 
       const openingSearch = isNewOpeningSearch || data.newOpeningsSearch === true;
+      const sources = safeAiSources(data.sources);
       const eligibleVenues = (data.venues ?? []).filter((venue) =>
         Boolean(venue.photoName)
         && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
@@ -718,12 +725,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           ...message,
           text: isTransit ? 'Checking live station and route information…' : baseReply,
           venues: initialVenues,
+          sources,
           newSelection: data.newOpeningsSearch === true,
         }));
       } else {
         setMessages((current) => [
           ...current,
-          { role: 'model', requestId, text: baseReply, venues: initialVenues, newSelection: data.newOpeningsSearch === true },
+          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, newSelection: data.newOpeningsSearch === true },
         ]);
       }
       primaryPendingRef.current = false;
@@ -1187,6 +1195,40 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 );
                 })}
               </ScrollView>
+            ) : null}
+            {message.sources?.length ? (
+              <View style={styles.aiEventSources}>
+                <Text style={[styles.aiEventSourcesLabel, { color: isNight ? colors.goldLine : colors.green700 }]}>
+                  LIVE SHOW SOURCES
+                </Text>
+                {message.sources.slice(0, 4).map((source) => (
+                  <Pressable
+                    key={source.url}
+                    accessibilityRole="link"
+                    accessibilityLabel={`Open ${source.title}`}
+                    onPress={() => {
+                      void Linking.openURL(source.url).catch(() =>
+                        Alert.alert('Event source', 'This source link could not be opened right now.'),
+                      );
+                    }}
+                    style={({ pressed }) => [
+                      styles.aiEventSourceLink,
+                      { backgroundColor: colors.card, borderColor: colors.border },
+                      pressed && styles.iconPressed,
+                    ]}
+                  >
+                    <Feather name="external-link" size={15} color={isNight ? colors.goldLine : colors.green700} />
+                    <View style={styles.aiEventSourceCopy}>
+                      <Text numberOfLines={1} style={[styles.aiEventSourceTitle, { color: colors.foreground }]}>
+                        {source.title}
+                      </Text>
+                      <Text numberOfLines={1} style={[styles.aiEventSourceDomain, { color: colors.mutedForeground }]}>
+                        {source.domain || 'Event source'}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
             ) : null}
             {message.transit ? (
               <AiTransitCard
@@ -1843,6 +1885,21 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
+  aiEventSources: { gap: 7, marginTop: 10, maxWidth: '92%' },
+  aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 0.9, marginBottom: 1 },
+  aiEventSourceLink: {
+    alignItems: 'center',
+    borderRadius: 13,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    minHeight: 46,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  aiEventSourceCopy: { flex: 1, minWidth: 0 },
+  aiEventSourceTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  aiEventSourceDomain: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 2 },
   aiTransitCard: {
     borderRadius: 20,
     borderWidth: 1,
