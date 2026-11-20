@@ -18,7 +18,7 @@
     },
     "android": {
       "package": "com.panda.pandamobile",
-      "versionCode": 85,
+      "versionCode": 86,
       "softwareKeyboardLayoutMode": "resize",
       "permissions": [
         "android.permission.ACCESS_COARSE_LOCATION",

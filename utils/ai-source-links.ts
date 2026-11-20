@@ -8,7 +8,7 @@ export function safeAiSources(value: unknown): AiSource[] {
   if (!Array.isArray(value)) return [];
   const result: AiSource[] = [];
   const seen = new Set<string>();
-  for (const item of value.slice(0, 4)) {
+  for (const item of value.slice(0, 6)) {
     if (!item || typeof item !== 'object') continue;
     const source = item as { title?: unknown; url?: unknown };
     if (typeof source.url !== 'string') continue;
