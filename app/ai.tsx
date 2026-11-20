@@ -1199,7 +1199,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             {message.sources?.length ? (
               <View style={styles.aiEventSources}>
                 <Text style={[styles.aiEventSourcesLabel, { color: isNight ? colors.goldLine : colors.green700 }]}>
-                  LIVE SHOW SOURCES
+                  LIVE SHOW LINKS
                 </Text>
                 {message.sources.slice(0, 6).map((source) => (
                   <Pressable

@@ -63,7 +63,7 @@ test('Panda keeps its hospitality-first caring voice and renders web-grounded sh
   const screen = await read('app/ai.tsx');
   assert.match(prompt, /Hospitality is your heart and default strength/);
   assert.match(prompt, /emojis when they add warmth, emotion, laughter or celebration/);
-  assert.match(screen, /LIVE SHOW SOURCES/);
+  assert.match(screen, /LIVE SHOW LINKS/);
   assert.match(screen, /Linking\.openURL\(source\.url\)/);
 });
 
