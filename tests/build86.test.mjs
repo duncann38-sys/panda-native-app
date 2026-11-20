@@ -13,10 +13,8 @@ async function loadTypeScriptModule(path) {
   return import(`data:text/javascript;base64,${Buffer.from(output).toString('base64')}`);
 }
 
-test('APK 86 has a new Android version code and branch-only EAS build', async () => {
-  const app = JSON.parse(await read('app.json'));
+test('APK 86 keeps its branch-only EAS workflow after later version increments', async () => {
   const workflow = await read('.eas/workflows/panda-build-86.yml');
-  assert.equal(app.expo.android.versionCode, 86);
   assert.match(workflow, /panda-build-86/);
   assert.match(workflow, /profile: preview/);
   assert.match(workflow, /platform: android/);
@@ -80,7 +78,7 @@ test('Panda keeps its hospitality-first caring voice and renders web-grounded sh
   const screen = await read('app/ai.tsx');
   assert.match(prompt, /Hospitality is your heart and default strength/);
   assert.match(prompt, /emojis when they add warmth, emotion, laughter or celebration/);
-  assert.match(screen, /LIVE SHOW LINKS/);
+  assert.match(screen, /LIVE SOURCES/);
   assert.match(screen, /Linking\.openURL\(source\.url\)/);
 });
 

@@ -4,12 +4,16 @@ export type UberEstimateInput = {
   distanceMeters?: number | null;
   driveDurationMinutes?: number | null;
   venueName: string;
+  now?: Date;
 };
 
 export type UberEstimate = {
   minutes: number;
   minFare: number;
   maxFare: number;
+  peakTime: boolean;
+  planningBufferGbp: number;
+  peakBufferGbp: number;
   label: string;
   deepLink: string;
 };
@@ -18,12 +22,19 @@ function isValidCoordinate(value: number | null | undefined, min: number, max: n
   return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
 
+export function isLocalPeakTime(now: Date = new Date()) {
+  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return false;
+  const day = now.getDay();
+  const hour = now.getHours();
+  return day >= 1 && day <= 5 && ((hour >= 7 && hour < 10) || (hour >= 16 && hour < 19));
+}
+
 /**
  * A free, local planning estimate from venue distance (or an explicitly
  * supplied driving duration). This is not a live Uber fare or route quote.
  */
 export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null {
-  const { latitude, longitude, distanceMeters, driveDurationMinutes, venueName } = input;
+  const { latitude, longitude, distanceMeters, driveDurationMinutes, venueName, now = new Date() } = input;
   if (
     !isValidCoordinate(latitude, -90, 90)
     || !isValidCoordinate(longitude, -180, 180)
@@ -50,10 +61,13 @@ export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null
   // Broad local bands are deliberately indicative; Uber's live fare can differ.
   const baseMinFare = Math.max(4, Math.floor(3.5 + distanceKm * 1.25 + minutes * 0.16));
   const baseMaxFare = Math.max(baseMinFare + 2, Math.ceil(5.25 + distanceKm * 1.85 + minutes * 0.27));
-  // A £5 planning buffer on both ends, not a fee charged by Panda or Uber.
+  // Preserve the existing £5 planning buffer and add a separate £5 only during
+  // local weekday commute peaks. Neither buffer is an Uber fee or live surge quote.
   const planningBufferGbp = 5;
-  const minFare = baseMinFare + planningBufferGbp;
-  const maxFare = baseMaxFare + planningBufferGbp;
+  const peakTime = isLocalPeakTime(now);
+  const peakBufferGbp = peakTime ? 5 : 0;
+  const minFare = baseMinFare + planningBufferGbp + peakBufferGbp;
+  const maxFare = baseMaxFare + planningBufferGbp + peakBufferGbp;
   const safeName = venueName.trim() || 'Panda venue';
   const deepLink = [
     'https://m.uber.com/ul/?action=setPickup&pickup=my_location',
@@ -66,6 +80,9 @@ export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null
     minutes,
     minFare,
     maxFare,
+    peakTime,
+    planningBufferGbp,
+    peakBufferGbp,
     label: `~${minutes} mins • £${minFare}–£${maxFare}`,
     deepLink,
   };
