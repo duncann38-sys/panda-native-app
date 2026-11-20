@@ -58,6 +58,23 @@ test('event source links allow only unique HTTPS URLs and derive their displayed
   }]);
 });
 
+test('Google grounding redirects display the publisher instead of Google’s redirect host', async () => {
+  const { safeAiSources } = await loadTypeScriptModule('utils/ai-source-links.ts');
+  const sources = safeAiSources([
+    {
+      title: 'nme.com',
+      url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/example',
+      domain: 'vertexaisearch.cloud.google.com',
+    },
+    {
+      title: 'Official announcement',
+      url: 'https://vertexaisearch.cloud.google.com/grounding-api-redirect/another',
+      domain: 'vertexaisearch.cloud.google.com',
+    },
+  ]);
+  assert.deepEqual(sources.map(({ domain }) => domain), ['nme.com', 'Google-grounded source']);
+});
+
 test('Panda keeps its hospitality-first caring voice and renders web-grounded show links', async () => {
   const prompt = await read('utils/concierge-conversation.ts');
   const screen = await read('app/ai.tsx');
