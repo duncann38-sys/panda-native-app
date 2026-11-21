@@ -207,7 +207,7 @@ const TRANSIT_REQUEST_TIMEOUT_MS = 9_000;
 const REQUIRED_LOCATION_TIMEOUT_MS = 14_000;
 const PANDA_AI_HISTORY_LIMIT = 48;
 const PREFERENCE_PATTERN =
-  /\b(?:i(?:'m| am) (?:a )?(?:vegetarian|vegan|pescatarian|gluten[- ]free|teetotal|sober|allergic)|i(?:'m| am) allergic|allergic to|i (?:don['’]?t|do not|never|can['’]?t|cannot) (?:eat|drink|like|want)|i (?:prefer|love|like|hate|avoid)|please (?:don['’]?t|do not|always|never)|call me|don['’]?t call me|no (?:meat|pork|alcohol|dairy|nuts|gluten|spice|seafood|fish)|my budget|keep it (?:under|below|cheap))\b/i;
+  /\b(?:i(?:'m| am) (?:a )?(?:vegetarian|vegan|pescatarian|gluten[- ]free|teetotal|sober|allergic)|i(?:'m| am) allergic|allergic to|i (?:don['â]?t|do not|never|can['â]?t|cannot) (?:eat|drink|like|want)|i (?:prefer|love|like|hate|avoid)|please (?:don['â]?t|do not|always|never)|call me|don['â]?t call me|no (?:meat|pork|alcohol|dairy|nuts|gluten|spice|seafood|fish)|my budget|keep it (?:under|below|cheap))\b/i;
 
 // The backend owns the authoritative Panda personality prompt. The client only
 // sends a bounded slice of this session's conversation, plus any explicit
@@ -243,7 +243,7 @@ function localTimeZone() {
 function removeWeatherProviderFromReply(text: string) {
   return String(text || '')
     .replace(/\baccording to MET Norway\b/gi, 'the forecast')
-    .replace(/\b(?:the\s+)?(?:latest\s+)?MET Norway(?:’s|'s)?\s+(?:(?:available|model)\s+)?forecast/gi, 'the forecast')
+    .replace(/\b(?:the\s+)?(?:latest\s+)?MET Norway(?:âs|'s)?\s+(?:(?:available|model)\s+)?forecast/gi, 'the forecast')
     .replace(/\bforecast\s+(?:from|by)\s+MET Norway\b/gi, 'forecast')
     .replace(/\bweather data (?:from|provided by) MET Norway(?:,?\s*(?:licensed )?under CC BY 4\.0)?\.?/gi, '')
     .replace(/\bMET Norway\b/gi, '')
@@ -467,11 +467,11 @@ function aiVenueToVenue(venue: AiVenue): Venue | null {
         : 'Nearby',
     walkingTime:
       typeof venue.distanceMeters === 'number'
-        ? `≈ ${Math.max(1, Math.round(venue.distanceMeters / 80))} min walk`
+        ? `â ${Math.max(1, Math.round(venue.distanceMeters / 80))} min walk`
         : 'Directions available',
     rating: venue.rating?.toFixed(1) ?? '',
     ratingCount: 0,
-    price: venue.price || '££',
+    price: venue.price || 'Â£Â£',
     distanceMeters: venue.distanceMeters ?? 0,
     description: `Live Panda recommendation for ${venue.name}.`,
     hours: venue.todayHours || 'Live hours unavailable',
@@ -583,7 +583,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         || typeof homeLongitude !== 'number'
         || !Number.isFinite(homeLongitude)
       ) {
-        updateHomeReply('Add a home address in Profile → Home for Uber first. Panda keeps it encrypted on this device and won’t send it to chat.');
+        updateHomeReply('Add a home address in Profile â Home for Uber first. Panda keeps it encrypted on this device and wonât send it to chat.');
         return;
       }
       const locationResult = await withTimeout(
@@ -596,7 +596,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!pickup) {
         updateHomeReply(locationResult?.status === 'permission-denied'
           ? 'Allow Panda to use your location so I can estimate the ride from your current pickup point.'
-          : 'I couldn’t get a fresh pickup location. Turn on device location services and try Uber Home again.');
+          : 'I couldnât get a fresh pickup location. Turn on device location services and try Uber Home again.');
         return;
       }
       const distanceMeters = distanceBetween(pickup, {
@@ -604,10 +604,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         longitude: homeLongitude,
       });
       if (!distanceMeters || distanceMeters <= 0 || distanceMeters > 250_000) {
-        updateHomeReply('I can’t make a reliable local Uber estimate for that distance. Check your saved Home address in Profile.');
+        updateHomeReply('I canât make a reliable local Uber estimate for that distance. Check your saved Home address in Profile.');
         return;
       }
-      updateHomeReply('Your Home destination is ready 🚗 Review Panda’s estimate, then check the live fare in Uber.', {
+      updateHomeReply('Your Home destination is ready ð Review Pandaâs estimate, then check the live fare in Uber.', {
         id: 'panda-saved-home',
         name: 'Home',
         address: 'Saved privately on this device',
@@ -617,7 +617,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         distanceMeters,
       });
     } catch {
-      updateHomeReply('I couldn’t load your saved Home destination. Check Profile and try again.');
+      updateHomeReply('I couldnât load your saved Home destination. Check Profile and try again.');
     } finally {
       if (currentRequestRef.current === requestId && chatGenerationRef.current === generation) {
         primaryPendingRef.current = false;
@@ -670,7 +670,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         { role: 'user', text: trimmed },
         {
           role: 'model',
-          text: 'I can do that 🚗 There are a few places in our chat, so choose the right venue card and tap its Uber estimate—I won’t guess.',
+          text: 'I can do that ð There are a few places in our chat, so choose the right venue card and tap its Uber estimateâI wonât guess.',
           venues: choices,
         },
       ]);
@@ -683,7 +683,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         { role: 'user', text: trimmed },
         {
           role: 'model',
-          text: 'There are a couple of fine places in our chat, and I’d rather not send you to the wrong one. Tap the venue card you mean or tell me its name, and I’ll find the nearest station.',
+          text: 'There are a couple of fine places in our chat, and Iâd rather not send you to the wrong one. Tap the venue card you mean or tell me its name, and Iâll find the nearest station.',
         },
       ]);
       setDraft('');
@@ -701,7 +701,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         { role: 'user', text: trimmed },
         {
           role: 'model',
-          text: 'Which venue do you mean? Tap its card or tell me the venue name, and I’ll route to the right place.',
+          text: 'Which venue do you mean? Tap its card or tell me the venue name, and Iâll route to the right place.',
         },
       ]);
       setDraft('');
@@ -713,7 +713,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         { role: 'user', text: trimmed },
         {
           role: 'model',
-          text: `I’ve got ${referencedVenue.name ?? 'that venue'} in our chat, but its card is missing the Google ID needed for a proper live route check. Open the full venue card and I’ll take another look.`,
+          text: `Iâve got ${referencedVenue.name ?? 'that venue'} in our chat, but its card is missing the Google ID needed for a proper live route check. Open the full venue card and Iâll take another look.`,
         },
       ]);
       setDraft('');
@@ -767,10 +767,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           const locationError = isWeatherIntent(trimmed)
             ? locationResult?.status === 'permission-denied'
               ? 'To check the weather where you are, allow Panda to use your location. Or just tell me your town or city.'
-              : 'I couldn’t get your location for a local forecast. Turn on device location services, or tell me your town or city.'
+              : 'I couldnât get your location for a local forecast. Turn on device location services, or tell me your town or city.'
             : locationResult?.status === 'permission-denied'
               ? 'Panda needs location permission to find nearby places. Allow location access for Panda in your device settings, then try again.'
-              : 'I couldn’t get your current location. Turn on device location services and allow Panda to use your location, then try again.';
+              : 'I couldnât get your current location. Turn on device location services and allow Panda to use your location, then try again.';
           updateResult((message) => ({ ...message, text: locationError, venues: [] }));
           return;
         }
@@ -797,13 +797,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         if (!distanceMeters || distanceMeters <= 0 || distanceMeters > 250_000) {
           updateResult((message) => ({
             ...message,
-            text: `I found ${referencedVenue.name ?? 'that place'} in our chat, but I can’t make a reliable local ride estimate for it. Tell me the venue name and city, and I’ll check it.`,
+            text: `I found ${referencedVenue.name ?? 'that place'} in our chat, but I canât make a reliable local ride estimate for it. Tell me the venue name and city, and Iâll check it.`,
             venues: [],
           }));
         } else {
           updateResult((message) => ({
             ...message,
-            text: `I’ve got ${referencedVenue.name ?? 'your destination'} 🚗 Review Panda’s estimate, then check the live fare in Uber. I haven’t requested a ride.`,
+            text: `Iâve got ${referencedVenue.name ?? 'your destination'} ð Review Pandaâs estimate, then check the live fare in Uber. I havenât requested a ride.`,
             venues: [{ ...referencedVenue, distanceMeters }],
             rideRequest: true,
           }));
@@ -887,7 +887,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             : undefined;
       const weatherAttribution = typeof data.weather?.attribution === 'string'
         ? {
-            label: 'Weather data from MET Norway · CC BY 4.0',
+            label: 'Weather data from MET Norway Â· CC BY 4.0',
             url: typeof data.weather.attributionUrl === 'string'
               ? data.weather.attributionUrl
               : 'https://creativecommons.org/licenses/by/4.0/',
@@ -961,11 +961,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         ? NO_OPEN_VENUES_REPLY
         : data.text?.trim() || (discoveryCategory
           ? initialVenues.length
-            ? `I found ${initialVenues.length} nearby ${discoveryCategory === 'Pubs' ? 'pubs and beer gardens' : 'bars and cocktail bars'} from your current location. Tap a card for details ✨`
-            : `I couldn’t find verified ${discoveryCategory === 'Pubs' ? 'pubs' : 'bars'} within 6 km just now. Want me to widen the search?`
+            ? `I found ${initialVenues.length} nearby ${discoveryCategory === 'Pubs' ? 'pubs and beer gardens' : 'bars and cocktail bars'} from your current location. Tap a card for details â¨`
+            : `I couldnât find verified ${discoveryCategory === 'Pubs' ? 'pubs' : 'bars'} within 6 km just now. Want me to widen the search?`
           : openingSearch && !initialVenues.length
-        ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
-        : 'I’m not sure I caught that. Try asking for a place, mood, or time of day.');
+        ? 'I couldnât verify any new-restaurant reports for this search. Try another area or check again later â I wonât substitute ordinary restaurant results.'
+        : 'Iâm not sure I caught that. Try asking for a place, mood, or time of day.');
       const baseReply = data.weather ? removeWeatherProviderFromReply(rawBaseReply) : rawBaseReply;
       if (referencedVenue) {
         activeAiVenueRef.current = referencedVenue;
@@ -982,7 +982,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (needsCurrentLocation) {
         updateResult((message) => ({
           ...message,
-          text: isTransit ? 'Checking live station and route information…' : baseReply,
+          text: isTransit ? 'Checking live station and route informationâ¦' : baseReply,
           venues: initialVenues,
           sources,
           sourceLabel,
@@ -1036,7 +1036,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             if (!currentLocation.coordinates) {
               updateResult((message) => ({
                 ...message,
-                text: 'I couldn’t get your current location, so I can’t safely identify your nearest station yet.',
+                text: 'I couldnât get your current location, so I canât safely identify your nearest station yet.',
               }));
               return;
             }
@@ -1049,7 +1049,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             if (!venue && hasExplicitVenueDestination) {
               updateResult((message) => ({
                 ...message,
-                text: 'I couldn’t confidently match that destination to a venue. Tap the correct venue card or give me its full name, and I’ll route you there rather than guess.',
+                text: 'I couldnât confidently match that destination to a venue. Tap the correct venue card or give me its full name, and Iâll route you there rather than guess.',
               }));
               return;
             }
@@ -1063,7 +1063,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               if (!transitResponse.ok) {
                 updateResult((message) => ({
                   ...message,
-                  text: `I couldn’t verify the route to ${venue.name} right now, so I won’t guess its station or journey time.`,
+                  text: `I couldnât verify the route to ${venue.name} right now, so I wonât guess its station or journey time.`,
                 }));
                 return;
               }
@@ -1078,7 +1078,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               if (!isVerifiedTransitStation(liveTransit.originStation) || !isVerifiedTransitStation(liveTransit.destinationStation)) {
                 updateResult((message) => ({
                   ...message,
-                  text: `I couldn’t verify the route to ${venue.name} right now, so I won’t guess its station or journey time.`,
+                  text: `I couldnât verify the route to ${venue.name} right now, so I wonât guess its station or journey time.`,
                 }));
                 return;
               }
@@ -1096,11 +1096,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               };
               const walkText = liveTransit.venueWalk
                 ? `Google estimates a ${liveTransit.venueWalk.durationMinutes}-minute walk from there to the venue.`
-                : 'I’ll keep the final walk visible in the route panel.';
+                : 'Iâll keep the final walk visible in the route panel.';
               const transitText = liveTransit.transitRoute
                 ? liveTransit.transitRoute.timingSource === 'tfl_live'
                   ? `TfL live timings show about ${liveTransit.transitRoute.durationMinutes} minutes between stations.`
-                  : `Google’s route estimate is about ${liveTransit.transitRoute.durationMinutes} minutes between stations.`
+                  : `Googleâs route estimate is about ${liveTransit.transitRoute.durationMinutes} minutes between stations.`
                 : 'I can show the verified stations, but no journey time was confirmed.';
               const venueStationText = asksForVenueStation(trimmed)
                 ? `For ${venue.name}, the recommended arrival station is ${liveTransit.destinationStation.name}. ${transitText} ${walkText}`
@@ -1122,17 +1122,17 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
               TRANSIT_REQUEST_TIMEOUT_MS,
             );
             if (!stationResponse.ok) {
-              updateResult((message) => ({ ...message, text: 'I couldn’t find a live nearby station right now.' }));
+              updateResult((message) => ({ ...message, text: 'I couldnât find a live nearby station right now.' }));
               return;
             }
             const nearest = (await stationResponse.json()) as { station: AiTransitStation };
             if (!isVerifiedTransitStation(nearest.station)) {
-              updateResult((message) => ({ ...message, text: 'I couldn’t find a live nearby station right now.' }));
+              updateResult((message) => ({ ...message, text: 'I couldnât find a live nearby station right now.' }));
               return;
             }
             updateResult((message) => ({
               ...message,
-              text: `Your nearest station right now is ${nearest.station.name}. Tell me where you’re heading and I’ll map the journey in Panda.`,
+              text: `Your nearest station right now is ${nearest.station.name}. Tell me where youâre heading and Iâll map the journey in Panda.`,
               transit: { originStation: nearest.station },
             }));
           } catch {
@@ -1145,7 +1145,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       }
     } catch {
       if (isCurrentRequest()) {
-        const requestError = 'I couldn’t reach the Panda kitchen just now. Check your connection and try again.';
+        const requestError = 'I couldnât reach the Panda kitchen just now. Check your connection and try again.';
         if (needsCurrentLocation) {
           updateResult((message) => ({ ...message, text: requestError, venues: [] }));
         } else {
@@ -1178,7 +1178,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     if (Platform.OS !== 'web') {
       Alert.alert(
         'Dictate to Panda',
-        'You can use your keyboard’s microphone to dictate, if dictation is enabled on your phone. Review your question, then tap Send. You can also type as usual.',
+        'You can use your keyboardâs microphone to dictate, if dictation is enabled on your phone. Review your question, then tap Send. You can also type as usual.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Open keyboard', onPress: () => inputRef.current?.focus() },
@@ -1369,7 +1369,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       </View>
 
       <SandboxBookingAiEntry enabled={sandboxBookings.capabilities.data?.enabled === true}
-        onPress={() => void sendMessage('Book a table at OpenTable Sandbox — 264001')} />
+        onPress={() => void sendMessage('Book a table at OpenTable Sandbox â 264001')} />
       <FlatList
         ref={listRef}
         inverted
@@ -1485,14 +1485,29 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                       pressed && styles.iconPressed,
                     ]}
                   >
-                    <Feather name="external-link" size={15} color={isNight ? colors.goldLine : colors.green700} />
+                    <View
+                      style={[
+                        styles.aiEventSourceIcon,
+                        { backgroundColor: isNight ? colors.gold : colors.green600 },
+                      ]}
+                    >
+                      <Feather name="link-2" size={15} color={isNight ? colors.foreground : colors.card} />
+                    </View>
                     <View style={styles.aiEventSourceCopy}>
-                      <Text numberOfLines={1} style={[styles.aiEventSourceTitle, { color: colors.foreground }]}>
+                      <Text numberOfLines={2} style={[styles.aiEventSourceTitle, { color: colors.foreground }]}>
                         {source.title}
                       </Text>
                       <Text numberOfLines={1} style={[styles.aiEventSourceDomain, { color: colors.mutedForeground }]}>
                         {source.domain || 'Source'}
                       </Text>
+                    </View>
+                    <View
+                      style={[
+                        styles.aiEventSourceArrow,
+                        { backgroundColor: isNight ? colors.background : colors.mint100 },
+                      ]}
+                    >
+                      <Feather name="arrow-up-right" size={14} color={isNight ? colors.goldLine : colors.green700} />
                     </View>
                   </Pressable>
                 ))}
@@ -1594,7 +1609,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           onSubmitEditing={() => void sendMessage()}
           submitBehavior="submit"
           blurOnSubmit={false}
-          placeholder="What’s on your mind?"
+          placeholder="Whatâs on your mind?"
           placeholderTextColor={colors.mutedForeground}
           returnKeyType="send"
            style={[
@@ -1718,7 +1733,7 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
   };
   const destinationAddress = venue.fullAddress || venue.address || 'Verified destination';
   const isSavedHome = venue.id === 'panda-saved-home';
-  const addressLabel = isSavedHome ? 'Saved on this device · Private' : destinationAddress;
+  const addressLabel = isSavedHome ? 'Saved on this device Â· Private' : destinationAddress;
 
   return (
     <LinearGradient
@@ -1733,7 +1748,7 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
           <Feather name="navigation" size={16} color={colors.green950} />
         </View>
         <View style={styles.rideJourneyHeaderCopy}>
-          <Text style={[styles.rideJourneyEyebrow, { color: colors.goldLine }]}>PANDA RIDE · ESTIMATE ONLY</Text>
+          <Text style={[styles.rideJourneyEyebrow, { color: colors.goldLine }]}>PANDA RIDE Â· ESTIMATE ONLY</Text>
           <Text style={[styles.rideJourneyHeaderText, { color: colors.primaryForeground }]}>
             {isSavedHome ? 'Your way home' : 'Ride preview'}
           </Text>
@@ -1750,7 +1765,7 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
           <View style={[styles.rideJourneyDropDot, { backgroundColor: colors.gold }]} />
         </View>
         <View style={styles.rideJourneyStops}>
-          <Text style={[styles.rideJourneyStopLabel, { color: colors.mint300 }]}>FROM · YOUR CURRENT LOCATION</Text>
+          <Text style={[styles.rideJourneyStopLabel, { color: colors.mint300 }]}>FROM Â· YOUR CURRENT LOCATION</Text>
           <Text style={[styles.rideJourneyStopLabel, { color: colors.goldLine, marginTop: 9 }]}>TO</Text>
           <Text style={[styles.rideJourneyDestination, { color: colors.primaryForeground }]}>{venue.name}</Text>
           <Text numberOfLines={1} style={[styles.rideJourneyAddress, { color: colors.mint100 }]}>{addressLabel}</Text>
@@ -1769,7 +1784,7 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
           <Feather name="credit-card" size={13} color={colors.goldLine} />
           <View>
             <Text style={[styles.rideJourneyStatLabel, { color: colors.goldLine }]}>PANDA ESTIMATE</Text>
-            <Text style={[styles.rideJourneyFareValue, { color: colors.goldLine }]}>£{rideEstimate.minFare}–£{rideEstimate.maxFare}</Text>
+            <Text style={[styles.rideJourneyFareValue, { color: colors.goldLine }]}>Â£{rideEstimate.minFare}âÂ£{rideEstimate.maxFare}</Text>
           </View>
         </View>
       </View>
@@ -1785,11 +1800,11 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
           { backgroundColor: colors.gold, opacity: pressed ? 0.9 : 1 },
         ]}
       >
-        <Text style={[styles.rideJourneyActionText, { color: colors.green950 }]}>Open Uber · check live fare</Text>
+        <Text style={[styles.rideJourneyActionText, { color: colors.green950 }]}>Open Uber Â· check live fare</Text>
         <Feather name="arrow-up-right" size={17} color={colors.green950} />
       </Pressable>
       <Text style={[styles.rideJourneyDisclaimer, { color: colors.mint100 }]}>
-        Indicative only{rideEstimate.peakTime ? ' · includes £5 peak buffer' : ''} · No ride booked
+        Indicative only{rideEstimate.peakTime ? ' Â· includes Â£5 peak buffer' : ''} Â· No ride booked
       </Text>
     </LinearGradient>
   );
@@ -1828,7 +1843,7 @@ function AiVenueCard({
         : `${(distanceMeters / 1000).toFixed(1)} km`
       : null;
   const openingText = venue.todayHours
-    ? `${venue.openNow === true ? 'Open now' : venue.openNow === false ? 'Closed' : 'Today'} · ${venue.todayHours}`
+    ? `${venue.openNow === true ? 'Open now' : venue.openNow === false ? 'Closed' : 'Today'} Â· ${venue.todayHours}`
     : venue.openNow === true
       ? 'Open now'
       : venue.openNow === false
@@ -1846,7 +1861,7 @@ function AiVenueCard({
     if (!phoneNumber) return;
     const dialableNumber = phoneNumber.replace(/[^\d+]/g, '');
     if (!dialableNumber) {
-      Alert.alert('Number unavailable', 'Panda could not prepare this venue’s phone number.');
+      Alert.alert('Number unavailable', 'Panda could not prepare this venueâs phone number.');
       return;
     }
     const activityVenue = aiVenueToVenue(venue);
@@ -1958,7 +1973,7 @@ function AiVenueCard({
           <View style={styles.resultMetaRow}>
             {hasDatedOpeningEvidence(venue) ? (
               <View style={[styles.resultMetaChip, { backgroundColor: colors.mint100, borderColor: colors.border }]}>
-                <Text style={[styles.resultMetaChipText, { color: colors.green700 }]}>NEW · REPORTED OPENING</Text>
+                <Text style={[styles.resultMetaChipText, { color: colors.green700 }]}>NEW Â· REPORTED OPENING</Text>
               </View>
             ) : null}
             {typeof venue.rating === 'number' ? (
@@ -1994,7 +2009,7 @@ function AiVenueCard({
             >
               <Feather name="file-text" size={11} color={colors.honeyInk} />
               <Text numberOfLines={1} style={[styles.resultStopLabel, { color: colors.honeyInk }]}>
-                OPENING REPORTED · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
+                OPENING REPORTED Â· {formatOpeningReportDate(venue.openingReportedAt)} Â· {venue.openingSourceName}
               </Text>
             </Pressable>
           ) : null}
@@ -2009,7 +2024,7 @@ function AiVenueCard({
           {rideEstimate ? (
             <Pressable
               accessibilityLabel={`Open Uber for ${venue.name ?? 'this venue'}. ${rideEstimate.label}`}
-              accessibilityHint="Panda's local estimate is not a live Uber quote. It includes an extra £5 planning buffer during weekday peak hours; Uber will show the live fare before you confirm."
+              accessibilityHint="Panda's local estimate is not a live Uber quote. It includes an extra Â£5 planning buffer during weekday peak hours; Uber will show the live fare before you confirm."
               accessibilityRole="button"
               onPress={openUber}
               testID={`panda-ai-uber-${venue.id ?? 'venue'}`}
@@ -2026,14 +2041,14 @@ function AiVenueCard({
                 <Feather name="navigation" size={15} color={colors.primaryForeground} />
               </View>
               <View style={styles.uberCopy}>
-                <Text style={[styles.uberEyebrow, { color: colors.mint300 }]}>UBER · LOCAL ESTIMATE</Text>
+                <Text style={[styles.uberEyebrow, { color: colors.mint300 }]}>UBER Â· LOCAL ESTIMATE</Text>
                 <Text style={[styles.uberFare, { color: colors.primaryForeground }]}>
                   {rideEstimate.label}
                 </Text>
                 <Text style={[styles.uberDisclaimer, { color: colors.mint100 }]}>
                   {rideEstimate.peakTime
-                    ? 'Includes an extra £5 peak buffer · Uber shows live fare'
-                    : 'Indicative only · Uber shows the live fare'}
+                    ? 'Includes an extra Â£5 peak buffer Â· Uber shows live fare'
+                    : 'Indicative only Â· Uber shows the live fare'}
                 </Text>
               </View>
               <Feather name="arrow-up-right" size={17} color={colors.mint300} />
@@ -2142,16 +2157,16 @@ function AiTransitCard({
     const venue = aiVenueToVenue(context.venue ?? { id: context.venueId, name: context.venueName });
     return <View style={[styles.aiTransitCard, { backgroundColor: colors.card, borderColor: colors.goldLine }]}>
       <Text style={[styles.aiTransitTitle, { color: colors.foreground }]}>
-        {walking.duration ? 'Walking is the better option' : 'You’re very close'}
+        {walking.duration ? 'Walking is the better option' : 'Youâre very close'}
       </Text>
       <Text style={[styles.aiTransitWalk, { color: colors.green700 }]}>
-        {walking.reason}{walking.duration ? ` · ${walking.duration} min walk` : ''}
+        {walking.reason}{walking.duration ? ` Â· ${walking.duration} min walk` : ''}
       </Text>
       <Pressable onPress={() => {
         if (venue) void Linking.openURL(googleDirectionsUrl(venue, 'walking'))
           .catch(() => Alert.alert('Google Maps unavailable', 'Please check your maps app or browser.'));
       }} accessibilityRole="button" style={styles.aiTransitAction}>
-        <Text style={[styles.aiTransitActionText, { color: colors.goldDeep }]}>Walk in Google Maps →</Text>
+        <Text style={[styles.aiTransitActionText, { color: colors.goldDeep }]}>Walk in Google Maps â</Text>
       </Pressable>
     </View>;
   }
@@ -2160,18 +2175,18 @@ function AiTransitCard({
     clock - new Date(step.liveUpdatedAt).getTime() >= 0 &&
     clock - new Date(step.liveUpdatedAt).getTime() < 60000);
   const vehicle = transitSteps[0]?.vehicleType?.toUpperCase() ?? '';
-  const symbol = vehicle === 'BUS' ? '🚌' : ['FERRY', 'BOAT'].includes(vehicle) ? '⛴' : '🚆';
+  const symbol = vehicle === 'BUS' ? 'ð' : ['FERRY', 'BOAT'].includes(vehicle) ? 'â´' : 'ð';
   const vehicleLabel = vehicle === 'BUS' ? 'Bus' : ['FERRY', 'BOAT'].includes(vehicle) ? 'Boat' : 'Train';
   const hasRoute = Boolean(context.venueId && context.venueName && context.destinationStation);
   const walkLabel = context.venueWalk
-    ? `${context.venueWalk.durationMinutes} min walk · ${
+    ? `${context.venueWalk.durationMinutes} min walk Â· ${
         context.venueWalk.distanceMeters < 1000
           ? `${Math.round(context.venueWalk.distanceMeters)} m`
           : `${(context.venueWalk.distanceMeters / 1000).toFixed(1)} km`
       }`
     : null;
   const routeLabel = context.transitRoute
-    ? `${symbol} ${vehicleLabel} · ${context.transitRoute.durationMinutes} min · ${live ? 'live TfL' : 'Google route estimate'}`
+    ? `${symbol} ${vehicleLabel} Â· ${context.transitRoute.durationMinutes} min Â· ${live ? 'live TfL' : 'Google route estimate'}`
     : null;
 
   return (
@@ -2198,7 +2213,7 @@ function AiTransitCard({
         <>
           <View style={[styles.aiTransitLine, { backgroundColor: colors.goldLine }]} />
           <View style={styles.aiTransitPoint}>
-            <Text style={styles.aiTransitEmoji}>🎯</Text>
+            <Text style={styles.aiTransitEmoji}>ð¯</Text>
             <View style={styles.aiTransitPointCopy}>
               <Text style={[styles.aiTransitLabel, { color: colors.mutedForeground }]}>
                 ALIGHTING STOP NEAR THE VENUE
@@ -2321,21 +2336,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
-  aiEventSources: { gap: 7, marginTop: 10, maxWidth: '92%' },
-  aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 0.9, marginBottom: 1 },
+  aiEventSources: { gap: 8, marginTop: 10, width: '88%', maxWidth: 380 },
+  aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.1, marginBottom: 2 },
   aiEventSourceLink: {
     alignItems: 'center',
-    borderRadius: 13,
+    alignSelf: 'stretch',
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 10,
-    minHeight: 46,
+    gap: 11,
+    minHeight: 64,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 11,
+    width: '100%',
   },
+  aiEventSourceIcon: { alignItems: 'center', borderRadius: 12, height: 36, justifyContent: 'center', width: 36 },
   aiEventSourceCopy: { flex: 1, minWidth: 0 },
-  aiEventSourceTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
-  aiEventSourceDomain: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 2 },
+  aiEventSourceTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 13, lineHeight: 17 },
+  aiEventSourceDomain: { fontFamily: 'Inter_500Medium', fontSize: 10, letterSpacing: 0.2, marginTop: 4 },
+  aiEventSourceArrow: { alignItems: 'center', borderRadius: 10, height: 30, justifyContent: 'center', width: 30 },
   weatherCredit: {
     alignItems: 'center',
     alignSelf: 'flex-start',
