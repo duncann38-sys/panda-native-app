@@ -19,7 +19,10 @@ type LiveVenuesContextValue = {
   listedVenues: Venue[] | null;
   setListedVenues: React.Dispatch<React.SetStateAction<Venue[] | null>>;
   locationStatus: 'loading' | UserLocationSnapshot['status'];
-  refreshLocation: (requestPermission?: boolean) => Promise<UserLocationSnapshot>;
+  refreshLocation: (
+    requestPermission?: boolean,
+    options?: { forceFresh?: boolean },
+  ) => Promise<UserLocationSnapshot>;
   setLiveArea: React.Dispatch<React.SetStateAction<string>>;
   setLiveVenues: React.Dispatch<React.SetStateAction<Venue[]>>;
 };
@@ -51,7 +54,11 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
   const [listedVenues, setListedVenues] = useState<Venue[] | null>(null);
   const [locationStatus, setLocationStatus] = useState<LiveVenuesContextValue['locationStatus']>('loading');
 
-  const refreshLocation = useCallback(async (requestPermission = true): Promise<UserLocationSnapshot> => {
+  const refreshLocation = useCallback(async (
+    requestPermission = true,
+    options: { forceFresh?: boolean } = {},
+  ): Promise<UserLocationSnapshot> => {
+    const forceFresh = options.forceFresh === true;
     setLocationStatus('loading');
 
     try {
@@ -64,7 +71,7 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
           geolocation.getCurrentPosition(
             ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
             reject,
-            { enableHighAccuracy: true, maximumAge: 30_000, timeout: 12_000 },
+            { enableHighAccuracy: true, maximumAge: forceFresh ? 0 : 30_000, timeout: 12_000 },
           );
         });
       } else {
@@ -84,13 +91,15 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
           // discovery indefinitely when Android's location provider stalls.
           position = await getCurrentPositionWithTimeout();
         } catch {
-          try {
-            position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
-          } catch {
-            position = null;
+          if (!forceFresh) {
+            try {
+              position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+            } catch {
+              position = null;
+            }
           }
         }
-        if (!position) {
+        if (!position && !forceFresh) {
           try {
             position = await Location.getLastKnownPositionAsync();
           } catch {

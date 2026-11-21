@@ -1,9 +1,8 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import * as SecureStore from 'expo-secure-store';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as Location from 'expo-location';
 import { Alert, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import React, { useEffect, useRef, useState } from 'react';
@@ -13,29 +12,21 @@ import { useAuth, type PandaAuthProvider } from '@/context/auth';
 import { useBookingReminders } from '@/context/booking-reminders';
 import { useSavedVenues } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
+import { useLiveVenues } from '@/context/live-venues';
 import {
   DEFAULT_PROFILE_PREFERENCES,
-  createProfilePreferenceStorage,
   formatDateOfBirthInput,
   parseProfilePreferences,
   profilePreferencesStorageKey,
   validateDateOfBirth,
   type ProfilePreferences,
 } from '@/utils/profile-preferences';
+import { profilePreferenceStore } from '@/utils/profile-preferences-store';
 import { persistProfileAvatar, removeProfileAvatar } from '@/utils/profile-avatar';
 
 const PROFILE_BACKGROUND = '#DDF0DE';
 type FeatherName = keyof typeof Feather.glyphMap;
 type ProfileIconTone = { background: string; foreground: string };
-
-const profileStore = createProfilePreferenceStorage(
-  Platform.OS === 'web' ? AsyncStorage : {
-    getItem: SecureStore.getItemAsync,
-    setItem: SecureStore.setItemAsync,
-  },
-  AsyncStorage,
-  Platform.OS !== 'web',
-);
 
 const PROFILE_ICON_TONES: Partial<Record<FeatherName, ProfileIconTone>> = {
   bookmark: { background: '#F9E5B8', foreground: '#7B5416' },
@@ -53,14 +44,18 @@ export default function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const profileTopPadding = Platform.OS === 'web' ? 21 : insets.top + 8;
   const { savedIds } = useSavedVenues();
+  const { coordinates, liveArea } = useLiveVenues();
   const { account, signingIn, error: authError, signIn, signOut, clearError } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [authSheetOpen, setAuthSheetOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
+  const [homeAddressOpen, setHomeAddressOpen] = useState(false);
   const [profilePreferences, setProfilePreferences] = useState<ProfilePreferences>(DEFAULT_PROFILE_PREFERENCES);
   const [profilePreferencesReady, setProfilePreferencesReady] = useState(false);
   const [profileSaveError, setProfileSaveError] = useState<string | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [homeAddressError, setHomeAddressError] = useState<string | null>(null);
+  const [savingHomeAddress, setSavingHomeAddress] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
   const ownerKey = useRef(preferencesKey);
   ownerKey.current = preferencesKey;
@@ -69,7 +64,7 @@ export default function ProfileScreen() {
     let active = true;
     setProfilePreferences({ ...DEFAULT_PROFILE_PREFERENCES });
     setProfilePreferencesReady(false);
-    profileStore.read(account?.uid)
+    profilePreferenceStore.read(account?.uid)
       .then((stored) => {
         if (active) setProfilePreferences(parseProfilePreferences(stored));
       })
@@ -123,7 +118,7 @@ export default function ProfileScreen() {
     setProfileSaveError(null);
     setSavingProfile(true);
     try {
-      const next = await profileStore.update(account?.uid, {
+      const next = await profilePreferenceStore.update(account?.uid, {
         displayName: displayName.trim().slice(0, 60),
         dateOfBirth: dateOfBirth.trim(),
       });
@@ -139,12 +134,52 @@ export default function ProfileScreen() {
 
   const handleNotificationsChange = async (enabled: boolean) => {
     try {
-      const next = await profileStore.update(account?.uid, { notificationsEnabled: enabled });
+      const next = await profilePreferenceStore.update(account?.uid, { notificationsEnabled: enabled });
       if (ownerKey.current !== preferencesKey) return;
       setProfilePreferences(next);
       await bookingReminders.notificationsChanged(enabled);
     } catch {
       Alert.alert('Setting not saved', 'Your notification preference could not be saved on this device.');
+    }
+  };
+
+  const handleHomeAddressSave = async (address: string) => {
+    const cleanAddress = address.trim().slice(0, 240);
+    setHomeAddressError(null);
+    setSavingHomeAddress(true);
+    try {
+      if (!cleanAddress) {
+        const next = await profilePreferenceStore.update(account?.uid, {
+          homeAddress: '',
+          homeLatitude: null,
+          homeLongitude: null,
+        });
+        if (ownerKey.current === preferencesKey) setProfilePreferences(next);
+        setHomeAddressOpen(false);
+        return;
+      }
+      const locations = await Location.geocodeAsync(cleanAddress);
+      const result = locations.find((item) =>
+        Number.isFinite(item.latitude)
+        && Number.isFinite(item.longitude)
+        && Math.abs(item.latitude) <= 90
+        && Math.abs(item.longitude) <= 180,
+      );
+      if (!result) {
+        setHomeAddressError('We couldn’t find that address. Add a town or postcode and try again.');
+        return;
+      }
+      const next = await profilePreferenceStore.update(account?.uid, {
+        homeAddress: cleanAddress,
+        homeLatitude: result.latitude,
+        homeLongitude: result.longitude,
+      });
+      if (ownerKey.current === preferencesKey) setProfilePreferences(next);
+      setHomeAddressOpen(false);
+    } catch {
+      setHomeAddressError('Your home destination could not be saved. Check the address and try again.');
+    } finally {
+      setSavingHomeAddress(false);
     }
   };
 
@@ -173,7 +208,7 @@ export default function ProfileScreen() {
       copiedUri = Platform.OS === 'web'
         ? (asset.base64 ? `data:${asset.mimeType || 'image/jpeg'};base64,${asset.base64}` : avatarUri)
         : await persistProfileAvatar(avatarUri, FileSystem);
-      const next = await profileStore.update(account?.uid, { avatarUri: copiedUri });
+      const next = await profilePreferenceStore.update(account?.uid, { avatarUri: copiedUri });
       committed = true;
       if (Platform.OS !== 'web') await removeProfileAvatar(profilePreferences.avatarUri, FileSystem).catch(() => {});
       if (ownerKey.current !== preferencesKey) return;
@@ -228,10 +263,16 @@ export default function ProfileScreen() {
             <View style={[styles.locationSignalDot, { backgroundColor: colors.green600 }]} />
           </View>
           <View style={styles.locationCopy}>
-            <Text style={[styles.locationTitle, { color: colors.green800 }]}>Your location · London</Text>
-            <Text style={[styles.locationSubtitle, { color: colors.green700 }]}>Showing the closest spots around you</Text>
+            <Text style={[styles.locationTitle, { color: colors.green800 }]}>
+              Your location · {liveArea || (coordinates ? 'Current area' : 'Unavailable')}
+            </Text>
+            <Text style={[styles.locationSubtitle, { color: colors.green700 }]}>
+              {coordinates ? 'Used for nearby places and local Panda answers' : 'Allow location for nearby places and local answers'}
+            </Text>
           </View>
-          <Text style={[styles.locationStatus, { color: colors.green700 }]}>Location on</Text>
+          <Text style={[styles.locationStatus, { color: coordinates ? colors.green700 : colors.mutedForeground }]}>
+            {coordinates ? 'Location on' : 'Location off'}
+          </Text>
         </View>
         <Text style={[styles.sectionLabel, { color: colors.green700 }]}>YOUR PANDA</Text>
         <View style={[styles.groupCard, { backgroundColor: colors.card }]}>
@@ -241,6 +282,16 @@ export default function ProfileScreen() {
             subtitle={savedIds.length ? `${savedIds.length} place${savedIds.length === 1 ? '' : 's'} saved` : 'Your collection of favourites'}
             colors={colors}
             onPress={() => router.push('/saved')}
+          />
+          <ProfileMenuRow
+            icon="home"
+            title="Home for Uber"
+            subtitle={profilePreferences.homeAddress ? 'Saved privately on this device' : 'Add your home for one-tap ride estimates'}
+            colors={colors}
+            onPress={() => {
+              setHomeAddressError(null);
+              setHomeAddressOpen(true);
+            }}
           />
           <ProfileMenuRow
             icon="calendar"
@@ -389,6 +440,14 @@ export default function ProfileScreen() {
         onClose={() => setProfileEditOpen(false)}
         onSave={handleProfileSave}
       />
+      <HomeAddressSheet
+        visible={homeAddressOpen}
+        address={profilePreferences.homeAddress}
+        error={homeAddressError}
+        saving={savingHomeAddress}
+        onClose={() => setHomeAddressOpen(false)}
+        onSave={handleHomeAddressSave}
+      />
       <AuthSheet
         visible={authSheetOpen}
         signingIn={signingIn}
@@ -400,6 +459,98 @@ export default function ProfileScreen() {
         onSignIn={handleSignIn}
       />
     </View>
+  );
+}
+
+function HomeAddressSheet({
+  visible,
+  address,
+  error,
+  saving,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  address: string;
+  error: string | null;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (address: string) => Promise<void>;
+}) {
+  const colors = useColors();
+  const insets = useSafeAreaInsets();
+  const [draft, setDraft] = useState(address);
+
+  useEffect(() => {
+    if (visible) setDraft(address);
+  }, [address, visible]);
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalRoot}>
+        <Pressable accessibilityLabel="Close home address" accessibilityRole="button" onPress={onClose} style={styles.modalBackdrop} />
+        <View style={[styles.settingsSheet, { backgroundColor: colors.background, paddingBottom: Math.max(insets.bottom, 18) }]}>
+          <KeyboardAwareScrollViewCompat contentContainerStyle={styles.settingsContent}>
+            <View style={styles.settingsHeader}>
+              <View>
+                <Text style={[styles.settingsTitle, { color: colors.foreground }]}>Uber Home</Text>
+                <Text style={[styles.settingsSubtitle, { color: colors.mutedForeground }]}>Set your private destination once</Text>
+              </View>
+              <Pressable
+                accessibilityLabel="Close home address"
+                accessibilityRole="button"
+                onPress={onClose}
+                style={[styles.closeButton, { backgroundColor: colors.card }]}
+              >
+                <Feather name="x" size={18} color={colors.foreground} />
+              </Pressable>
+            </View>
+            <Text style={[styles.fieldLabel, { color: colors.foreground }]}>Home address</Text>
+            <TextInput
+              accessibilityLabel="Home address"
+              autoCapitalize="words"
+              autoComplete="street-address"
+              maxLength={240}
+              multiline
+              onChangeText={setDraft}
+              placeholder="Street, town or postcode"
+              placeholderTextColor={colors.mutedForeground}
+              style={[styles.homeAddressInput, { backgroundColor: colors.card, borderColor: colors.border, color: colors.foreground }]}
+              value={draft}
+            />
+            <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
+              Encrypted on this device. Panda won’t send this address to its chat service; destination coordinates go to Uber only if you tap Continue in Uber.
+            </Text>
+            {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Save home address"
+              disabled={saving}
+              onPress={() => { void onSave(draft); }}
+              style={({ pressed }) => [
+                styles.saveProfileButton,
+                { backgroundColor: colors.green800 },
+                (pressed || saving) && styles.pressed,
+                saving && { opacity: 0.65 },
+              ]}
+            >
+              <Text style={styles.authButtonText}>{saving ? 'Finding and saving…' : 'Save home address'}</Text>
+            </Pressable>
+            {address ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Remove saved home address"
+                disabled={saving}
+                onPress={() => { void onSave(''); }}
+                style={({ pressed }) => [styles.removeHomeButton, pressed && styles.pressed]}
+              >
+                <Text style={[styles.removeHomeText, { color: colors.destructive }]}>Remove saved home</Text>
+              </Pressable>
+            ) : null}
+          </KeyboardAwareScrollViewCompat>
+        </View>
+      </View>
+    </Modal>
   );
 }
 
@@ -824,5 +975,8 @@ const styles = StyleSheet.create({
   editSheetContent: { padding: 22, paddingBottom: 28 },
   fieldLabel: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginBottom: 8, marginTop: 13 },
   profileInput: { borderRadius: 14, borderWidth: 1, fontFamily: 'Inter_500Medium', fontSize: 15, minHeight: 50, paddingHorizontal: 14 },
+  homeAddressInput: { borderRadius: 14, borderWidth: 1, fontFamily: 'Inter_500Medium', fontSize: 15, minHeight: 84, paddingHorizontal: 14, paddingVertical: 13, textAlignVertical: 'top' },
+  removeHomeButton: { alignItems: 'center', justifyContent: 'center', minHeight: 42, marginTop: 5 },
+  removeHomeText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   saveProfileButton: { alignItems: 'center', borderRadius: 14, justifyContent: 'center', marginTop: 18, minHeight: 52, paddingHorizontal: 16 },
 });
