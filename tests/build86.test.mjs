@@ -80,6 +80,9 @@ test('Panda keeps its hospitality-first caring voice and renders web-grounded sh
   assert.match(prompt, /emojis when they add warmth, emotion, laughter or celebration/);
   assert.match(screen, /LIVE SOURCES/);
   assert.match(screen, /Linking\.openURL\(source\.url\)/);
+  assert.match(screen, /aiEventSources: \{ gap: 8, marginTop: 10, width: '88%', maxWidth: 380 \}/);
+  assert.match(screen, /numberOfLines=\{2\} style=\{\[styles\.aiEventSourceTitle/);
+  assert.match(screen, /aiEventSourceArrow/);
 });
 
 test('show source links allow up to six verified pages', async () => {

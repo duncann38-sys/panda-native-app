@@ -3,6 +3,9 @@ export type ProfilePreferences = {
   dateOfBirth: string;
   notificationsEnabled: boolean;
   avatarUri: string;
+  homeAddress: string;
+  homeLatitude: number | null;
+  homeLongitude: number | null;
 };
 
 export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
@@ -10,6 +13,9 @@ export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
   dateOfBirth: '',
   notificationsEnabled: true,
   avatarUri: '',
+  homeAddress: '',
+  homeLatitude: null,
+  homeLongitude: null,
 };
 
 export function profilePreferencesStorageKey(userId?: string | null): string {
@@ -102,6 +108,17 @@ export function parseProfilePreferences(value: string | null): ProfilePreference
           ? parsed.notificationsEnabled
           : DEFAULT_PROFILE_PREFERENCES.notificationsEnabled,
       avatarUri: typeof parsed.avatarUri === 'string' ? parsed.avatarUri : '',
+      homeAddress: typeof parsed.homeAddress === 'string' ? parsed.homeAddress.trim().slice(0, 240) : '',
+      homeLatitude: typeof parsed.homeLatitude === 'number'
+        && Number.isFinite(parsed.homeLatitude)
+        && Math.abs(parsed.homeLatitude) <= 90
+        ? parsed.homeLatitude
+        : null,
+      homeLongitude: typeof parsed.homeLongitude === 'number'
+        && Number.isFinite(parsed.homeLongitude)
+        && Math.abs(parsed.homeLongitude) <= 180
+        ? parsed.homeLongitude
+        : null,
     };
   } catch {
     return { ...DEFAULT_PROFILE_PREFERENCES };

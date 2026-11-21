@@ -2,7 +2,7 @@ import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from '
 import { Feather } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { cancelAnimation, useAnimatedStyle, useSharedValue, withRepeat, withSpring, withTiming } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppState,
@@ -34,7 +34,7 @@ import { conciergeChatPolish } from '@/utils/concierge-chat-polish';
 import { PandaIcon } from '@/components/PandaIcon';
 import { ReserveButton } from '@/components/ReserveButton';
 import { getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
-import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
+import { PANDA_DISCOVERY_API, PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues as pandaVenues, type Venue } from '@/data/venues';
 import { classifyGooglePlace } from '@/data/venue-categories';
@@ -58,6 +58,11 @@ import {
 } from '@/utils/ai-openings';
 import { safeAiSources, type AiSource } from '@/utils/ai-source-links';
 import { isWeatherIntent, requiresCurrentLocation } from '@/utils/location-intent';
+import { liveDiscoveryNearbyTypes, liveDiscoverySearchQuery } from '@/utils/live-discovery-search';
+import { distanceBetween } from '@/utils/venue-actions';
+import { useAuth } from '@/context/auth';
+import { parseProfilePreferences } from '@/utils/profile-preferences';
+import { profilePreferenceStore } from '@/utils/profile-preferences-store';
 
 type AiVenue = {
   id?: string;
@@ -106,6 +111,8 @@ type Message = {
   text: string;
   venues?: AiVenue[];
   sources?: AiSource[];
+  sourceLabel?: string;
+  weatherAttribution?: { label: string; url: string };
   newSelection?: boolean;
   rideRequest?: boolean;
   transit?: AiTransitContext;
@@ -233,6 +240,19 @@ function localTimeZone() {
   }
 }
 
+function removeWeatherProviderFromReply(text: string) {
+  return String(text || '')
+    .replace(/\baccording to MET Norway\b/gi, 'the forecast')
+    .replace(/\b(?:the\s+)?(?:latest\s+)?MET Norway(?:’s|'s)?\s+(?:(?:available|model)\s+)?forecast/gi, 'the forecast')
+    .replace(/\bforecast\s+(?:from|by)\s+MET Norway\b/gi, 'forecast')
+    .replace(/\bweather data (?:from|provided by) MET Norway(?:,?\s*(?:licensed )?under CC BY 4\.0)?\.?/gi, '')
+    .replace(/\bMET Norway\b/gi, '')
+    .replace(/\bCC BY 4\.0\b\.?/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/\s+([,.;:!?])/g, '$1')
+    .trim();
+}
+
 const suggestions = ['Nearest station & directions', 'Open right now', 'Dinner tonight', 'Nearby bars', 'Cheap eats', 'Pint'];
 const nearbyShortcutPrompts: Record<string, string> = {
   'Open right now': 'Restaurants open right now near me',
@@ -241,9 +261,20 @@ const nearbyShortcutPrompts: Record<string, string> = {
   'Dinner tonight': 'Dinner tonight near me',
   Pint: 'Pubs near me',
 };
+const discoveryShortcutCategories: Record<string, string> = {
+  'Bars near me': 'Bar',
+  'Pubs near me': 'Pubs',
+};
 function isNearbyShortcut(text: string) {
   return Object.values(nearbyShortcutPrompts).includes(text)
     || Object.prototype.hasOwnProperty.call(nearbyShortcutPrompts, text);
+}
+function isUberRequest(text: string) {
+  return /\b(?:get|call|book|order|hail|request|send|need|want|like|arrange|take)\b[^.!?]{0,28}\b(?:uber|taxi|cab|ride(?:\s+share)?)\b/i.test(text);
+}
+function isUberHomeRequest(text: string) {
+  return /\b(?:uber|taxi|cab|ride(?:\s+share)?)\b[^.!?]{0,20}\b(?:to\s+)?(?:my\s+)?home\b/i.test(text)
+    || /\bhome\b[^.!?]{0,24}\b(?:uber|taxi|cab|ride(?:\s+share)?)\b/i.test(text);
 }
 
 async function fetchWithTimeout(
@@ -478,6 +509,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { coordinates, refreshLocation, liveVenues } = useLiveVenues();
+  const { account } = useAuth();
   const { prompt: promptParam } = useLocalSearchParams<{ prompt?: string | string[] }>();
   const initialPrompt = Array.isArray(promptParam) ? promptParam[0]?.trim() ?? '' : promptParam?.trim() ?? '';
   const [messages, setMessages] = useState<Message[]>([
@@ -490,6 +522,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     { label: 'Make me smile', prompt: 'Make me smile', planner: false },
     { label: 'Talk it through', prompt: 'Can we talk something through?', planner: false },
     { label: `Plan my ${getPandaTimeLabel(timeMode)}`, planner: true },
+    { label: 'Uber home', prompt: 'Uber home', planner: false },
     { label: 'New restaurants', prompt: 'New restaurants near me', planner: false },
     ...suggestions.map((suggestion) => ({ label: suggestion, planner: false })),
   ];
@@ -519,10 +552,88 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     };
   }, []);
 
+  const sendUberHome = async (text: string) => {
+    if (primaryPendingRef.current || booking.isBusy) return;
+    const requestId = ++requestSequenceRef.current;
+    currentRequestRef.current = requestId;
+    const generation = chatGenerationRef.current;
+    primaryPendingRef.current = true;
+    setDraft('');
+    inputRef.current?.blur();
+    setMessages((current) => [
+      ...current,
+      { role: 'user', text },
+      { role: 'model', text: '', requestId },
+    ]);
+    setSending(true);
+    const updateHomeReply = (reply: string, venue?: AiVenue) => {
+      if (chatGenerationRef.current !== generation) return;
+      setMessages((current) => current.map((message) => message.requestId === requestId
+        ? { ...message, text: reply, venues: venue ? [venue] : [], rideRequest: Boolean(venue) }
+        : message));
+    };
+    try {
+      const preferences = parseProfilePreferences(await profilePreferenceStore.read(account?.uid));
+      const homeLatitude = preferences.homeLatitude;
+      const homeLongitude = preferences.homeLongitude;
+      if (
+        !preferences.homeAddress
+        || typeof homeLatitude !== 'number'
+        || !Number.isFinite(homeLatitude)
+        || typeof homeLongitude !== 'number'
+        || !Number.isFinite(homeLongitude)
+      ) {
+        updateHomeReply('Add a home address in Profile → Home for Uber first. Panda keeps it encrypted on this device and won’t send it to chat.');
+        return;
+      }
+      const locationResult = await withTimeout(
+        refreshLocation(true, { forceFresh: true }),
+        REQUIRED_LOCATION_TIMEOUT_MS,
+        null,
+      );
+      if (currentRequestRef.current !== requestId) return;
+      const pickup = locationResult?.coordinates;
+      if (!pickup) {
+        updateHomeReply(locationResult?.status === 'permission-denied'
+          ? 'Allow Panda to use your location so I can estimate the ride from your current pickup point.'
+          : 'I couldn’t get a fresh pickup location. Turn on device location services and try Uber Home again.');
+        return;
+      }
+      const distanceMeters = distanceBetween(pickup, {
+        latitude: homeLatitude,
+        longitude: homeLongitude,
+      });
+      if (!distanceMeters || distanceMeters <= 0 || distanceMeters > 250_000) {
+        updateHomeReply('I can’t make a reliable local Uber estimate for that distance. Check your saved Home address in Profile.');
+        return;
+      }
+      updateHomeReply('Your Home destination is ready 🚗 Review Panda’s estimate, then check the live fare in Uber.', {
+        id: 'panda-saved-home',
+        name: 'Home',
+        address: 'Saved privately on this device',
+        fullAddress: 'Saved privately on this device',
+        latitude: homeLatitude,
+        longitude: homeLongitude,
+        distanceMeters,
+      });
+    } catch {
+      updateHomeReply('I couldn’t load your saved Home destination. Check Profile and try again.');
+    } finally {
+      if (currentRequestRef.current === requestId && chatGenerationRef.current === generation) {
+        primaryPendingRef.current = false;
+        setSending(false);
+      }
+    }
+  };
+
   const sendMessage = async (text = draft) => {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
     if (booking.isBusy) return;
+    if (isUberHomeRequest(trimmed)) {
+      await sendUberHome(trimmed);
+      return;
+    }
     if (booking.canHandle(trimmed)) {
       setDraft('');
       inputRef.current?.blur();
@@ -538,6 +649,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
     const isNewOpeningSearch = isNewOpeningPrompt(trimmed);
     const isTransit = isTransitQuestion(trimmed);
+    const rideIntent = isUberRequest(trimmed);
     const sessionVenueContext = buildSessionVenueContext(messages, activeAiVenueRef.current);
     const sessionVenueResolution = resolveSessionVenueReference(trimmed, sessionVenueContext);
     const hasExplicitVenueDestination = asksForSpecificVenueDestination(trimmed);
@@ -549,6 +661,22 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       : isTransit && !hasExplicitVenueDestination && activeSessionCard
         ? findOriginalSessionVenue(messages, activeSessionCard, activeAiVenueRef.current)
         : null;
+    if (rideIntent && sessionVenueResolution.isReference && sessionVenueResolution.ambiguous) {
+      const choices = sessionVenueContext.recentVenues.map((venue) =>
+        findOriginalSessionVenue(messages, venue, activeAiVenueRef.current),
+      );
+      setMessages([
+        ...messages,
+        { role: 'user', text: trimmed },
+        {
+          role: 'model',
+          text: 'I can do that 🚗 There are a few places in our chat, so choose the right venue card and tap its Uber estimate—I won’t guess.',
+          venues: choices,
+        },
+      ]);
+      setDraft('');
+      return;
+    }
     if (isTransit && sessionVenueResolution.isReference && sessionVenueResolution.ambiguous) {
       setMessages([
         ...messages,
@@ -602,10 +730,14 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       isGeneralLifeConversation,
       isTransitQuestion,
     ) || isNewOpeningSearch;
+    const shortcutMatch = Object.entries(nearbyShortcutPrompts).find(([label, prompt]) =>
+      label === trimmed || prompt === trimmed,
+    );
+    const discoveryCategory = discoveryShortcutCategories[shortcutMatch?.[1] ?? trimmed];
     setMessages([
       ...conversation,
       ...(needsCurrentLocation
-        ? [{ role: 'model' as const, text: 'Getting your current location…', requestId }]
+        ? [{ role: 'model' as const, text: '', requestId }]
         : []),
     ]);
     setDraft('');
@@ -621,10 +753,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
 
     try {
       let requestCoordinates = coordinates;
-      // Pure chat never waits on GPS; only location-dependent questions refresh.
-      if (!requestCoordinates && needsCurrentLocation) {
+      // Refresh the foreground fix for every local/ride request. Discovery has
+      // the phone's current fix; Panda AI must not silently reuse an old one.
+      if (needsCurrentLocation) {
         const locationResult = await withTimeout(
-          refreshLocation(true),
+          refreshLocation(true, { forceFresh: true }),
           REQUIRED_LOCATION_TIMEOUT_MS,
           null,
         );
@@ -643,18 +776,63 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         }
       }
 
+      if (
+        rideIntent
+        && sessionVenueResolution.isReference
+        && referencedVenue
+        && requestCoordinates
+      ) {
+        const destinationLatitude = referencedVenue.latitude
+          ?? referencedVenue.location?.latitude
+          ?? referencedVenue.location?.lat
+          ?? referencedVenue.lat;
+        const destinationLongitude = referencedVenue.longitude
+          ?? referencedVenue.location?.longitude
+          ?? referencedVenue.location?.lng
+          ?? referencedVenue.lng;
+        const distanceMeters = distanceBetween(requestCoordinates, {
+          latitude: destinationLatitude,
+          longitude: destinationLongitude,
+        });
+        if (!distanceMeters || distanceMeters <= 0 || distanceMeters > 250_000) {
+          updateResult((message) => ({
+            ...message,
+            text: `I found ${referencedVenue.name ?? 'that place'} in our chat, but I can’t make a reliable local ride estimate for it. Tell me the venue name and city, and I’ll check it.`,
+            venues: [],
+          }));
+        } else {
+          updateResult((message) => ({
+            ...message,
+            text: `I’ve got ${referencedVenue.name ?? 'your destination'} 🚗 Review Panda’s estimate, then check the live fare in Uber. I haven’t requested a ride.`,
+            venues: [{ ...referencedVenue, distanceMeters }],
+            rideRequest: true,
+          }));
+        }
+        primaryPendingRef.current = false;
+        setSending(false);
+        return;
+      }
+
       if (isNewOpeningSearch) {
         if (!isCurrentRequest()) return;
       }
 
       const controller = new AbortController();
       primaryControllerRef.current = controller;
-      const response = await fetchWithTimeout(
-        PANDA_AI_URL,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({
+      const requestBody = discoveryCategory && requestCoordinates
+        ? {
+            venuesOnly: true,
+            discoveryMode: 'cover',
+            searchMode: 'nearby',
+            includedTypes: liveDiscoveryNearbyTypes(discoveryCategory),
+            query: liveDiscoverySearchQuery(discoveryCategory),
+            location: {
+              lat: requestCoordinates.latitude,
+              lng: requestCoordinates.longitude,
+            },
+            radius_meters: 6000,
+          }
+        : {
             contents: buildPandaAiContents(conversation),
             shownVenueIds: shownConciergeVenueIds(conversation),
             chatContext: { timeZone: localTimeZone() },
@@ -669,7 +847,13 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                   },
                 }
               : {}),
-          }),
+          };
+      const response = await fetchWithTimeout(
+        discoveryCategory ? `${PANDA_DISCOVERY_API}/api/panda-ai` : PANDA_AI_URL,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify(requestBody),
         },
         PANDA_AI_REQUEST_TIMEOUT_MS,
         controller.signal,
@@ -682,14 +866,69 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         customPubCrawl?: boolean;
         newOpeningsSearch?: boolean;
         rideRequest?: boolean;
+        aiMode?: string;
+        weather?: { attribution?: string; attributionUrl?: string; source?: string } | null;
       };
       if (!response.ok) throw new Error('Panda AI request failed');
       if (!isCurrentRequest()) return;
 
       const openingSearch = isNewOpeningSearch || data.newOpeningsSearch === true;
       const rideRequest = data.rideRequest === true;
+      const rideOptions = data.aiMode === 'ride-options' || data.aiMode === 'ride-choices';
       const sources = safeAiSources(data.sources);
-      const eligibleVenues = (data.venues ?? []).filter((venue) => {
+      const sourceLabel = data.aiMode === 'grounded-prices'
+        ? 'PRICE SOURCES'
+        : data.aiMode === 'grounded-events'
+          ? 'LIVE SHOW SOURCES'
+          : data.aiMode === 'grounded-news'
+            ? 'GOOD NEWS SOURCES'
+          : sources.length
+            ? 'LIVE SOURCES'
+            : undefined;
+      const weatherAttribution = typeof data.weather?.attribution === 'string'
+        ? {
+            label: 'Weather data from MET Norway · CC BY 4.0',
+            url: typeof data.weather.attributionUrl === 'string'
+              ? data.weather.attributionUrl
+              : 'https://creativecommons.org/licenses/by/4.0/',
+          }
+        : undefined;
+      const discoveryCoordinates = requestCoordinates;
+      const venueResults = discoveryCategory && discoveryCoordinates
+        ? (data.venues ?? []).map((venue) => {
+            const latitude = venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat;
+            const longitude = venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng;
+            const distanceMeters = Number.isFinite(venue.distanceMeters)
+              ? venue.distanceMeters
+              : distanceBetween(discoveryCoordinates, {
+                  latitude: Number.isFinite(latitude) ? latitude : null,
+                  longitude: Number.isFinite(longitude) ? longitude : null,
+                });
+            return {
+              ...venue,
+              latitude: Number.isFinite(latitude) ? latitude : undefined,
+              longitude: Number.isFinite(longitude) ? longitude : undefined,
+              distanceMeters: distanceMeters ?? undefined,
+            };
+          })
+        : (data.venues ?? []);
+      const eligibleVenues = venueResults.filter((venue) => {
+        if (discoveryCategory) {
+          return Boolean(venue.id)
+            && Number.isFinite(venue.distanceMeters)
+            && Number(venue.distanceMeters) >= 0
+            && Number(venue.distanceMeters) <= 6000;
+        }
+        if (rideOptions) {
+          const latitude = venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat;
+          const longitude = venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng;
+          return Boolean(venue.id)
+            && Number.isFinite(latitude)
+            && Number.isFinite(longitude)
+            && Number.isFinite(venue.distanceMeters)
+            && Number(venue.distanceMeters) > 0
+            && Number(venue.distanceMeters) <= 250_000;
+        }
         if (rideRequest) {
           const latitude = venue.latitude ?? venue.location?.latitude ?? venue.location?.lat ?? venue.lat;
           const longitude = venue.longitude ?? venue.location?.longitude ?? venue.location?.lng ?? venue.lng;
@@ -718,11 +957,16 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const initialVenues = rideRequest
         ? eligibleVenues.slice(0, 1)
         : isNearestStationOnly(trimmed) ? [] : openVenueSelection(eligibleVenues, onlyOpenNow);
-      const baseReply = onlyOpenNow && !initialVenues.length && !openingSearch
+      const rawBaseReply = onlyOpenNow && !initialVenues.length && !openingSearch
         ? NO_OPEN_VENUES_REPLY
-        : data.text?.trim() || (openingSearch && !initialVenues.length
+        : data.text?.trim() || (discoveryCategory
+          ? initialVenues.length
+            ? `I found ${initialVenues.length} nearby ${discoveryCategory === 'Pubs' ? 'pubs and beer gardens' : 'bars and cocktail bars'} from your current location. Tap a card for details ✨`
+            : `I couldn’t find verified ${discoveryCategory === 'Pubs' ? 'pubs' : 'bars'} within 6 km just now. Want me to widen the search?`
+          : openingSearch && !initialVenues.length
         ? 'I couldn’t verify any new-restaurant reports for this search. Try another area or check again later — I won’t substitute ordinary restaurant results.'
         : 'I’m not sure I caught that. Try asking for a place, mood, or time of day.');
+      const baseReply = data.weather ? removeWeatherProviderFromReply(rawBaseReply) : rawBaseReply;
       if (referencedVenue) {
         activeAiVenueRef.current = referencedVenue;
       } else if (initialVenues.length) {
@@ -741,13 +985,15 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           text: isTransit ? 'Checking live station and route information…' : baseReply,
           venues: initialVenues,
           sources,
+          sourceLabel,
+          weatherAttribution,
           newSelection: data.newOpeningsSearch === true,
           rideRequest,
         }));
       } else {
         setMessages((current) => [
           ...current,
-          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, newSelection: data.newOpeningsSearch === true, rideRequest },
+          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, sourceLabel, weatherAttribution, newSelection: data.newOpeningsSearch === true, rideRequest },
         ]);
       }
       primaryPendingRef.current = false;
@@ -1152,12 +1398,12 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           ) : null}
           </View>
         }
-        renderItem={({ item: { message, index } }) => (
+        renderItem={({ item: { message, index } }) => !message.text.trim() && !message.venues?.length && !message.transit ? null : (
           <View style={[styles.messageRow, polish.messageRow, message.role === 'user' && styles.userRow]}>
             {message.role === 'model' && messages[index - 1]?.role !== 'model' ? (
               <Text style={[polish.speaker, { color: isNight ? colors.goldLine : colors.green700 }]}>Panda</Text>
             ) : null}
-            {!(message.role === 'model' && message.rideRequest && message.venues?.length) ? (
+            {message.text.trim() && !(message.role === 'model' && message.rideRequest && message.venues?.length) ? (
               <View
                 style={[
                   styles.bubble, polish.bubble,
@@ -1221,7 +1467,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             {message.sources?.length ? (
               <View style={styles.aiEventSources}>
                 <Text style={[styles.aiEventSourcesLabel, { color: isNight ? colors.goldLine : colors.green700 }]}>
-                  LIVE SOURCES
+                  {message.sourceLabel ?? 'LIVE SOURCES'}
                 </Text>
                 {message.sources.slice(0, 6).map((source) => (
                   <Pressable
@@ -1239,18 +1485,51 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                       pressed && styles.iconPressed,
                     ]}
                   >
-                    <Feather name="external-link" size={15} color={isNight ? colors.goldLine : colors.green700} />
+                    <View
+                      style={[
+                        styles.aiEventSourceIcon,
+                        { backgroundColor: isNight ? colors.gold : colors.green600 },
+                      ]}
+                    >
+                      <Feather name="link-2" size={15} color={isNight ? colors.foreground : colors.card} />
+                    </View>
                     <View style={styles.aiEventSourceCopy}>
-                      <Text numberOfLines={1} style={[styles.aiEventSourceTitle, { color: colors.foreground }]}>
+                      <Text numberOfLines={2} style={[styles.aiEventSourceTitle, { color: colors.foreground }]}>
                         {source.title}
                       </Text>
                       <Text numberOfLines={1} style={[styles.aiEventSourceDomain, { color: colors.mutedForeground }]}>
                         {source.domain || 'Source'}
                       </Text>
                     </View>
+                    <View
+                      style={[
+                        styles.aiEventSourceArrow,
+                        { backgroundColor: isNight ? colors.background : colors.mint100 },
+                      ]}
+                    >
+                      <Feather name="arrow-up-right" size={14} color={isNight ? colors.goldLine : colors.green700} />
+                    </View>
                   </Pressable>
                 ))}
               </View>
+            ) : null}
+            {message.weatherAttribution ? (
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={message.weatherAttribution.label}
+                onPress={() => {
+                  void Linking.openURL(message.weatherAttribution!.url).catch(() =>
+                    Alert.alert('Weather data credit', 'Panda could not open the weather attribution details right now.'),
+                  );
+                }}
+                style={styles.weatherCredit}
+              >
+                <Feather name="cloud" size={11} color={colors.mutedForeground} />
+                <Text style={[styles.weatherCreditText, { color: colors.mutedForeground }]}>
+                  {message.weatherAttribution.label}
+                </Text>
+                <Feather name="external-link" size={10} color={colors.mutedForeground} />
+              </Pressable>
             ) : null}
             {message.transit ? (
               <AiTransitCard
@@ -1272,7 +1551,14 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         contentContainerStyle={[styles.suggestions, { paddingBottom: 7 }]}
         keyboardShouldPersistTaps="handled"
       >
-        {suggestionsWithPlanner.map((suggestion) => (
+        {suggestionsWithPlanner.map((suggestion) => suggestion.label === 'Uber home' ? (
+          <UberHomeSuggestion
+            key={suggestion.label}
+            colors={colors}
+            isNight={isNight}
+            onPress={() => void sendMessage('prompt' in suggestion ? suggestion.prompt : 'Uber home')}
+          />
+        ) : (
           <Pressable
             key={suggestion.label}
             accessibilityRole="button"
@@ -1383,6 +1669,49 @@ export default function PandaAiRoute() {
   return <PandaAiScreen />;
 }
 
+function UberHomeSuggestion({
+  colors,
+  isNight,
+  onPress,
+}: {
+  colors: ReturnType<typeof useColors>;
+  isNight: boolean;
+  onPress: () => void;
+}) {
+  const pulse = useSharedValue(1);
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: pulse.value }],
+  }));
+  useEffect(() => {
+    pulse.value = withRepeat(withTiming(1.018, { duration: 1700 }), -1, true);
+    return () => cancelAnimation(pulse);
+  }, [pulse]);
+
+  return (
+    <Animated.View style={animatedStyle}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Uber home"
+        accessibilityHint="Uses your private saved Home destination. Review the estimate before continuing in Uber."
+        onPress={onPress}
+        testID="panda-ai-uber-home-shortcut"
+        style={({ pressed }) => [styles.uberHomeSuggestion, pressed && styles.pressed]}
+      >
+        <LinearGradient
+          colors={isNight ? [colors.gold, '#F6D17B'] : ['#0B6A4D', '#064E3B']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 1 }}
+          style={styles.uberHomeGradient}
+        >
+          <Feather name="home" size={14} color={isNight ? colors.green950 : '#FFF8E5'} />
+          <Text style={[styles.uberHomeText, { color: isNight ? colors.green950 : '#FFF8E5' }]}>Uber home</Text>
+          <Feather name="arrow-up-right" size={13} color={isNight ? colors.green950 : colors.goldLine} />
+        </LinearGradient>
+      </Pressable>
+    </Animated.View>
+  );
+}
+
 function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType<typeof useColors> }) {
   const { width: windowWidth } = useWindowDimensions();
   const cardWidth = Math.max(260, Math.min(326, windowWidth - 40));
@@ -1403,6 +1732,8 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
     );
   };
   const destinationAddress = venue.fullAddress || venue.address || 'Verified destination';
+  const isSavedHome = venue.id === 'panda-saved-home';
+  const addressLabel = isSavedHome ? 'Saved on this device · Private' : destinationAddress;
 
   return (
     <LinearGradient
@@ -1414,46 +1745,49 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
     >
       <View style={styles.rideJourneyHeader}>
         <View style={[styles.rideJourneyIcon, { backgroundColor: colors.gold }]}>
-          <Feather name="navigation" size={18} color={colors.green950} />
+          <Feather name="navigation" size={16} color={colors.green950} />
         </View>
         <View style={styles.rideJourneyHeaderCopy}>
-          <Text style={[styles.rideJourneyEyebrow, { color: colors.goldLine }]}>PANDA RIDE PREVIEW</Text>
-          <Text style={[styles.rideJourneyHeaderText, { color: colors.primaryForeground }]}>Your destination is ready</Text>
+          <Text style={[styles.rideJourneyEyebrow, { color: colors.goldLine }]}>PANDA RIDE · ESTIMATE ONLY</Text>
+          <Text style={[styles.rideJourneyHeaderText, { color: colors.primaryForeground }]}>
+            {isSavedHome ? 'Your way home' : 'Ride preview'}
+          </Text>
         </View>
-        <Text style={styles.rideJourneyEmoji}>🚗</Text>
+        <View style={[styles.rideJourneyBadge, { backgroundColor: 'rgba(255,226,153,0.14)', borderColor: 'rgba(255,226,153,0.3)' }]}>
+          <Feather name="arrow-up-right" size={14} color={colors.goldLine} />
+        </View>
       </View>
 
-      <View style={[styles.rideJourneyRoute, { backgroundColor: 'rgba(255,255,255,0.08)', borderColor: 'rgba(255,255,255,0.14)' }]}>
+      <View style={[styles.rideJourneyRoute, { backgroundColor: 'rgba(255,255,255,0.075)', borderColor: 'rgba(255,255,255,0.13)' }]}>
         <View style={styles.rideJourneyRail}>
           <View style={[styles.rideJourneyPickupDot, { borderColor: colors.mint300 }]} />
           <View style={[styles.rideJourneyTrack, { backgroundColor: 'rgba(255,255,255,0.32)' }]} />
           <View style={[styles.rideJourneyDropDot, { backgroundColor: colors.gold }]} />
         </View>
         <View style={styles.rideJourneyStops}>
-          <Text style={[styles.rideJourneyStopLabel, { color: colors.mint300 }]}>PICKUP · YOUR LOCATION</Text>
-          <Text style={[styles.rideJourneyStopLabel, { color: colors.goldLine, marginTop: 16 }]}>DESTINATION</Text>
+          <Text style={[styles.rideJourneyStopLabel, { color: colors.mint300 }]}>FROM · YOUR CURRENT LOCATION</Text>
+          <Text style={[styles.rideJourneyStopLabel, { color: colors.goldLine, marginTop: 9 }]}>TO</Text>
           <Text style={[styles.rideJourneyDestination, { color: colors.primaryForeground }]}>{venue.name}</Text>
-          <Text numberOfLines={2} style={[styles.rideJourneyAddress, { color: colors.mint100 }]}>{destinationAddress}</Text>
+          <Text numberOfLines={1} style={[styles.rideJourneyAddress, { color: colors.mint100 }]}>{addressLabel}</Text>
         </View>
       </View>
 
       <View style={styles.rideJourneyStats}>
-        <View style={[styles.rideJourneyStat, { backgroundColor: 'rgba(255,255,255,0.1)' }]}>
-          <Text style={[styles.rideJourneyStatLabel, { color: colors.mint300 }]}>ESTIMATED DRIVE</Text>
-          <Text style={[styles.rideJourneyStatValue, { color: colors.primaryForeground }]}>~{rideEstimate.minutes} min</Text>
+        <View style={styles.rideJourneyStat}>
+          <Feather name="clock" size={13} color={colors.mint300} />
+          <View>
+            <Text style={[styles.rideJourneyStatLabel, { color: colors.mint300 }]}>DRIVE</Text>
+            <Text style={[styles.rideJourneyStatValue, { color: colors.primaryForeground }]}>~{rideEstimate.minutes} min</Text>
+          </View>
         </View>
-        <View style={[styles.rideJourneyStat, styles.rideJourneyFare, { backgroundColor: 'rgba(255,226,153,0.14)', borderColor: 'rgba(255,226,153,0.34)' }]}>
-          <Text style={[styles.rideJourneyStatLabel, { color: colors.goldLine }]}>PANDA ESTIMATE</Text>
-          <Text style={[styles.rideJourneyFareValue, { color: colors.goldLine }]}>£{rideEstimate.minFare}–£{rideEstimate.maxFare}</Text>
+        <View style={[styles.rideJourneyStat, styles.rideJourneyFare]}>
+          <Feather name="credit-card" size={13} color={colors.goldLine} />
+          <View>
+            <Text style={[styles.rideJourneyStatLabel, { color: colors.goldLine }]}>PANDA ESTIMATE</Text>
+            <Text style={[styles.rideJourneyFareValue, { color: colors.goldLine }]}>£{rideEstimate.minFare}–£{rideEstimate.maxFare}</Text>
+          </View>
         </View>
       </View>
-
-      {rideEstimate.peakTime ? (
-        <View style={[styles.rideJourneyPeakNote, { backgroundColor: 'rgba(255,226,153,0.12)' }]}>
-          <Feather name="zap" size={12} color={colors.goldLine} />
-          <Text style={[styles.rideJourneyPeakText, { color: colors.goldLine }]}>Includes extra £5 peak-time buffer</Text>
-        </View>
-      ) : null}
 
       <Pressable
         accessibilityRole="button"
@@ -1463,14 +1797,14 @@ function UberJourneyCard({ venue, colors }: { venue: AiVenue; colors: ReturnType
         testID="panda-ai-uber-journey-open"
         style={({ pressed }) => [
           styles.rideJourneyAction,
-          { backgroundColor: colors.gold, opacity: pressed ? 0.88 : 1 },
+          { backgroundColor: colors.gold, opacity: pressed ? 0.9 : 1 },
         ]}
       >
-        <Text style={[styles.rideJourneyActionText, { color: colors.green950 }]}>Continue in Uber</Text>
-        <Feather name="arrow-up-right" size={18} color={colors.green950} />
+        <Text style={[styles.rideJourneyActionText, { color: colors.green950 }]}>Open Uber · check live fare</Text>
+        <Feather name="arrow-up-right" size={17} color={colors.green950} />
       </Pressable>
       <Text style={[styles.rideJourneyDisclaimer, { color: colors.mint100 }]}>
-        Indicative only · Uber shows the live fare · Nothing is booked yet
+        Indicative only{rideEstimate.peakTime ? ' · includes £5 peak buffer' : ''} · No ride booked
       </Text>
     </LinearGradient>
   );
@@ -2002,21 +2336,34 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
-  aiEventSources: { gap: 7, marginTop: 10, maxWidth: '92%' },
-  aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 0.9, marginBottom: 1 },
+  aiEventSources: { gap: 8, marginTop: 10, width: '88%', maxWidth: 380 },
+  aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.1, marginBottom: 2 },
   aiEventSourceLink: {
     alignItems: 'center',
-    borderRadius: 13,
+    alignSelf: 'stretch',
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
-    gap: 10,
-    minHeight: 46,
+    gap: 11,
+    minHeight: 64,
     paddingHorizontal: 12,
-    paddingVertical: 9,
+    paddingVertical: 11,
+    width: '100%',
   },
+  aiEventSourceIcon: { alignItems: 'center', borderRadius: 12, height: 36, justifyContent: 'center', width: 36 },
   aiEventSourceCopy: { flex: 1, minWidth: 0 },
-  aiEventSourceTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
-  aiEventSourceDomain: { fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 2 },
+  aiEventSourceTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 13, lineHeight: 17 },
+  aiEventSourceDomain: { fontFamily: 'Inter_500Medium', fontSize: 10, letterSpacing: 0.2, marginTop: 4 },
+  aiEventSourceArrow: { alignItems: 'center', borderRadius: 10, height: 30, justifyContent: 'center', width: 30 },
+  weatherCredit: {
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    gap: 5,
+    marginTop: 6,
+    paddingVertical: 3,
+  },
+  weatherCreditText: { fontFamily: 'Inter_500Medium', fontSize: 8 },
   aiTransitCard: {
     borderRadius: 20,
     borderWidth: 1,
@@ -2326,128 +2673,134 @@ const styles = StyleSheet.create({
     lineHeight: 11,
   },
   rideJourneyCard: {
-    borderRadius: 26,
+    borderRadius: 23,
     borderWidth: 1,
-    elevation: 7,
+    elevation: 6,
     marginTop: 8,
     overflow: 'hidden',
-    padding: 16,
+    padding: 13,
     shadowColor: '#071E18',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.2,
-    shadowRadius: 15,
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.17,
+    shadowRadius: 12,
     width: 326,
   },
   rideJourneyHeader: {
     alignItems: 'center',
     flexDirection: 'row',
-    gap: 10,
+    gap: 9,
   },
   rideJourneyIcon: {
     alignItems: 'center',
-    borderRadius: 15,
-    height: 40,
+    borderRadius: 12,
+    height: 34,
     justifyContent: 'center',
-    width: 40,
+    width: 34,
   },
   rideJourneyHeaderCopy: {
     flex: 1,
-    gap: 3,
+    gap: 2,
   },
   rideJourneyEyebrow: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 8,
-    letterSpacing: 1.3,
+    fontSize: 7,
+    letterSpacing: 1.05,
   },
   rideJourneyHeaderText: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 14,
+    fontSize: 13,
   },
-  rideJourneyEmoji: {
-    fontSize: 23,
+  rideJourneyBadge: {
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    height: 27,
+    justifyContent: 'center',
+    width: 27,
   },
   rideJourneyRoute: {
-    borderRadius: 19,
+    borderRadius: 16,
     borderWidth: 1,
     flexDirection: 'row',
-    marginTop: 16,
-    padding: 13,
+    marginTop: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
   },
   rideJourneyRail: {
     alignItems: 'center',
     paddingTop: 2,
-    width: 17,
+    width: 14,
   },
   rideJourneyPickupDot: {
     borderRadius: 6,
     borderWidth: 2,
-    height: 11,
-    width: 11,
+    height: 9,
+    width: 9,
   },
   rideJourneyTrack: {
     borderRadius: 2,
-    height: 27,
-    marginVertical: 3,
+    height: 13,
+    marginVertical: 2,
     width: 2,
   },
   rideJourneyDropDot: {
     borderRadius: 6,
-    height: 11,
-    width: 11,
+    height: 9,
+    width: 9,
   },
   rideJourneyStops: {
     flex: 1,
-    paddingLeft: 8,
+    paddingLeft: 6,
   },
   rideJourneyStopLabel: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 8,
-    letterSpacing: 0.95,
+    fontSize: 7,
+    letterSpacing: 0.75,
   },
   rideJourneyDestination: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 17,
-    lineHeight: 22,
-    marginTop: 2,
+    fontSize: 15,
+    lineHeight: 19,
+    marginTop: 1,
   },
   rideJourneyAddress: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 10,
-    lineHeight: 14,
-    marginTop: 3,
+    fontSize: 9,
+    lineHeight: 12,
+    marginTop: 2,
   },
   rideJourneyStats: {
     flexDirection: 'row',
-    gap: 9,
-    marginTop: 12,
+    gap: 8,
+    marginTop: 9,
   },
   rideJourneyStat: {
-    borderColor: 'rgba(255,255,255,0.12)',
-    borderRadius: 16,
-    borderWidth: 1,
+    alignItems: 'center',
     flex: 1,
-    justifyContent: 'center',
-    minHeight: 65,
-    paddingHorizontal: 12,
-    paddingVertical: 9,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 39,
+    paddingVertical: 3,
   },
   rideJourneyFare: {
-    borderWidth: 1,
+    borderLeftColor: 'rgba(255,226,153,0.28)',
+    borderLeftWidth: 1,
+    paddingLeft: 10,
   },
   rideJourneyStatLabel: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 7,
+    fontSize: 6.5,
     letterSpacing: 0.9,
   },
   rideJourneyStatValue: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 17,
-    marginTop: 5,
+    fontSize: 13,
+    marginTop: 2,
   },
   rideJourneyFareValue: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 16,
-    marginTop: 5,
+    fontSize: 13,
+    marginTop: 2,
   },
   rideJourneyPeakNote: {
     alignItems: 'center',
@@ -2465,22 +2818,22 @@ const styles = StyleSheet.create({
   },
   rideJourneyAction: {
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 14,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    marginTop: 13,
-    minHeight: 49,
-    paddingHorizontal: 15,
+    marginTop: 9,
+    minHeight: 43,
+    paddingHorizontal: 13,
   },
   rideJourneyActionText: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 14,
+    fontSize: 12,
   },
   rideJourneyDisclaimer: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 8,
-    lineHeight: 12,
-    marginTop: 9,
+    fontSize: 7,
+    lineHeight: 10,
+    marginTop: 6,
     textAlign: 'center',
   },
   resultPrimaryAction: {
@@ -2524,6 +2877,26 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_600SemiBold',
     fontSize: 12,
   },
+  uberHomeSuggestion: {
+    borderColor: 'rgba(196,151,45,0.72)',
+    borderRadius: 999,
+    borderWidth: 1,
+    elevation: 3,
+    overflow: 'hidden',
+    shadowColor: '#064E3B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 5,
+  },
+  uberHomeGradient: {
+    alignItems: 'center',
+    borderRadius: 999,
+    flexDirection: 'row',
+    gap: 7,
+    minHeight: 39,
+    paddingHorizontal: 13,
+  },
+  uberHomeText: { fontFamily: 'Inter_700Bold', fontSize: 12, letterSpacing: 0.1 },
   composer: {
     alignItems: 'center',
     borderTopWidth: 1,
