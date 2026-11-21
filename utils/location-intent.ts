@@ -1,6 +1,7 @@
 type TextClassifier = (text: string) => boolean;
 
 const EXPLICIT_AREA = /\b(?:in|near|around|within)\s+(?!me\b|here\b|there\b|my\b|your\b|this\s+area\b|that\s+area\b|the\s+area\b|a\s+city\b|the\s+city\b|somewhere\b|anywhere\b|nearby\b)[\p{L}\p{M}][\p{L}\p{M}\d'’.-]*(?:[\s-]+[\p{L}\p{M}\d][\p{L}\p{M}\d'’.-]*){0,3}/iu;
+const EXPLICIT_WEATHER_AREA = /\b(?:in|on|near|around|within|for)\s+(?!me\b|here\b|there\b|my\b|your\b|this\b|next\b|today\b|tonight\b|tomorrow\b|the\s+(?:rest|week|weekend|month|year)\b|weekend\b|week\b|morning\b|afternoon\b|evening\b|monday\b|tuesday\b|wednesday\b|thursday\b|friday\b|saturday\b|sunday\b|january\b|february\b|march\b|april\b|may\b|june\b|july\b|august\b|september\b|october\b|november\b|december\b)[\p{L}\p{M}][\p{L}\p{M}\d'’.-]*(?:[\s-]+[\p{L}\p{M}\d][\p{L}\p{M}\d'’.-]*){0,3}/iu;
 const DEVICE_AREA = /\b(?:near\s+me|around\s+me|nearby|around\s+here|near\s+here|my\s+(?:area|home|work)|this\s+area|local(?:ly)?)\b/i;
 const WEATHER_INTENT = /\b(?:weather|forecast|rain(?:ing|y)?|snow(?:ing)?|sunny|sunshine|temperature|wind(?:y)?|humidity|warm enough|cold outside)\b/i;
 
@@ -19,7 +20,7 @@ export function requiresCurrentLocation(
 ): boolean {
   if (isTransitQuestion(text)) return true;
 
-  const hasExplicitArea = hasExplicitSearchArea(text);
+  const hasExplicitArea = hasExplicitSearchArea(text) || (isWeatherIntent(text) && EXPLICIT_WEATHER_AREA.test(String(text ?? '')));
   if (isWeatherIntent(text) && (!hasExplicitArea || DEVICE_AREA.test(text))) return true;
   if (hasExplicitArea && !DEVICE_AREA.test(text) && !/\bhow far\b/i.test(text)) return false;
   if (isGeneralLifeConversation(text)) return false;

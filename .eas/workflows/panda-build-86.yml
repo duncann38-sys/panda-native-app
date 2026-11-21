@@ -1,0 +1,12 @@
+name: Panda 86 - Weather and Grounded Live Shows
+on:
+  push:
+    branches:
+      - panda-build-86
+jobs:
+  build_android_preview:
+    name: Panda 86 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview
