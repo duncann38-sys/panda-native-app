@@ -1,0 +1,12 @@
+name: Panda 88 - Global Shows and Source Cards
+on:
+  push:
+    branches:
+      - panda-build-88
+jobs:
+  build_android_preview:
+    name: Panda 88 Android test APK
+    type: build
+    params:
+      platform: android
+      profile: preview
