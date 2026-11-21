@@ -30,10 +30,10 @@ test('local weather asks use device location but named destinations do not', asy
     assert.equal(requiresCurrentLocation(query, general, transit), true, query);
   }
   for (const query of [
-    'What is the weather in MalmÃ¶?',
+    'What is the weather in Malmö?',
     'Will it rain in Tokyo tomorrow?',
-    'Howâs the weather on Oslo next week?',
-    'What is the weather for MalmÃ¶ next week?',
+    'How’s the weather on Oslo next week?',
+    'What is the weather for Malmö next week?',
   ]) {
     assert.equal(requiresCurrentLocation(query, general, transit), false, query);
   }
@@ -56,7 +56,7 @@ test('event source links allow only unique HTTPS URLs and derive their displayed
   }]);
 });
 
-test('Google grounding redirects display the publisher instead of Googleâs redirect host', async () => {
+test('Google grounding redirects display the publisher instead of Google’s redirect host', async () => {
   const { safeAiSources } = await loadTypeScriptModule('utils/ai-source-links.ts');
   const sources = safeAiSources([
     {
