@@ -485,7 +485,7 @@ export async function createPandaTable(input: {
     uid: input.host.uid,
     name: input.host.name,
     handle: input.host.handle,
-    avatar: input.host.avatar,
+    avatar: input.host.avatar ?? null,
     status: 'going',
     invitedAt: serverTimestamp(),
     respondedAt: serverTimestamp(),
@@ -495,7 +495,7 @@ export async function createPandaTable(input: {
       uid: friend.uid,
       name: friend.name,
       handle: friend.handle,
-      avatar: friend.avatar,
+      avatar: friend.avatar ?? null,
       status: 'invited',
       invitedAt: serverTimestamp(),
     });
@@ -643,14 +643,28 @@ export async function sendPandaMessage(
   const threadRef = doc(db, 'threads', thread.id);
   const messageRef = doc(collection(db, 'threads', thread.id, 'messages'));
   const unreadBy = thread.participantUids.filter((uid) => uid !== senderUid);
+  const participantProfiles = (thread.participantProfiles || []).map((person) => ({
+    uid: person.uid,
+    name: person.name,
+    handle: person.handle,
+    avatar: person.avatar ?? null,
+  }));
+  const venueData = venue
+    ? Object.fromEntries(Object.entries(venue).filter(([, value]) => value !== undefined))
+    : undefined;
   const batch = writeBatch(db);
   batch.set(
     threadRef,
     {
       participantUids: thread.participantUids,
-      participantProfiles: thread.participantProfiles || [],
+      participantProfiles,
       ...(thread.title ? { title: thread.title } : {}),
-      lastMessage: { type, text, venueName: venue?.name, bookingId },
+      lastMessage: {
+        type,
+        text,
+        ...(venue ? { venueName: venue.name } : {}),
+        ...(bookingId ? { bookingId } : {}),
+      },
       unreadBy,
       updatedAt: serverTimestamp(),
     },
@@ -660,7 +674,7 @@ export async function sendPandaMessage(
     senderUid,
     type,
     text: text.trim(),
-    ...(venue ? { venue } : {}),
+    ...(venueData ? { venue: venueData } : {}),
     ...(bookingId ? { bookingId } : {}),
     createdAt: serverTimestamp(),
   });

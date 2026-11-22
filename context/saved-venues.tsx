@@ -15,6 +15,56 @@ import { getPandaMeDb } from '@/utils/panda-me-firestore';
 
 const STORAGE_KEY = '@panda-mobile/saved-venue-ids';
 const RECORDS_KEY = STORAGE_KEY + ':records';
+const SAVED_VENUE_FIELDS = new Set([
+  'id',
+  'name',
+  'neighborhood',
+  'category',
+  'type',
+  'distance',
+  'walkingTime',
+  'rating',
+  'ratingCount',
+  'price',
+  'distanceMeters',
+  'description',
+  'hours',
+  'feature',
+  'fullAddress',
+  'latitude',
+  'longitude',
+  'source',
+  'sourceAttribution',
+  'openNow',
+  'cached',
+  'website',
+  'ticketUrl',
+  'ticketUrlVerified',
+  'ticketPlaceId',
+  'officialVisitInfo',
+  'mapsUri',
+  'phone',
+  'premium',
+  'banging',
+  'luxurySource',
+  'bangingTransitMinutes',
+  'bangingVerifiedAt',
+  'promoted',
+  'photoAttributions',
+  'photoName',
+  'photoCount',
+  'primaryPhotoPath',
+  'photoNames',
+  'photoUris',
+  'detailsDeferred',
+  'discoveryCategories',
+  'openingSourceName',
+  'openingSourceUrl',
+  'openingDate',
+  'openingReportedAt',
+  'openingDesignation',
+  'openingEvidence',
+]);
 type SavedVenuesContextValue = {
   savedIds: string[];
   savedVenues: Venue[];
@@ -106,7 +156,8 @@ function savedVenueFromRecord(id: string, record: Record<string, unknown>): Venu
 }
 
 function serializableVenue(venue: Venue): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(venue)) as Record<string, unknown>;
+  const data = JSON.parse(JSON.stringify(venue)) as Record<string, unknown>;
+  return Object.fromEntries(Object.entries(data).filter(([key]) => SAVED_VENUE_FIELDS.has(key)));
 }
 
 export function SavedVenuesProvider({ children }: { children: React.ReactNode }) {
