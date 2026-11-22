@@ -1,0 +1,182 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function isOwner(uid) { return signedIn() && request.auth.uid == uid; }
+    function friendshipPath(ownerUid, friendUid) {
+      return /databases/$(database)/documents/users/$(ownerUid)/friends/$(friendUid);
+    }
+    function isFriend(ownerUid) {
+      return signedIn() && exists(friendshipPath(ownerUid, request.auth.uid));
+    }
+    function validPeerList(list, index) {
+      return list.size() <= index || list[index] == request.auth.uid || exists(friendshipPath(request.auth.uid, list[index]));
+    }
+    function validFriendList(list) {
+      return signedIn() && list is list && list.size() >= 1 && list.size() <= 12
+        && list.hasAny([request.auth.uid])
+        && validPeerList(list, 0) && validPeerList(list, 1) && validPeerList(list, 2)
+        && validPeerList(list, 3) && validPeerList(list, 4) && validPeerList(list, 5)
+        && validPeerList(list, 6) && validPeerList(list, 7) && validPeerList(list, 8)
+        && validPeerList(list, 9) && validPeerList(list, 10) && validPeerList(list, 11);
+    }
+    function acceptedRequest(requestId, ownerUid, friendUid) {
+      let requestPath = /databases/$(database)/documents/friend_requests/$(requestId);
+      return requestId is string && existsAfter(requestPath) && getAfter(requestPath).data.status == 'accepted'
+        && ((getAfter(requestPath).data.fromUid == ownerUid && getAfter(requestPath).data.toUid == friendUid)
+          || (getAfter(requestPath).data.fromUid == friendUid && getAfter(requestPath).data.toUid == ownerUid))
+        && (request.auth.uid == ownerUid || request.auth.uid == friendUid);
+    }
+    function isThreadParticipant(threadId) {
+      return signedIn() && get(/databases/$(database)/documents/threads/$(threadId)).data.participantUids.hasAny([request.auth.uid]);
+    }
+
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      allow create: if isOwner(uid)
+        && request.resource.data.keys().hasOnly(['name', 'handle', 'homeAddress', 'updatedAt', 'fcmTokens', 'newOpeningsPushEnabled', 'lastNewOpeningsPushAt']);
+      allow update: if isOwner(uid)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'handle', 'homeAddress', 'updatedAt', 'fcmTokens', 'newOpeningsPushEnabled', 'lastNewOpeningsPushAt']);
+      allow delete: if false;
+
+      match /friends/{friendUid} {
+        allow read: if isOwner(uid);
+        allow create: if request.resource.data.uid == friendUid
+          && request.resource.data.requestId is string
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'handle', 'avatar', 'requestId', 'since'])
+          && acceptedRequest(request.resource.data.requestId, uid, friendUid);
+        allow update: if false;
+        allow delete: if isOwner(uid);
+      }
+
+      match /saved_venues/{venueId} {
+        allow read: if isOwner(uid) || isFriend(uid);
+        allow create, update: if isOwner(uid)
+          && request.resource.data.keys().hasOnly(['placeId', 'name', 'category', 'neighborhood', 'formattedAddress', 'latitude', 'longitude', 'photoUri', 'venueData', 'status', 'savedAt', 'updatedAt'])
+          && request.resource.data.placeId == venueId
+          && request.resource.data.status in ['want-to-try', 'visited']
+          && (!('venueData' in request.resource.data) || (
+            request.resource.data.venueData is map
+            && request.resource.data.venueData.keys().hasOnly(['id', 'name', 'neighborhood', 'category', 'type', 'distance', 'walkingTime', 'rating', 'ratingCount', 'price', 'distanceMeters', 'description', 'hours', 'feature', 'fullAddress', 'latitude', 'longitude', 'source', 'sourceAttribution', 'openNow', 'cached', 'website', 'ticketUrl', 'ticketUrlVerified', 'ticketPlaceId', 'officialVisitInfo', 'mapsUri', 'phone', 'premium', 'banging', 'luxurySource', 'bangingTransitMinutes', 'bangingVerifiedAt', 'promoted', 'photoAttributions', 'photoName', 'photoCount', 'primaryPhotoPath', 'photoNames', 'photoUris', 'detailsDeferred', 'discoveryCategories', 'openingSourceName', 'openingSourceUrl', 'openingDate', 'openingReportedAt', 'openingDesignation', 'openingEvidence'])
+            && request.resource.data.venueData.id == venueId
+            && request.resource.data.venueData.name is string
+            && request.resource.data.venueData.name.size() <= 200
+          ));
+        allow delete: if isOwner(uid);
+      }
+
+      match /notifications/{notificationId} {
+        allow read: if isOwner(uid);
+        allow update: if isOwner(uid)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seenInChat', 'seenAt']);
+        allow create, delete: if false;
+      }
+    }
+
+    match /panda_profiles/{uid} {
+      allow get: if signedIn() && (uid == request.auth.uid || resource.data.discoverable == true);
+      allow list: if signedIn() && resource.data.discoverable == true;
+      allow create: if isOwner(uid) && request.resource.data.uid == uid
+        && request.resource.data.keys().hasOnly(['uid', 'name', 'handle', 'handleLower', 'avatar', 'displayNameLower', 'discoverable', 'createdAt', 'updatedAt']);
+      allow update: if isOwner(uid) && request.resource.data.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'handle', 'handleLower', 'avatar', 'displayNameLower', 'discoverable', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    match /friend_requests/{requestId} {
+      allow read: if signedIn() && (resource.data.fromUid == request.auth.uid || resource.data.toUid == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string && request.resource.data.toUid != request.auth.uid
+        && exists(/databases/$(database)/documents/panda_profiles/$(request.resource.data.toUid))
+        && get(/databases/$(database)/documents/panda_profiles/$(request.resource.data.toUid)).data.discoverable == true
+        && request.resource.data.fromName is string && request.resource.data.fromName.size() <= 100
+        && request.resource.data.fromHandle is string && request.resource.data.fromHandle.size() <= 40
+        && request.resource.data.status == 'pending'
+        && request.resource.data.keys().hasOnly(['fromUid', 'fromName', 'fromHandle', 'fromAvatar', 'toUid', 'status', 'createdAt']);
+      allow update: if signedIn() && resource.data.toUid == request.auth.uid && resource.data.status == 'pending'
+        && request.resource.data.status in ['accepted', 'declined']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']);
+      allow delete: if false;
+    }
+
+    match /bookings/{bookingId} {
+      allow read: if signedIn() && (resource.data.hostUid == request.auth.uid || exists(/databases/$(database)/documents/bookings/$(bookingId)/guests/$(request.auth.uid)));
+      allow create: if signedIn() && request.resource.data.hostUid == request.auth.uid
+        && request.resource.data.guestUids is list
+        && request.resource.data.guestUids[0] == request.auth.uid && request.resource.data.guestUids.size() >= 1 && request.resource.data.guestUids.size() <= 12 && request.resource.data.partySize is int && request.resource.data.partySize >= 2 && request.resource.data.partySize <= 12 && request.resource.data.guestUids.size() <= request.resource.data.partySize
+        && request.resource.data.keys().hasOnly(['hostUid', 'venuePlaceId', 'venueName', 'venuePhoto', 'neighborhood', 'venueAddress', 'venueLat', 'venueLng', 'dateTime', 'partySize', 'notes', 'status', 'source', 'promotionId', 'guestUids', 'createdAt', 'updatedAt'])
+        && request.resource.data.status == 'upcoming' && request.resource.data.source in ['manual', 'opentable'];
+      allow update: if signedIn() && resource.data.hostUid == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['venueName', 'venuePhoto', 'neighborhood', 'venueAddress', 'venueLat', 'venueLng', 'dateTime', 'partySize', 'notes', 'status', 'promotionId', 'updatedAt'])
+        && request.resource.data.partySize is int && request.resource.data.partySize >= 2 && request.resource.data.partySize <= 12
+        && resource.data.guestUids.size() <= request.resource.data.partySize;
+      allow delete: if signedIn() && resource.data.hostUid == request.auth.uid;
+
+      match /guests/{guestUid} {
+        allow read: if signedIn() && (resource.data.uid == request.auth.uid
+          || get(/databases/$(database)/documents/bookings/$(bookingId)).data.hostUid == request.auth.uid);
+        allow create: if signedIn()
+          && getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.guestUids.hasAny([guestUid])
+          && request.resource.data.uid == guestUid
+          && request.resource.data.keys().hasOnly(['uid', 'name', 'handle', 'avatar', 'status', 'invitedAt', 'respondedAt'])
+          && ((guestUid == request.auth.uid && request.resource.data.status == 'going')
+            || (getAfter(/databases/$(database)/documents/bookings/$(bookingId)).data.hostUid == request.auth.uid
+              && request.resource.data.status == 'invited'
+              && exists(friendshipPath(request.auth.uid, guestUid))));
+        allow update: if signedIn() && guestUid == request.auth.uid && resource.data.status == 'invited'
+          && request.resource.data.status in ['going', 'declined']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'respondedAt']);
+        allow delete: if signedIn() && get(/databases/$(database)/documents/bookings/$(bookingId)).data.hostUid == request.auth.uid;
+      }
+    }
+
+    match /threads/{threadId} {
+      allow read: if signedIn() && resource.data.participantUids.hasAny([request.auth.uid]);
+      allow create: if signedIn() && request.resource.data.participantUids is list
+        && request.resource.data.keys().hasOnly(['participantUids', 'participantProfiles', 'title', 'createdBy', 'createdAt', 'lastMessage', 'unreadBy', 'updatedAt'])
+        && (!('title' in request.resource.data) || (request.resource.data.title is string && request.resource.data.title.size() <= 100))
+        && validFriendList(request.resource.data.participantUids);
+      allow update: if signedIn() && resource.data.participantUids.hasAny([request.auth.uid])
+        && request.resource.data.participantUids == resource.data.participantUids
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'unreadBy', 'updatedAt', 'participantProfiles']);
+      allow delete: if false;
+
+      match /messages/{messageId} {
+        allow read: if isThreadParticipant(threadId);
+        allow create: if signedIn()
+          && getAfter(/databases/$(database)/documents/threads/$(threadId)).data.participantUids.hasAny([request.auth.uid])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.type in ['text', 'venue', 'table_invite']
+          && request.resource.data.text is string && request.resource.data.text.size() <= 4000
+          && (request.resource.data.type != 'venue' || 'venue' in request.resource.data)
+          && (!('venue' in request.resource.data) || (
+            request.resource.data.venue is map
+            && request.resource.data.venue.keys().hasOnly(['placeId', 'name', 'category', 'neighborhood', 'fullAddress', 'latitude', 'longitude', 'photoUri', 'photoAttribution', 'mapsUri', 'website', 'phone', 'rating', 'price', 'openNow', 'source'])
+            && request.resource.data.venue.placeId is string && request.resource.data.venue.placeId.size() <= 200
+            && request.resource.data.venue.name is string && request.resource.data.venue.name.size() <= 200
+            && request.resource.data.venue.category is string && request.resource.data.venue.category.size() <= 100
+            && request.resource.data.venue.neighborhood is string && request.resource.data.venue.neighborhood.size() <= 150
+            && (!('fullAddress' in request.resource.data.venue) || (request.resource.data.venue.fullAddress is string && request.resource.data.venue.fullAddress.size() <= 500))
+            && (!('latitude' in request.resource.data.venue) || request.resource.data.venue.latitude is number)
+            && (!('longitude' in request.resource.data.venue) || request.resource.data.venue.longitude is number)
+            && (!('photoUri' in request.resource.data.venue) || (request.resource.data.venue.photoUri is string && request.resource.data.venue.photoUri.size() <= 4000))
+            && (!('photoAttribution' in request.resource.data.venue) || (request.resource.data.venue.photoAttribution is string && request.resource.data.venue.photoAttribution.size() <= 500))
+            && (!('mapsUri' in request.resource.data.venue) || (request.resource.data.venue.mapsUri is string && request.resource.data.venue.mapsUri.size() <= 2000))
+            && (!('website' in request.resource.data.venue) || (request.resource.data.venue.website is string && request.resource.data.venue.website.size() <= 2000))
+            && (!('phone' in request.resource.data.venue) || (request.resource.data.venue.phone is string && request.resource.data.venue.phone.size() <= 100))
+            && (!('rating' in request.resource.data.venue) || (request.resource.data.venue.rating is string && request.resource.data.venue.rating.size() <= 30))
+            && (!('price' in request.resource.data.venue) || (request.resource.data.venue.price is string && request.resource.data.venue.price.size() <= 30))
+            && (!('openNow' in request.resource.data.venue) || request.resource.data.venue.openNow is bool)
+            && (!('source' in request.resource.data.venue) || request.resource.data.venue.source in ['google_places', 'openstreetmap'])
+          ))
+          && request.resource.data.keys().hasOnly(['senderUid', 'type', 'text', 'venue', 'bookingId', 'createdAt']);
+        allow update, delete: if false;
+      }
+    }
+
+    match /promotions/{promotionId} {
+      allow read: if signedIn() && resource.data.active == true;
+      allow write: if false;
+    }
+  }
+}
