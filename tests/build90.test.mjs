@@ -18,9 +18,9 @@ test('the one-device test alert opens New Openings without changing weekly alert
   const profile = await read('app/(tabs)/profile.tsx');
   const layout = await read('app/_layout.tsx');
   assert.match(profile, /action: 'send-test'/);
-  assert.match(profile, /fcmToken: deviceToken.data/);
+  assert.match(profile, /fcmToken: deviceToken\.data/);
   assert.match(profile, /Send a test alert to this device/);
   assert.match(layout, /NEW_OPENINGS_WEEKLY_TEST/);
-  assert.match(layout, /router.push('/new-restaurants')/);
-  assert.match(layout, /weeklyOpenings: String(Date.now())/);
+  assert.ok(layout.includes("router.push('/new-restaurants')"));
+  assert.match(layout, /weeklyOpenings: String\(Date\.now\(\)\)/);
 });
