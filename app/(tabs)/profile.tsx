@@ -92,7 +92,7 @@ export default function ProfileScreen() {
       await Share.share(
         {
           title: 'Discover Panda',
-          message: `Come discover great places with me on Panda â your night-out companion.\n${url}`,
+          message: `Come discover great places with me on Panda — your night-out companion.\n${url}`,
           url,
         },
         { dialogTitle: 'Share Panda' },
@@ -112,7 +112,7 @@ export default function ProfileScreen() {
     try {
       await Linking.openURL(url);
     } catch {
-      Alert.alert('Could not open security settings', 'Please open your account providerâs security page and try again.');
+      Alert.alert('Could not open security settings', 'Please open your account provider’s security page and try again.');
     }
   };
 
@@ -277,7 +277,7 @@ export default function ProfileScreen() {
         && Math.abs(item.longitude) <= 180,
       );
       if (!result) {
-        setHomeAddressError('We couldnât find that address. Add a town or postcode and try again.');
+        setHomeAddressError('We couldn’t find that address. Add a town or postcode and try again.');
         return;
       }
       const next = await profilePreferenceStore.update(account?.uid, {
@@ -375,7 +375,7 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.locationCopy}>
             <Text style={[styles.locationTitle, { color: colors.green800 }]}>
-              Your location Â· {liveArea || (coordinates ? 'Current area' : 'Unavailable')}
+              Your location · {liveArea || (coordinates ? 'Current area' : 'Unavailable')}
             </Text>
             <Text style={[styles.locationSubtitle, { color: colors.green700 }]}>
               {coordinates ? 'Used for nearby places and local Panda answers' : 'Allow location for nearby places and local answers'}
@@ -408,14 +408,14 @@ export default function ProfileScreen() {
             icon="calendar"
             title="My bookings"
             subtitle={bookingReminders.countLabel}
-            badge={bookingReminders.count === null ? 'â' : String(bookingReminders.count)}
+            badge={bookingReminders.count === null ? '—' : String(bookingReminders.count)}
             colors={colors}
             onPress={() => router.push('/bookings')}
           />
           <ProfileMenuRow
             icon="credit-card"
             title="Panda Credit"
-            subtitle="Coming Soon Â· card preview"
+            subtitle="Coming Soon · card preview"
             colors={colors}
             onPress={() => router.push('/credit')}
           />
@@ -434,7 +434,7 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="user"
             title="Account details"
-            subtitle={account ? `${account.email} Â· Google account` : 'Google sign-in required'}
+            subtitle={account ? `${account.email} · Google account` : 'Google sign-in required'}
             colors={colors}
             onPress={showAccountDetails}
           />
@@ -487,7 +487,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.profileWelcome}>
-          <Text style={[styles.welcomeEyebrow, { color: colors.green700 }]}>Welcome back Â· London</Text>
+          <Text style={[styles.welcomeEyebrow, { color: colors.green700 }]}>Welcome back · London</Text>
           <Text style={[styles.welcomeHeading, { color: colors.foreground }]}>
             Hi, {firstName}
           </Text>
@@ -636,7 +636,7 @@ function HomeAddressSheet({
               value={draft}
             />
             <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
-              Encrypted on this device. Panda wonât send this address to its chat service; destination coordinates go to Uber only if you tap Continue in Uber.
+              Encrypted on this device. Panda won’t send this address to its chat service; destination coordinates go to Uber only if you tap Continue in Uber.
             </Text>
             {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
             <Pressable
@@ -651,7 +651,7 @@ function HomeAddressSheet({
                 saving && { opacity: 0.65 },
               ]}
             >
-              <Text style={styles.authButtonText}>{saving ? 'Finding and savingâ¦' : 'Save home address'}</Text>
+              <Text style={styles.authButtonText}>{saving ? 'Finding and saving…' : 'Save home address'}</Text>
             </Pressable>
             {address ? (
               <Pressable
@@ -779,7 +779,7 @@ function SettingsSheet({
             <SettingsAction
               icon="user"
               title="Profile details"
-              subtitle={dateOfBirth ? `Date of birth Â· ${dateOfBirth}` : 'Name and date of birth'}
+              subtitle={dateOfBirth ? `Date of birth · ${dateOfBirth}` : 'Name and date of birth'}
               colors={colors}
               onPress={onEditProfile}
             />
@@ -842,7 +842,7 @@ function SettingsSheet({
 
           </View>
 
-          <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda Â· v1.0</Text>
+          <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda · v1.0</Text>
           </ScrollView>
         </View>
       </View>
@@ -900,7 +900,7 @@ function AuthSheet({
             ]}
           >
             <Text style={styles.googleMark}>G</Text>
-            <Text style={styles.authButtonText}>{signingIn ? 'Connecting securelyâ¦' : 'Continue with Google'}</Text>
+            <Text style={styles.authButtonText}>{signingIn ? 'Connecting securely…' : 'Continue with Google'}</Text>
           </Pressable>
           {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
           <Text style={[styles.authFootnote, { color: colors.mutedForeground }]}>
@@ -1045,7 +1045,7 @@ function ProfileEditSheet({
             ]}
           >
             <Text style={[styles.authButtonText, { color: colors.primaryForeground }]}>
-              {saving ? 'Savingâ¦' : 'Save profile'}
+              {saving ? 'Saving…' : 'Save profile'}
             </Text>
           </Pressable>
         </KeyboardAwareScrollViewCompat>
