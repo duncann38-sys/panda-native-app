@@ -2092,14 +2092,14 @@ function AiVenueCard({
           </View>
           {venue.openingSourceName && venue.openingSourceUrl ? (
             <Pressable
-              accessibilityLabel={`Read the opening report from ${venue.openingSourceName}`}
+              accessibilityLabel={venue.openingDesignation === 'panda-search-reported-new' ? `Check Google results for ${venue.name}` : `Read the opening report from ${venue.openingSourceName}`}
               accessibilityRole="link"
               onPress={onEvidence}
               style={styles.resultSourceLink}
             >
               <Feather name="file-text" size={11} color={colors.honeyInk} />
               <Text numberOfLines={1} style={[styles.resultStopLabel, { color: colors.honeyInk }]}>
-                OPENING REPORTED · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
+                {venue.openingDesignation === 'panda-search-reported-new' ? 'GOOGLE RESULTS · VERIFY OPENING' : 'OPENING REPORTED'} · {formatOpeningReportDate(venue.openingReportedAt)} · {venue.openingSourceName}
               </Text>
             </Pressable>
           ) : null}

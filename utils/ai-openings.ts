@@ -19,7 +19,7 @@ export function isNewOpeningPrompt(text: string): boolean {
   return /\b(?:new restaurants?|new openings?|new & buzzing|new and buzzing|recently opened)\b/i.test(text);
 }
 
-/** A card is shown only for a recent, dated opening with a direct HTTPS source. */
+/** A card is shown only for a recent, dated opening with a publisher source or an explicit Google verification link. */
 export function hasDatedOpeningEvidence(venue: {
   id?: string;
   openingSourceName?: string;
@@ -29,7 +29,7 @@ export function hasDatedOpeningEvidence(venue: {
   openingDesignation?: string;
 }, now = Date.now()): boolean {
   if (!venue.id || !/^ChI[\w-]+$/.test(venue.id)
-    || venue.openingDesignation !== 'panda-verified-new'
+    || !['panda-verified-new', 'panda-search-reported-new'].includes(venue.openingDesignation ?? '')
     || !venue.openingSourceName?.trim()) return false;
   const reportedAt = Date.parse(venue.openingReportedAt ?? '');
   if (!Number.isFinite(reportedAt) || reportedAt > now || now - reportedAt > 8 * 86_400_000) return false;
@@ -40,8 +40,11 @@ export function hasDatedOpeningEvidence(venue: {
     || new Date(openedAt).toISOString().slice(0, 10) !== opened) return false;
   try {
     const url = new URL(venue.openingSourceUrl ?? '');
-    return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password
-      && !/(^|\.)google\.[a-z.]+$/i.test(url.hostname);
+    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) return false;
+    if (venue.openingDesignation === 'panda-search-reported-new') {
+      return url.hostname === 'www.google.com' && url.pathname === '/search' && Boolean(url.searchParams.get('q'));
+    }
+    return !/(^|\.)google\.[a-z.]+$/i.test(url.hostname);
   } catch {
     return false;
   }

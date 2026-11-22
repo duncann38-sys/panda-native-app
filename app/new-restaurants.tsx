@@ -148,10 +148,10 @@ export default function NewRestaurantsScreen() {
             </View>
             <VenueCard venue={item} saved={isSaved(item.id)} onPress={() => open(item)} onToggleSaved={() => toggleSaved(item)} />
             {item.openingSourceUrl ? (
-              <Pressable accessibilityRole="link" accessibilityLabel={'Read opening report from ' + (item.openingSourceName || 'source')}
+              <Pressable accessibilityRole="link" accessibilityLabel={item.openingDesignation === 'panda-search-reported-new' ? 'Check Google results for ' + item.name : 'Read opening report from ' + (item.openingSourceName || 'source')}
                 onPress={() => openSource(item)} style={({ pressed }) => [styles.sourceLink, pressed && { opacity: 0.65 }]}>
                 <PandaIcon name="external-link" size={14} color={colors.primary} />
-                <Text numberOfLines={1} style={[styles.sourceLinkText, { color: colors.primary }]}>Opening report · {item.openingSourceName || 'Read source'}</Text>
+                <Text numberOfLines={1} style={[styles.sourceLinkText, { color: colors.primary }]}>{item.openingDesignation === 'panda-search-reported-new' ? 'Google results · verify opening' : 'Opening report · ' + (item.openingSourceName || 'Read source')}</Text>
               </Pressable>
             ) : null}
           </View>
