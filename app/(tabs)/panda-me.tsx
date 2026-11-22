@@ -1422,10 +1422,10 @@ export default function PandaMeScreen() {
                           <Pressable
                             onPress={() => {
                               setMessagesOpen(false);
-                              router.push('/bookings');
+                              router.push('/panda-me');
                             }}
                           >
-                            <Text style={styles.messageLink}>View table plans</Text>
+                            <Text style={styles.messageLink}>See plan in Panda Me</Text>
                           </Pressable>
                         ) : null}
                       </View>
