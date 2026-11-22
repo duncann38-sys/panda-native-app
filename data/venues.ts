@@ -51,6 +51,12 @@ export type Venue = {
   photoUris?: Array<{ uri: string; attribution: string }>;
   detailsDeferred?: boolean;
   discoveryCategories?: DiscoveryCategory[];
+  openingSourceName?: string;
+  openingSourceUrl?: string;
+  openingDate?: string;
+  openingReportedAt?: string;
+  openingDesignation?: string;
+  openingEvidence?: string;
 };
 
 type PremiumRotationSeed = readonly [

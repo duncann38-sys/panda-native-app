@@ -1,11 +1,11 @@
-name: Panda 88 - Global Shows and Source Cards
+name: Panda 89 - Global Openings and Calendar Window
 on:
   push:
     branches:
       - panda-build-88
 jobs:
   build_android_preview:
-    name: Panda 88 Android test APK
+    name: Panda 89 Android update APK
     type: build
     params:
       platform: android

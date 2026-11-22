@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { useColorScheme } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { Platform, useColorScheme } from 'react-native';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -12,7 +12,8 @@ import {
   Inter_700Bold,
   useFonts,
 } from '@expo-google-fonts/inter';
-import { Stack, usePathname } from 'expo-router';
+import { Stack, usePathname, useRouter } from 'expo-router';
+import * as Notifications from 'expo-notifications';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { LiveVenuesProvider } from '@/context/live-venues';
@@ -32,6 +33,30 @@ function RootLayoutNav() {
   const { ready, account } = useAuth();
   const allowed = canEnterPanda(ready, account);
   const colors = useColors();
+  const router = useRouter();
+  const handledOpeningNotification = useRef('');
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    void Notifications.setNotificationChannelAsync('default', {
+      name: 'Panda', importance: Notifications.AndroidImportance.DEFAULT,
+      vibrationPattern: [0, 250, 250, 250], lightColor: '#C8A13A',
+    }).catch(() => {});
+  }, []);
+  useEffect(() => {
+    const handleResponse = (response: Notifications.NotificationResponse | null) => {
+      if (!response || !allowed) return;
+      const content = response.notification.request.content;
+      const data = content.data as Record<string, unknown> | undefined;
+      if (data?.type !== 'NEW_OPENINGS_WEEKLY') return;
+      const id = response.notification.request.identifier;
+      if (handledOpeningNotification.current === id) return;
+      handledOpeningNotification.current = id;
+      router.push({ pathname: '/ai', params: { weeklyOpenings: String(Date.now()) } });
+    };
+    const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);
+    void Notifications.getLastNotificationResponseAsync().then(handleResponse).catch(() => {});
+    return () => subscription.remove();
+  }, [allowed, router]);
   return (
     <Stack screenOptions={{ headerBackTitle: 'Back' }}>
       <Stack.Protected guard={!allowed}>
