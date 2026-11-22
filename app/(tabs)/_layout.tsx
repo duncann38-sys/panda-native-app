@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { PandaLogo } from '@/components/PandaLogo';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
@@ -12,6 +13,7 @@ import { Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/auth';
+import { subscribePandaUnread } from '@/utils/panda-me-firestore';
 
 // IMPORTANT: iOS 26 uses NativeTabs for native tabs with liquid glass support.
 // NativeTabs intentionally does NOT use custom design tokens — liquid glass
@@ -24,7 +26,11 @@ function NativeTabLayout() {
         <Icon sf={{ default: 'house', selected: 'house.fill' }} />
         <Label>Home</Label>
       </NativeTabs.Trigger>
-      <NativeTabs.Trigger name="map">
+      <NativeTabs.Trigger name="panda-me">
+        <Icon sf={{ default: 'person.crop.circle', selected: 'person.crop.circle.fill' }} />
+        <Label>Panda Me</Label>
+      </NativeTabs.Trigger>
+      <NativeTabs.Trigger name="map" hidden>
         <Icon sf={{ default: 'map', selected: 'map.fill' }} />
         <Label>Map</Label>
       </NativeTabs.Trigger>
@@ -46,6 +52,12 @@ function NativeTabLayout() {
 
 function ClassicTabLayout() {
   const { account } = useAuth();
+  const [hasPandaUnread, setHasPandaUnread] = useState(false);
+  useEffect(() => {
+    if (!account) { setHasPandaUnread(false); return; }
+    try { return subscribePandaUnread(account.uid, setHasPandaUnread, () => undefined); }
+    catch { setHasPandaUnread(false); }
+  }, [account?.uid]);
   const colors = useColors();
   const colorScheme = useColorScheme();
   const isDark = colorScheme === 'dark';
@@ -116,17 +128,13 @@ function ClassicTabLayout() {
         }}
       />
       <Tabs.Screen
-        name="map"
+        name="panda-me"
         options={{
-          title: 'Map',
-          tabBarIcon: ({ color }) =>
-            isIOS ? (
-              <SymbolView name="map" tintColor={color} size={24} />
-            ) : (
-              <PandaIcon name="map" size={22} color={color} />
-            ),
+          title: 'Panda Me',
+          tabBarIcon: ({ color }) => <PandaMeTabIcon color={color} hasUnread={hasPandaUnread} />,
         }}
       />
+      <Tabs.Screen name="map" options={{ href: null }} />
       <Tabs.Screen
         name="credit"
         options={{
@@ -155,6 +163,15 @@ function ClassicTabLayout() {
       />
       <Tabs.Screen name="saved" options={{ href: null }} />
     </Tabs>
+  );
+}
+
+function PandaMeTabIcon({ color, hasUnread }: { color: string; hasUnread: boolean }) {
+  return (
+    <View style={{ alignItems: 'center', height: 30, justifyContent: 'center', width: 32 }}>
+      <Ionicons name="person-circle-outline" size={24} color={color} />
+      {hasUnread ? <View style={{ backgroundColor: '#C5962D', borderColor: '#FFFDF8', borderRadius: 5, borderWidth: 1.5, height: 9, position: 'absolute', right: 1, top: 1, width: 9 }} /> : null}
+    </View>
   );
 }
 
