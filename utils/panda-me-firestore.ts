@@ -87,24 +87,37 @@ export type PandaGuest = {
 };
 export type PandaThread = {
   id: string;
+  title?: string;
   participantUids: string[];
   participantProfiles?: PandaFriend[];
   lastMessage?: { type?: string; text?: string; venueName?: string; bookingId?: string };
   unreadBy?: string[];
   updatedAt?: unknown;
 };
+export type PandaSharedVenue = {
+  placeId: string;
+  name: string;
+  category: string;
+  neighborhood: string;
+  fullAddress?: string;
+  latitude?: number;
+  longitude?: number;
+  photoUri?: string;
+  photoAttribution?: string;
+  mapsUri?: string;
+  website?: string;
+  phone?: string;
+  rating?: string;
+  price?: string;
+  openNow?: boolean;
+  source?: 'google_places' | 'openstreetmap';
+};
 export type PandaMessage = {
   id: string;
   senderUid: string;
   type: 'text' | 'venue' | 'table_invite';
   text?: string;
-  venue?: {
-    placeId: string;
-    name: string;
-    category: string;
-    neighborhood: string;
-    photoUri?: string;
-  };
+  venue?: PandaSharedVenue;
   bookingId?: string;
   createdAt?: unknown;
 };
@@ -436,13 +449,17 @@ export async function createPandaTable(input: {
   partySize: number;
   notes?: string;
   guests: PandaFriend[];
-}): Promise<{ bookingId: string; failedInvites: string[] }> {
+}): Promise<{ bookingId: string; failedGroupChat: boolean }> {
   const db = getPandaMeDb();
   const bookingRef = doc(collection(db, 'bookings'));
   const requestedPartySize = Math.max(2, Math.min(12, input.partySize));
-  if (input.guests.length + 1 > requestedPartySize)
+  if (input.guests.length + 1 > requestedPartySize) {
     throw new Error('The invited guests cannot exceed the party size.');
-  const guests = input.guests.slice(0, 11);
+  }
+  if (input.guests.length > 9) {
+    throw new Error('A shared table chat can include up to nine friends.');
+  }
+  const guests = input.guests;
   const guestUids = [input.host.uid, ...guests.map((friend) => friend.uid)];
   const batch = writeBatch(db);
   batch.set(bookingRef, {
@@ -473,7 +490,7 @@ export async function createPandaTable(input: {
     invitedAt: serverTimestamp(),
     respondedAt: serverTimestamp(),
   });
-  for (const friend of guests)
+  for (const friend of guests) {
     batch.set(doc(db, 'bookings', bookingRef.id, 'guests', friend.uid), {
       uid: friend.uid,
       name: friend.name,
@@ -482,29 +499,32 @@ export async function createPandaTable(input: {
       status: 'invited',
       invitedAt: serverTimestamp(),
     });
+  }
   await batch.commit();
-  const failedInvites: string[] = [];
-  for (const friend of guests) {
-    const ids = [input.host.uid, friend.uid].sort();
+
+  let failedGroupChat = false;
+  if (guests.length > 0) {
     const thread: PandaThread = {
-      id: ids.join('__'),
-      participantUids: ids,
-      participantProfiles: [input.host, friend],
+      id: doc(collection(db, 'threads')).id,
+      title: 'Table at ' + input.venueName.trim(),
+      participantUids: guestUids,
+      participantProfiles: [input.host, ...guests],
     };
     try {
       await sendPandaMessage(
         thread,
         input.host.uid,
-        input.host.name + ' invited you to a table at ' + input.venueName.trim(),
+        input.host.name + ' invited everyone to a table at ' + input.venueName.trim(),
         'table_invite',
         undefined,
         bookingRef.id,
       );
     } catch {
-      failedInvites.push(friend.uid);
+      failedGroupChat = true;
     }
   }
-  return { bookingId: bookingRef.id, failedInvites };
+
+  return { bookingId: bookingRef.id, failedGroupChat };
 }
 
 export async function updatePandaTable(
@@ -616,13 +636,7 @@ export async function sendPandaMessage(
   senderUid: string,
   text: string,
   type: 'text' | 'venue' | 'table_invite' = 'text',
-  venue?: {
-    placeId: string;
-    name: string;
-    category: string;
-    neighborhood: string;
-    photoUri?: string;
-  },
+  venue?: PandaSharedVenue,
   bookingId?: string,
 ) {
   const db = getPandaMeDb();
@@ -635,6 +649,7 @@ export async function sendPandaMessage(
     {
       participantUids: thread.participantUids,
       participantProfiles: thread.participantProfiles || [],
+      ...(thread.title ? { title: thread.title } : {}),
       lastMessage: { type, text, venueName: venue?.name, bookingId },
       unreadBy,
       updatedAt: serverTimestamp(),

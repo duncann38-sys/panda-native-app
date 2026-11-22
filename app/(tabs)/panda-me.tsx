@@ -360,7 +360,18 @@ export default function PandaMeScreen() {
             name: venue.name,
             category: venue.category,
             neighborhood: venue.neighborhood,
+            fullAddress: venue.fullAddress,
+            latitude: venue.latitude,
+            longitude: venue.longitude,
             photoUri: venue.photoUris?.[0]?.uri,
+            photoAttribution: venue.photoUris?.[0]?.attribution,
+            mapsUri: venue.mapsUri,
+            website: venue.website,
+            phone: venue.phone,
+            rating: venue.rating,
+            price: venue.price,
+            openNow: venue.openNow,
+            source: venue.source,
           },
         );
         setVenueToShare(null);
@@ -500,10 +511,10 @@ export default function PandaMeScreen() {
         setSelectedGuests([]);
         Alert.alert(
           'Plan shared',
-          created.failedInvites.length
-            ? 'The plan is saved. Some private invites could not be sent; your friends can still see their invitation in Panda Me.'
+          created.failedGroupChat
+            ? 'The plan is saved. Panda could not start the group chat, but your friends can still see their invitations in Panda Me.'
             : selectedGuests.length
-              ? 'Invites were sent as private Panda messages.'
+              ? 'Your friends were invited in a shared Panda group chat.'
               : 'Your plan is saved in Panda Me.',
         );
       }
@@ -515,6 +526,50 @@ export default function PandaMeScreen() {
     } finally {
       setCreatingTable(false);
     }
+  };
+
+  const openSharedVenue = (venue: NonNullable<PandaMessage['venue']>) => {
+    const routeVenue = {
+      id: venue.placeId,
+      name: venue.name,
+      neighborhood: venue.neighborhood,
+      category: venue.category,
+      type: venue.category,
+      distance: 'Nearby',
+      walkingTime: '',
+      rating: venue.rating || '',
+      ratingCount: 0,
+      price: venue.price || '',
+      distanceMeters: 0,
+      description: '',
+      hours: '',
+      feature: '',
+      fullAddress: venue.fullAddress || venue.neighborhood,
+      latitude: venue.latitude,
+      longitude: venue.longitude,
+      source: venue.source,
+      openNow: venue.openNow ?? false,
+      website: venue.website || '',
+      mapsUri: venue.mapsUri || '',
+      phone: venue.phone || '',
+      premium: false,
+      banging: false,
+      promoted: false,
+      photoAttributions: venue.photoAttribution ? [venue.photoAttribution] : [],
+      photoUris: venue.photoUri
+        ? [{ uri: venue.photoUri, attribution: venue.photoAttribution || '' }]
+        : [],
+    };
+    setMessagesOpen(false);
+    router.push({
+      pathname: '/(tabs)/map',
+      params: {
+        directionsVenueId: venue.placeId,
+        directionsVenueData: JSON.stringify(routeVenue),
+        directionsReturn: 'back',
+        routeMode: 'walking',
+      },
+    });
   };
 
   const openUber = async (destination: string) => {
@@ -1177,7 +1232,8 @@ export default function PandaMeScreen() {
                 />
                 <Text style={styles.inputLabel}>INVITE FRIENDS</Text>
                 <Text style={styles.planMeta}>
-                  Choose up to {Math.max(1, (Number(partySize) || 4) - 1)} friends for this party.
+                  Choose up to {Math.min(9, Math.max(1, (Number(partySize) || 4) - 1))} friends.
+                  Everyone invited can chat together here.
                 </Text>
                 <View style={styles.guestChips}>
                   {friends.map((friend) => {
@@ -1190,7 +1246,7 @@ export default function PandaMeScreen() {
                             selected
                               ? current.filter((item) => item.uid !== friend.uid)
                               : current.length <
-                                  Math.min(11, Math.max(1, (Number(partySize) || 4) - 1))
+                                  Math.min(9, Math.max(1, (Number(partySize) || 4) - 1))
                                 ? [...current, friend]
                                 : current,
                           )
@@ -1284,9 +1340,11 @@ export default function PandaMeScreen() {
                   <Text style={styles.sheetEyebrow}>PANDA MESSAGES</Text>
                   <Text style={styles.sheetTitle}>
                     {activeThread
-                      ? activeThread.participantProfiles?.find(
+                      ? activeThread.title ||
+                        activeThread.participantProfiles?.find(
                           (person) => person.uid !== account?.uid,
-                        )?.name || 'Your conversation'
+                        )?.name ||
+                        'Your conversation'
                       : 'Your conversations'}
                   </Text>
                 </View>
@@ -1329,15 +1387,36 @@ export default function PandaMeScreen() {
                                 ? 'Shared a table invitation.'
                                 : '')}
                         </Text>
-                        {message.type === 'venue' ? (
-                          <Pressable
-                            onPress={() => {
-                              setMessagesOpen(false);
-                              router.push('/map');
-                            }}
-                          >
-                            <Text style={styles.messageLink}>Open place in map</Text>
-                          </Pressable>
+                        {message.type === 'venue' && message.venue ? (
+                          <View style={styles.sharedVenueCard}>
+                            {message.venue.photoUri ? (
+                              <Image
+                                source={{ uri: message.venue.photoUri }}
+                                style={styles.sharedVenueImage}
+                                contentFit="cover"
+                              />
+                            ) : null}
+                            <View style={styles.sharedVenueMeta}>
+                              <Text style={styles.sharedVenueTitle} numberOfLines={2}>
+                                {message.venue.name}
+                              </Text>
+                              <Text style={styles.sharedVenueDetails} numberOfLines={1}>
+                                {message.venue.category} · {message.venue.neighborhood}
+                              </Text>
+                              {message.venue.photoAttribution ? (
+                                <Text style={styles.sharedVenueAttribution} numberOfLines={1}>
+                                  Photo: {message.venue.photoAttribution}
+                                </Text>
+                              ) : null}
+                              <Pressable
+                                onPress={() => openSharedVenue(message.venue!)}
+                                style={styles.sharedVenueButton}
+                              >
+                                <Text style={styles.sharedVenueButtonText}>Open restaurant</Text>
+                                <Ionicons name="arrow-forward" size={15} color={colors.ivory} />
+                              </Pressable>
+                            </View>
+                          </View>
                         ) : null}
                         {message.type === 'table_invite' ? (
                           <Pressable
@@ -1389,11 +1468,13 @@ export default function PandaMeScreen() {
                         >
                           <ProfileAvatar
                             size={44}
-                            name={other?.name || 'Panda friend'}
-                            imageUri={other?.avatar}
+                            name={thread.title || other?.name || 'Panda friend'}
+                            imageUri={thread.title ? undefined : other?.avatar}
                           />
                           <View style={styles.friendCopy}>
-                            <Text style={styles.friendName}>{other?.name || 'Panda group'}</Text>
+                            <Text style={styles.friendName}>
+                              {thread.title || other?.name || 'Panda group'}
+                            </Text>
                             <Text style={styles.handle} numberOfLines={1}>
                               {thread.lastMessage?.text ||
                                 thread.lastMessage?.venueName ||
@@ -1989,6 +2070,35 @@ function createStyles(c: ReturnType<typeof useColors>) {
     },
     messageOwnText: { color: c.ivory },
     messageLink: { color: c.goldDeep, fontFamily: 'Inter_600SemiBold', fontSize: 11, marginTop: 7 },
+    sharedVenueCard: {
+      backgroundColor: c.ivory,
+      borderColor: c.border,
+      borderRadius: 14,
+      borderWidth: 1,
+      marginTop: 10,
+      overflow: 'hidden',
+    },
+    sharedVenueImage: { height: 118, width: '100%' },
+    sharedVenueMeta: { gap: 5, padding: 10 },
+    sharedVenueTitle: { color: c.green900, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+    sharedVenueDetails: { color: c.mutedForeground, fontFamily: 'Inter_500Medium', fontSize: 11 },
+    sharedVenueAttribution: {
+      color: c.mutedForeground,
+      fontFamily: 'Inter_400Regular',
+      fontSize: 9,
+    },
+    sharedVenueButton: {
+      alignItems: 'center',
+      backgroundColor: c.green800,
+      borderRadius: 10,
+      flexDirection: 'row',
+      gap: 6,
+      justifyContent: 'center',
+      marginTop: 5,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+    },
+    sharedVenueButtonText: { color: c.ivory, fontFamily: 'Inter_600SemiBold', fontSize: 11 },
     composeRow: { alignItems: 'center', flexDirection: 'row', gap: 8, paddingTop: 8 },
     composeInput: { flex: 1, marginTop: 0 },
     sendButton: {
