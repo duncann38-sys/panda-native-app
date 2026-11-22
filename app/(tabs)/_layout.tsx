@@ -9,7 +9,7 @@ import { useColors } from '@/hooks/useColors';
 import { BlurView } from 'expo-blur';
 import { isLiquidGlassAvailable } from 'expo-glass-effect';
 import { Tabs } from 'expo-router';
-import { Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
+import { Badge, Icon, Label, NativeTabs } from 'expo-router/unstable-native-tabs';
 import { SymbolView } from 'expo-symbols';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/context/auth';
@@ -20,6 +20,14 @@ import { subscribePandaUnread } from '@/utils/panda-me-firestore';
 // is a system-level appearance provided by iOS and cannot be overridden.
 // Custom brand colors are applied only on the ClassicTabLayout path (older iOS / Android / web).
 function NativeTabLayout() {
+  const { account } = useAuth();
+  const [hasPandaUnread, setHasPandaUnread] = useState(false);
+  useEffect(() => {
+    if (!account) { setHasPandaUnread(false); return; }
+    try { return subscribePandaUnread(account.uid, setHasPandaUnread, () => undefined); }
+    catch { setHasPandaUnread(false); }
+  }, [account?.uid]);
+
   return (
     <NativeTabs>
       <NativeTabs.Trigger name="index">
@@ -29,6 +37,7 @@ function NativeTabLayout() {
       <NativeTabs.Trigger name="panda-me">
         <Icon sf={{ default: 'person.crop.circle', selected: 'person.crop.circle.fill' }} />
         <Label>Panda Me</Label>
+        <Badge hidden={!hasPandaUnread}>•</Badge>
       </NativeTabs.Trigger>
       <NativeTabs.Trigger name="map" hidden>
         <Icon sf={{ default: 'map', selected: 'map.fill' }} />
