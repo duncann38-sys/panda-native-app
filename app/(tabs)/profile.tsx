@@ -62,6 +62,7 @@ export default function ProfileScreen() {
   const [newOpeningsPushEnabled, setNewOpeningsPushEnabled] = useState(false);
   const [newOpeningsPushReady, setNewOpeningsPushReady] = useState(false);
   const [savingNewOpeningsPush, setSavingNewOpeningsPush] = useState(false);
+  const [sendingNewOpeningsTest, setSendingNewOpeningsTest] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
   const ownerKey = useRef(preferencesKey);
   ownerKey.current = preferencesKey;
@@ -91,7 +92,7 @@ export default function ProfileScreen() {
       await Share.share(
         {
           title: 'Discover Panda',
-          message: `Come discover great places with me on Panda — your night-out companion.\n${url}`,
+          message: `Come discover great places with me on Panda â your night-out companion.\n${url}`,
           url,
         },
         { dialogTitle: 'Share Panda' },
@@ -111,7 +112,7 @@ export default function ProfileScreen() {
     try {
       await Linking.openURL(url);
     } catch {
-      Alert.alert('Could not open security settings', 'Please open your account provider’s security page and try again.');
+      Alert.alert('Could not open security settings', 'Please open your account providerâs security page and try again.');
     }
   };
 
@@ -201,6 +202,47 @@ export default function ProfileScreen() {
     } finally { setSavingNewOpeningsPush(false); }
   };
 
+  const handleSendNewOpeningsTest = async () => {
+    if (!account?.uid || !newOpeningsPushEnabled) {
+      Alert.alert('Turn on weekly openings first', 'Enable weekly new openings before sending a device test.');
+      return;
+    }
+    if (Platform.OS !== 'android') {
+      Alert.alert('Android test only', 'Direct Firebase push testing is currently available on Android.');
+      return;
+    }
+    setSendingNewOpeningsTest(true);
+    try {
+      const permission = await Notifications.getPermissionsAsync();
+      if (!permission.granted) throw new Error('Allow Panda notifications in Android settings, then try again.');
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      if (deviceToken.type !== 'android' || typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) {
+        throw new Error('Panda could not get this device’s Firebase push token. Check Android Firebase setup and try again.');
+      }
+      const idToken = await getIdToken();
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ action: 'send-test', fcmToken: deviceToken.data }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const messages = {
+          notifications_not_enabled: 'Turn on weekly openings first.',
+          device_not_registered: 'Switch weekly openings off and on to refresh this device registration.',
+          test_cooldown: 'Wait a minute before sending another test.',
+        };
+        throw new Error(messages[data.status as keyof typeof messages] || 'Panda could not send the test alert. Please try again.');
+      }
+      Alert.alert('Test alert sent', 'One alert was sent to this device only. Tap it to open New Openings.');
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Panda could not send the test alert.';
+      Alert.alert('Test alert not sent', message);
+    } finally {
+      setSendingNewOpeningsTest(false);
+    }
+  };
+
   const handleNotificationsChange = async (enabled: boolean) => {
     try {
       const next = await profilePreferenceStore.update(account?.uid, { notificationsEnabled: enabled });
@@ -235,7 +277,7 @@ export default function ProfileScreen() {
         && Math.abs(item.longitude) <= 180,
       );
       if (!result) {
-        setHomeAddressError('We couldn’t find that address. Add a town or postcode and try again.');
+        setHomeAddressError('We couldnât find that address. Add a town or postcode and try again.');
         return;
       }
       const next = await profilePreferenceStore.update(account?.uid, {
@@ -333,7 +375,7 @@ export default function ProfileScreen() {
           </View>
           <View style={styles.locationCopy}>
             <Text style={[styles.locationTitle, { color: colors.green800 }]}>
-              Your location · {liveArea || (coordinates ? 'Current area' : 'Unavailable')}
+              Your location Â· {liveArea || (coordinates ? 'Current area' : 'Unavailable')}
             </Text>
             <Text style={[styles.locationSubtitle, { color: colors.green700 }]}>
               {coordinates ? 'Used for nearby places and local Panda answers' : 'Allow location for nearby places and local answers'}
@@ -366,14 +408,14 @@ export default function ProfileScreen() {
             icon="calendar"
             title="My bookings"
             subtitle={bookingReminders.countLabel}
-            badge={bookingReminders.count === null ? '—' : String(bookingReminders.count)}
+            badge={bookingReminders.count === null ? 'â' : String(bookingReminders.count)}
             colors={colors}
             onPress={() => router.push('/bookings')}
           />
           <ProfileMenuRow
             icon="credit-card"
             title="Panda Credit"
-            subtitle="Coming Soon · card preview"
+            subtitle="Coming Soon Â· card preview"
             colors={colors}
             onPress={() => router.push('/credit')}
           />
@@ -392,7 +434,7 @@ export default function ProfileScreen() {
           <ProfileMenuRow
             icon="user"
             title="Account details"
-            subtitle={account ? `${account.email} · Google account` : 'Google sign-in required'}
+            subtitle={account ? `${account.email} Â· Google account` : 'Google sign-in required'}
             colors={colors}
             onPress={showAccountDetails}
           />
@@ -445,7 +487,7 @@ export default function ProfileScreen() {
         </View>
 
         <View style={styles.profileWelcome}>
-          <Text style={[styles.welcomeEyebrow, { color: colors.green700 }]}>Welcome back · London</Text>
+          <Text style={[styles.welcomeEyebrow, { color: colors.green700 }]}>Welcome back Â· London</Text>
           <Text style={[styles.welcomeHeading, { color: colors.foreground }]}>
             Hi, {firstName}
           </Text>
@@ -497,6 +539,8 @@ export default function ProfileScreen() {
         newOpeningsPushReady={newOpeningsPushReady}
         savingNewOpeningsPush={savingNewOpeningsPush}
         onNewOpeningsPushChange={(enabled) => { void handleNewOpeningsPushChange(enabled); }}
+        sendingNewOpeningsTest={sendingNewOpeningsTest}
+        onSendNewOpeningsTest={() => { void handleSendNewOpeningsTest(); }}
         onClose={() => setSettingsOpen(false)}
         onEditProfile={() => {
           setSettingsOpen(false);
@@ -592,7 +636,7 @@ function HomeAddressSheet({
               value={draft}
             />
             <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
-              Encrypted on this device. Panda won’t send this address to its chat service; destination coordinates go to Uber only if you tap Continue in Uber.
+              Encrypted on this device. Panda wonât send this address to its chat service; destination coordinates go to Uber only if you tap Continue in Uber.
             </Text>
             {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
             <Pressable
@@ -607,7 +651,7 @@ function HomeAddressSheet({
                 saving && { opacity: 0.65 },
               ]}
             >
-              <Text style={styles.authButtonText}>{saving ? 'Finding and saving…' : 'Save home address'}</Text>
+              <Text style={styles.authButtonText}>{saving ? 'Finding and savingâ¦' : 'Save home address'}</Text>
             </Pressable>
             {address ? (
               <Pressable
@@ -687,6 +731,8 @@ function SettingsSheet({
   newOpeningsPushReady,
   savingNewOpeningsPush,
   onNewOpeningsPushChange,
+  sendingNewOpeningsTest,
+  onSendNewOpeningsTest,
   onClose,
   onEditProfile,
 }: {
@@ -699,6 +745,8 @@ function SettingsSheet({
   newOpeningsPushReady: boolean;
   savingNewOpeningsPush: boolean;
   onNewOpeningsPushChange: (value: boolean) => void;
+  sendingNewOpeningsTest: boolean;
+  onSendNewOpeningsTest: () => void;
   onClose: () => void;
   onEditProfile: () => void;
 }) {
@@ -731,7 +779,7 @@ function SettingsSheet({
             <SettingsAction
               icon="user"
               title="Profile details"
-              subtitle={dateOfBirth ? `Date of birth · ${dateOfBirth}` : 'Name and date of birth'}
+              subtitle={dateOfBirth ? `Date of birth Â· ${dateOfBirth}` : 'Name and date of birth'}
               colors={colors}
               onPress={onEditProfile}
             />
@@ -772,10 +820,29 @@ function SettingsSheet({
             {!newOpeningsPushReady || savingNewOpeningsPush ? null : !newOpeningsPushEnabled ? (
               <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>Turn this on to receive one weekly digest. Device notification permission is requested only when you opt in.</Text>
             ) : null}
+            {newOpeningsPushEnabled && Platform.OS === 'android' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send a test alert to this device"
+                onPress={onSendNewOpeningsTest}
+                disabled={savingNewOpeningsPush || sendingNewOpeningsTest}
+                style={({ pressed }) => ({
+                  alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 13, paddingVertical: 10,
+                  flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1,
+                  backgroundColor: colors.card, borderColor: colors.border,
+                  opacity: pressed || savingNewOpeningsPush || sendingNewOpeningsTest ? 0.65 : 1,
+                })}
+              >
+                <Feather name="bell" size={15} color={colors.green700} />
+                <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
+                  {sendingNewOpeningsTest ? 'Sending test alert…' : 'Send a test alert to this device'}
+                </Text>
+              </Pressable>
+            ) : null}
 
           </View>
 
-          <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda · v1.0</Text>
+          <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda Â· v1.0</Text>
           </ScrollView>
         </View>
       </View>
@@ -833,7 +900,7 @@ function AuthSheet({
             ]}
           >
             <Text style={styles.googleMark}>G</Text>
-            <Text style={styles.authButtonText}>{signingIn ? 'Connecting securely…' : 'Continue with Google'}</Text>
+            <Text style={styles.authButtonText}>{signingIn ? 'Connecting securelyâ¦' : 'Continue with Google'}</Text>
           </Pressable>
           {error ? <Text accessibilityRole="alert" style={[styles.authError, { color: colors.destructive }]}>{error}</Text> : null}
           <Text style={[styles.authFootnote, { color: colors.mutedForeground }]}>
@@ -978,7 +1045,7 @@ function ProfileEditSheet({
             ]}
           >
             <Text style={[styles.authButtonText, { color: colors.primaryForeground }]}>
-              {saving ? 'Saving…' : 'Save profile'}
+              {saving ? 'Savingâ¦' : 'Save profile'}
             </Text>
           </Pressable>
         </KeyboardAwareScrollViewCompat>

@@ -1,11 +1,11 @@
-name: Panda 89 - Global Openings and Calendar Window
+name: Panda 90 - One-device New Openings Test
 on:
   push:
     branches:
       - panda-build-88
 jobs:
   build_android_preview:
-    name: Panda 89 Android update APK
+    name: Panda 90 Android update APK
     type: build
     params:
       platform: android
