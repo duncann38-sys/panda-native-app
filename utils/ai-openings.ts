@@ -10,6 +10,12 @@ export const EMPTY_OPENING_ROTATION_STATE: OpeningRotationState = {
 };
 
 const MAX_REMEMBERED_OPENINGS = 120;
+const OPENING_LOOKBACK_MONTHS = 3;
+
+function openingWindowStart(now: number): number {
+  const current = new Date(now);
+  return Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - OPENING_LOOKBACK_MONTHS, 1, 12, 0, 0);
+}
 
 function validPlaceId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 255 && !/\s/.test(value);
@@ -36,7 +42,7 @@ export function hasDatedOpeningEvidence(venue: {
   const opened = venue.openingDate ?? '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opened)) return false;
   const openedAt = Date.parse(opened + 'T12:00:00Z');
-  if (!Number.isFinite(openedAt) || openedAt > now || now - openedAt > 60 * 86_400_000
+  if (!Number.isFinite(openedAt) || openedAt > now || openedAt < openingWindowStart(now)
     || new Date(openedAt).toISOString().slice(0, 10) !== opened) return false;
   try {
     const url = new URL(venue.openingSourceUrl ?? '');
