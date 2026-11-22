@@ -1,11 +1,13 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Notifications from 'expo-notifications';
+import { useFocusEffect, useRouter } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Location from 'expo-location';
 import { Alert, Linking, Modal, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth, type PandaAuthProvider } from '@/context/auth';
@@ -23,6 +25,7 @@ import {
 } from '@/utils/profile-preferences';
 import { profilePreferenceStore } from '@/utils/profile-preferences-store';
 import { persistProfileAvatar, removeProfileAvatar } from '@/utils/profile-avatar';
+import { PANDA_PRODUCTION_API } from '@/constants/services';
 
 const PROFILE_BACKGROUND = '#DDF0DE';
 type FeatherName = keyof typeof Feather.glyphMap;
@@ -45,7 +48,7 @@ export default function ProfileScreen() {
   const profileTopPadding = Platform.OS === 'web' ? 21 : insets.top + 8;
   const { savedIds } = useSavedVenues();
   const { coordinates, liveArea } = useLiveVenues();
-  const { account, signingIn, error: authError, signIn, signOut, clearError } = useAuth();
+  const { account, getIdToken, signingIn, error: authError, signIn, signOut, clearError } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [authSheetOpen, setAuthSheetOpen] = useState(false);
   const [profileEditOpen, setProfileEditOpen] = useState(false);
@@ -56,6 +59,9 @@ export default function ProfileScreen() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [homeAddressError, setHomeAddressError] = useState<string | null>(null);
   const [savingHomeAddress, setSavingHomeAddress] = useState(false);
+  const [newOpeningsPushEnabled, setNewOpeningsPushEnabled] = useState(false);
+  const [newOpeningsPushReady, setNewOpeningsPushReady] = useState(false);
+  const [savingNewOpeningsPush, setSavingNewOpeningsPush] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
   const ownerKey = useRef(preferencesKey);
   ownerKey.current = preferencesKey;
@@ -130,6 +136,69 @@ export default function ProfileScreen() {
     } finally {
       setSavingProfile(false);
     }
+  };
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setNewOpeningsPushEnabled(false);
+    setNewOpeningsPushReady(!account?.uid);
+    if (!account?.uid) return () => { active = false; };
+    (async () => {
+      try {
+        const idToken = await getIdToken();
+        const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+          method: 'GET', headers: { Authorization: 'Bearer ' + idToken, Accept: 'application/json' },
+        });
+        const data = await response.json();
+        if (active && response.ok) setNewOpeningsPushEnabled(data.enabled === true);
+      } catch { /* The setting remains off if the API is unavailable. */ }
+      finally { if (active) setNewOpeningsPushReady(true); }
+    })();
+    return () => { active = false; };
+  }, [account?.uid, getIdToken]));
+
+  const handleNewOpeningsPushChange = async (enabled: boolean) => {
+    if (!account?.uid) {
+      Alert.alert('Sign in to enable weekly alerts', 'Panda can save a weekly openings preference to your account once you sign in.');
+      return;
+    }
+    setSavingNewOpeningsPush(true);
+    try {
+      const idToken = await getIdToken();
+      let fcmToken: string | undefined;
+      if (enabled) {
+        if (Platform.OS !== 'android') {
+          throw new Error('Direct Firebase push registration is not configured for this platform yet. Your setting was not changed.');
+        }
+        let permission = await Notifications.getPermissionsAsync();
+        if (!permission.granted) permission = await Notifications.requestPermissionsAsync();
+        if (!permission.granted) throw new Error('Allow Panda to send notifications in your device settings, then try again.');
+        const deviceToken = await Notifications.getDevicePushTokenAsync();
+        if (deviceToken.type !== 'android' || typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) {
+          throw new Error('Panda could not obtain an Android Firebase token on this build. Your setting was not changed.');
+        }
+        fcmToken = deviceToken.data;
+      }
+      let citySlug: string | undefined;
+      try {
+        const cursor = await AsyncStorage.getItem('panda.new-openings.feed.v1:' + account.uid);
+        const parsed = cursor ? JSON.parse(cursor) as { citySlug?: unknown } : null;
+        if (typeof parsed?.citySlug === 'string') citySlug = parsed.citySlug;
+      } catch { /* City is optional; the next feed visit will update it. */ }
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ enabled, ...(fcmToken ? { fcmToken } : {}), ...(citySlug ? { citySlug } : {}) }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.status === 'fcm_token_required'
+        ? 'Panda needs a valid Firebase token before it can enable weekly alerts.'
+        : 'Panda could not save this notification preference. Please try again.');
+      setNewOpeningsPushEnabled(data.enabled === true);
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Panda could not update weekly alerts.';
+      Alert.alert('Weekly openings alerts', message);
+    } finally { setSavingNewOpeningsPush(false); }
   };
 
   const handleNotificationsChange = async (enabled: boolean) => {
@@ -424,6 +493,10 @@ export default function ProfileScreen() {
         notificationsEnabled={profilePreferences.notificationsEnabled}
         notificationsReady={profilePreferencesReady}
         onNotificationsChange={(enabled) => { void handleNotificationsChange(enabled); }}
+        newOpeningsPushEnabled={newOpeningsPushEnabled}
+        newOpeningsPushReady={newOpeningsPushReady}
+        savingNewOpeningsPush={savingNewOpeningsPush}
+        onNewOpeningsPushChange={(enabled) => { void handleNewOpeningsPushChange(enabled); }}
         onClose={() => setSettingsOpen(false)}
         onEditProfile={() => {
           setSettingsOpen(false);
@@ -610,6 +683,10 @@ function SettingsSheet({
   notificationsEnabled,
   notificationsReady,
   onNotificationsChange,
+  newOpeningsPushEnabled,
+  newOpeningsPushReady,
+  savingNewOpeningsPush,
+  onNewOpeningsPushChange,
   onClose,
   onEditProfile,
 }: {
@@ -618,6 +695,10 @@ function SettingsSheet({
   notificationsEnabled: boolean;
   notificationsReady: boolean;
   onNotificationsChange: (value: boolean) => void;
+  newOpeningsPushEnabled: boolean;
+  newOpeningsPushReady: boolean;
+  savingNewOpeningsPush: boolean;
+  onNewOpeningsPushChange: (value: boolean) => void;
   onClose: () => void;
   onEditProfile: () => void;
 }) {
@@ -671,6 +752,27 @@ function SettingsSheet({
             <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
               This preference is saved on this device.
             </Text>
+            <View style={styles.settingRow}>
+              <View style={[styles.accountIcon, { backgroundColor: colors.goldSoft }]}>
+                <Feather name="sparkles" size={20} color={colors.goldDeep} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.settingTitle, { color: colors.foreground }]}>Weekly new openings</Text>
+                <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>Friday picks for your last-seen city. Panda stores the city, not your precise location.</Text>
+              </View>
+              <Switch
+                accessibilityLabel="Weekly new openings"
+                value={newOpeningsPushEnabled}
+                onValueChange={onNewOpeningsPushChange}
+                disabled={!newOpeningsPushReady || savingNewOpeningsPush}
+                trackColor={{ false: colors.border, true: colors.green600 }}
+                thumbColor={colors.card}
+              />
+            </View>
+            {!newOpeningsPushReady || savingNewOpeningsPush ? null : !newOpeningsPushEnabled ? (
+              <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>Turn this on to receive one weekly digest. Device notification permission is requested only when you opt in.</Text>
+            ) : null}
+
           </View>
 
           <Text style={[styles.version, { color: colors.mutedForeground }]}>Panda · v1.0</Text>

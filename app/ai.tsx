@@ -96,6 +96,9 @@ type AiVenue = {
   openingSourceUrl?: string;
   openingReportedAt?: string;
   openingDate?: string;
+  openingDesignation?: string;
+  openingEvidence?: string;
+  editorialNote?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -114,6 +117,9 @@ type Message = {
   sourceLabel?: string;
   weatherAttribution?: { label: string; url: string };
   newSelection?: boolean;
+  newOpeningsHasMore?: boolean;
+  newOpeningsNextOffset?: number;
+  weeklyOpeningAlert?: boolean;
   rideRequest?: boolean;
   transit?: AiTransitContext;
   requestId?: number;
@@ -509,8 +515,8 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { coordinates, refreshLocation, liveVenues } = useLiveVenues();
-  const { account } = useAuth();
-  const { prompt: promptParam } = useLocalSearchParams<{ prompt?: string | string[] }>();
+  const { account, getIdToken } = useAuth();
+  const { prompt: promptParam, weeklyOpenings: weeklyOpeningsParam } = useLocalSearchParams<{ prompt?: string | string[]; weeklyOpenings?: string | string[] }>();
   const initialPrompt = Array.isArray(promptParam) ? promptParam[0]?.trim() ?? '' : promptParam?.trim() ?? '';
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -542,6 +548,36 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
   const primaryPendingRef = useRef(false);
   const primaryControllerRef = useRef<AbortController | null>(null);
   const activeAiVenueRef = useRef<AiVenue | null>(null);
+  const newOpeningOffsetRef = useRef(0);
+  const newOpeningHasMoreRef = useRef(false);
+  const syncedOpeningCityRef = useRef('');
+
+  useFocusEffect(useCallback(() => {
+    const uid = account?.uid;
+    if (!uid) return;
+    let active = true;
+    void (async () => {
+      try {
+        const idToken = await getIdToken();
+        const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+          method: 'POST', headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ action: 'consume-chat-alerts' }),
+        });
+        if (!response.ok) return;
+        const data = await response.json() as { venues?: AiVenue[]; text?: string };
+        const verified = (data.venues || []).filter(venue => hasDatedOpeningEvidence(venue));
+        if (!active || !verified.length) return;
+        setMessages(current => {
+          const shown = new Set(current.flatMap(message => (message.venues || []).map(venue => venue.id).filter((id): id is string => Boolean(id))));
+          const fresh = verified.filter(venue => venue.id && !shown.has(venue.id));
+          if (!fresh.length) return current;
+          return [...current, { role: 'model', text: data.text || 'A few new high-end openings are worth a look ✨',
+            venues: fresh.slice(0, 15), newSelection: true, newOpeningsHasMore: false, weeklyOpeningAlert: true }];
+        });
+      } catch { /* Opening alerts are optional; regular chat remains available. */ }
+    })();
+    return () => { active = false; };
+  }, [account?.uid, getIdToken, weeklyOpeningsParam]));
 
   useEffect(() => {
     return () => {
@@ -647,7 +683,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       return;
     }
 
+    const isNextOpeningPage = /next\s+15/i.test(trimmed) && newOpeningHasMoreRef.current;
     const isNewOpeningSearch = isNewOpeningPrompt(trimmed);
+    if (isNewOpeningSearch && !isNextOpeningPage) { newOpeningOffsetRef.current = 0; newOpeningHasMoreRef.current = false; }
     const isTransit = isTransitQuestion(trimmed);
     const rideIntent = isUberRequest(trimmed);
     const sessionVenueContext = buildSessionVenueContext(messages, activeAiVenueRef.current);
@@ -837,7 +875,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             shownVenueIds: shownConciergeVenueIds(conversation),
             chatContext: { timeZone: localTimeZone() },
             ...(sessionVenueContext.recentVenues.length ? { sessionVenueContext } : {}),
-            ...(isNewOpeningSearch ? {newOpeningsOnly:true} : {}),
+            ...(isNewOpeningSearch ? {newOpeningsOnly:true, offset:newOpeningOffsetRef.current, limit:15} : {}),
             generationConfig: { temperature: 0.85, maxOutputTokens: 700 },
             ...(requestCoordinates
               ? {
@@ -865,6 +903,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         customItinerary?: boolean;
         customPubCrawl?: boolean;
         newOpeningsSearch?: boolean;
+        nextOffset?: number;
+        hasMore?: boolean;
+        citySlug?: string;
         rideRequest?: boolean;
         aiMode?: string;
         weather?: { attribution?: string; attributionUrl?: string; source?: string } | null;
@@ -873,6 +914,22 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       if (!isCurrentRequest()) return;
 
       const openingSearch = isNewOpeningSearch || data.newOpeningsSearch === true;
+      if (openingSearch && data.citySlug && account?.uid) {
+        const syncKey = account.uid + '|' + data.citySlug;
+        if (syncedOpeningCityRef.current !== syncKey) {
+          void getIdToken().then(async idToken => {
+            const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+              method: 'POST', headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json' },
+              body: JSON.stringify({ citySlug: data.citySlug }),
+            });
+            if (response.ok) syncedOpeningCityRef.current = syncKey;
+          }).catch(() => {});
+        }
+      }
+      if (data.newOpeningsSearch === true) {
+        newOpeningOffsetRef.current = Number.isSafeInteger(data.nextOffset) ? Math.max(0, data.nextOffset!) : 0;
+        newOpeningHasMoreRef.current = data.hasMore === true;
+      }
       const rideRequest = data.rideRequest === true;
       const rideOptions = data.aiMode === 'ride-options' || data.aiMode === 'ride-choices';
       const sources = safeAiSources(data.sources);
@@ -938,11 +995,11 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             && Number.isFinite(venue.distanceMeters)
             && Number(venue.distanceMeters) > 0;
         }
+        if (openingSearch) return data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue);
         return Boolean(venue.photoName)
-          && Number(venue.photoCount) >= (openingSearch ? 1 : 5)
+          && Number(venue.photoCount) >= 5
           && (!isNearbyShortcut(trimmed) || (Number.isFinite(venue.distanceMeters)
-            && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000))
-          && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue)));
+            && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000));
       });
       if (!data.customItinerary && !data.customPubCrawl && !data.newOpeningsSearch && !rideRequest) {
         eligibleVenues.sort(
@@ -952,7 +1009,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
             || Number(left.distanceMeters ?? Infinity) - Number(right.distanceMeters ?? Infinity),
         );
       }
-      eligibleVenues.splice(rideRequest ? 1 : data.newOpeningsSearch ? 20 : PANDA_AI_VENUE_LIMIT);
+      eligibleVenues.splice(rideRequest ? 1 : data.newOpeningsSearch ? 15 : PANDA_AI_VENUE_LIMIT);
       const onlyOpenNow = wantsOpenVenues(trimmed);
       const initialVenues = rideRequest
         ? eligibleVenues.slice(0, 1)
@@ -988,12 +1045,14 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
           sourceLabel,
           weatherAttribution,
           newSelection: data.newOpeningsSearch === true,
+          newOpeningsHasMore: data.newOpeningsSearch === true && data.hasMore === true,
+          newOpeningsNextOffset: data.newOpeningsSearch === true ? data.nextOffset : undefined,
           rideRequest,
         }));
       } else {
         setMessages((current) => [
           ...current,
-          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, sourceLabel, weatherAttribution, newSelection: data.newOpeningsSearch === true, rideRequest },
+          { role: 'model', requestId, text: baseReply, venues: initialVenues, sources, sourceLabel, weatherAttribution, newSelection: data.newOpeningsSearch === true, newOpeningsHasMore: data.newOpeningsSearch === true && data.hasMore === true, newOpeningsNextOffset: data.newOpeningsSearch === true ? data.nextOffset : undefined, rideRequest },
         ]);
       }
       primaryPendingRef.current = false;
@@ -1166,6 +1225,22 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     submittedPromptRef.current = initialPrompt;
     void sendMessage(initialPrompt);
   }, [initialPrompt]);
+
+  const muteWeeklyOpeningAlerts = async () => {
+    if (!account?.uid) return;
+    try {
+      const idToken = await getIdToken();
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+        method: 'POST', headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: false }),
+      });
+      if (!response.ok) throw new Error();
+      setMessages(current => current.map(message => message.weeklyOpeningAlert ? { ...message, weeklyOpeningAlert: false } : message));
+      Alert.alert('Weekly openings muted', 'You can turn these alerts back on in Profile settings.');
+    } catch {
+      Alert.alert('Could not mute alerts', 'Panda could not update this setting right now. Try Profile settings later.');
+    }
+  };
 
   const startVoiceInput = () => {
     if (sending) return;
@@ -1431,7 +1506,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                 <UberJourneyCard venue={message.venues[0]} colors={colors} />
               ) : (
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.results}>
-                  {message.venues.slice(0, message.newSelection ? 20 : PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
+                  {message.venues.slice(0, message.newSelection ? 15 : PANDA_AI_VENUE_LIMIT).map((venue, venueIndex) => {
                     const liveMatch = liveVenues.find((candidate) => candidate.id === venue.id);
                     const cardVenue: AiVenue = {
                       ...venue,
@@ -1463,6 +1538,21 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
                   })}
                 </ScrollView>
               )
+            ) : null}
+            {message.role === 'model' && message.newSelection && message.newOpeningsHasMore ? (
+              <Pressable testID="ai-new-openings-next" accessibilityRole="button" accessibilityLabel="Show the next 15 new openings"
+                disabled={sending} onPress={() => void sendMessage('Show me the next 15 new openings')}
+                style={({ pressed }) => [styles.newOpeningsMore, { backgroundColor: colors.card, borderColor: colors.border }, (pressed || sending) && { opacity: 0.6 }]}>
+                <Text style={[styles.newOpeningsMoreText, { color: colors.primary }]}>Discover the next 15</Text>
+                <Feather name="arrow-right" size={15} color={colors.primary} />
+              </Pressable>
+            ) : null}
+            {message.weeklyOpeningAlert ? (
+              <Pressable testID="ai-mute-weekly-openings" accessibilityRole="button" accessibilityLabel="Mute weekly new opening alerts"
+                onPress={() => void muteWeeklyOpeningAlerts()}
+                style={({ pressed }) => [styles.newOpeningsMore, { backgroundColor: colors.card, borderColor: colors.border }, pressed && { opacity: 0.6 }]}> 
+                <Text style={[styles.newOpeningsMoreText, { color: colors.mutedForeground }]}>Mute weekly alerts</Text>
+              </Pressable>
             ) : null}
             {message.sources?.length ? (
               <View style={styles.aiEventSources}>
@@ -2336,6 +2426,8 @@ const styles = StyleSheet.create({
     fontSize: 15,
     lineHeight: 22,
   },
+  newOpeningsMore: { alignItems: 'center', alignSelf: 'flex-start', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 8, marginTop: 10, paddingHorizontal: 14, paddingVertical: 9 },
+  newOpeningsMoreText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   aiEventSources: { gap: 8, marginTop: 10, width: '88%', maxWidth: 380 },
   aiEventSourcesLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.1, marginBottom: 2 },
   aiEventSourceLink: {
