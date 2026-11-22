@@ -802,7 +802,7 @@ function SettingsSheet({
             </Text>
             <View style={styles.settingRow}>
               <View style={[styles.accountIcon, { backgroundColor: colors.goldSoft }]}>
-                <Feather name="sparkles" size={20} color={colors.goldDeep} />
+                <Feather name="star" size={20} color={colors.goldDeep} />
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
                 <Text style={[styles.settingTitle, { color: colors.foreground }]}>Weekly new openings</Text>
