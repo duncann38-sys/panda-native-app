@@ -506,7 +506,7 @@ export async function createPandaTable(input: {
   if (guests.length > 0) {
     const thread: PandaThread = {
       id: doc(collection(db, 'threads')).id,
-      title: 'Table at ' + input.venueName.trim(),
+      title: 'Table at ' + input.venueName.trim().slice(0, 90),
       participantUids: guestUids,
       participantProfiles: [input.host, ...guests],
     };

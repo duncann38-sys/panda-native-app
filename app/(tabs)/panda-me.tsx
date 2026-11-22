@@ -1436,6 +1436,7 @@ export default function PandaMeScreen() {
                       value={messageInput}
                       onChangeText={setMessageInput}
                       placeholder="Write a message"
+                      maxLength={4000}
                       placeholderTextColor={colors.mutedForeground}
                       style={[styles.input, styles.composeInput]}
                       onSubmitEditing={submitMessage}
