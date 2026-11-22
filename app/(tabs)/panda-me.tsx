@@ -1,4 +1,4 @@
-app/(tabs)/panda-me.tsximport { Ionicons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { Image } from 'expo-image';
