@@ -452,7 +452,7 @@ export async function createPandaTable(input: {
 }): Promise<{ bookingId: string; failedGroupChat: boolean }> {
   const db = getPandaMeDb();
   const bookingRef = doc(collection(db, 'bookings'));
-  const requestedPartySize = Math.max(2, Math.min(12, input.partySize));
+  const requestedPartySize = Math.max(2, Math.min(12, Math.floor(input.partySize)));
   if (input.guests.length + 1 > requestedPartySize) {
     throw new Error('The invited guests cannot exceed the party size.');
   }
@@ -549,7 +549,7 @@ export async function updatePandaTable(
   if (updates.venueLng !== undefined) payload.venueLng = updates.venueLng;
   if (updates.dateTime !== undefined) payload.dateTime = Timestamp.fromDate(updates.dateTime);
   if (updates.partySize !== undefined)
-    payload.partySize = Math.max(2, Math.min(12, updates.partySize));
+    payload.partySize = Math.max(2, Math.min(12, Math.floor(updates.partySize)));
   if (updates.notes !== undefined) payload.notes = updates.notes.trim();
   if (updates.status !== undefined) payload.status = updates.status;
   await updateDoc(doc(getPandaMeDb(), 'bookings', bookingId), payload);

@@ -453,7 +453,7 @@ export default function PandaMeScreen() {
       Alert.alert('Add a venue', 'Give your table a venue name first.');
       return;
     }
-    const requestedPartySize = Math.max(2, Math.min(12, Number(partySize) || 4));
+    const requestedPartySize = Math.max(2, Math.min(12, Math.floor(Number(partySize) || 4)));
     if (selectedGuests.length + 1 > requestedPartySize) {
       Alert.alert(
         'Party size is too small',
@@ -485,7 +485,7 @@ export default function PandaMeScreen() {
           venueLat: lat ?? null,
           venueLng: lng ?? null,
           dateTime: date,
-          partySize: Number(partySize) || 4,
+          partySize: requestedPartySize,
           notes: tableNotes,
         });
         setTableOpen(false);
@@ -500,7 +500,7 @@ export default function PandaMeScreen() {
           venueLat: lat,
           venueLng: lng,
           dateTime: date,
-          partySize: Number(partySize) || 4,
+          partySize: requestedPartySize,
           notes: tableNotes,
           guests: selectedGuests,
         });
@@ -1232,8 +1232,8 @@ export default function PandaMeScreen() {
                 />
                 <Text style={styles.inputLabel}>INVITE FRIENDS</Text>
                 <Text style={styles.planMeta}>
-                  Choose up to {Math.min(9, Math.max(1, (Number(partySize) || 4) - 1))} friends.
-                  Everyone invited can chat together here.
+                  Choose up to {Math.min(9, Math.max(1, Math.floor(Number(partySize) || 4) - 1))}{' '}
+                  friends. Everyone invited can chat together here.
                 </Text>
                 <View style={styles.guestChips}>
                   {friends.map((friend) => {
@@ -1246,7 +1246,7 @@ export default function PandaMeScreen() {
                             selected
                               ? current.filter((item) => item.uid !== friend.uid)
                               : current.length <
-                                  Math.min(9, Math.max(1, (Number(partySize) || 4) - 1))
+                                  Math.min(9, Math.max(1, Math.floor(Number(partySize) || 4) - 1))
                                 ? [...current, friend]
                                 : current,
                           )
