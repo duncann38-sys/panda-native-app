@@ -47,10 +47,15 @@ function RootLayoutNav() {
       if (!response || !allowed) return;
       const content = response.notification.request.content;
       const data = content.data as Record<string, unknown> | undefined;
-      if (data?.type !== 'NEW_OPENINGS_WEEKLY') return;
+      const notificationType = data?.type;
+      if (notificationType !== 'NEW_OPENINGS_WEEKLY' && notificationType !== 'NEW_OPENINGS_WEEKLY_TEST') return;
       const id = response.notification.request.identifier;
       if (handledOpeningNotification.current === id) return;
       handledOpeningNotification.current = id;
+      if (notificationType === 'NEW_OPENINGS_WEEKLY_TEST') {
+        router.push('/new-restaurants');
+        return;
+      }
       router.push({ pathname: '/ai', params: { weeklyOpenings: String(Date.now()) } });
     };
     const subscription = Notifications.addNotificationResponseReceivedListener(handleResponse);

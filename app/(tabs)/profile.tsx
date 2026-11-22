@@ -62,6 +62,7 @@ export default function ProfileScreen() {
   const [newOpeningsPushEnabled, setNewOpeningsPushEnabled] = useState(false);
   const [newOpeningsPushReady, setNewOpeningsPushReady] = useState(false);
   const [savingNewOpeningsPush, setSavingNewOpeningsPush] = useState(false);
+  const [sendingNewOpeningsTest, setSendingNewOpeningsTest] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
   const ownerKey = useRef(preferencesKey);
   ownerKey.current = preferencesKey;
@@ -199,6 +200,47 @@ export default function ProfileScreen() {
       const message = failure instanceof Error ? failure.message : 'Panda could not update weekly alerts.';
       Alert.alert('Weekly openings alerts', message);
     } finally { setSavingNewOpeningsPush(false); }
+  };
+
+  const handleSendNewOpeningsTest = async () => {
+    if (!account?.uid || !newOpeningsPushEnabled) {
+      Alert.alert('Turn on weekly openings first', 'Enable weekly new openings before sending a device test.');
+      return;
+    }
+    if (Platform.OS !== 'android') {
+      Alert.alert('Android test only', 'Direct Firebase push testing is currently available on Android.');
+      return;
+    }
+    setSendingNewOpeningsTest(true);
+    try {
+      const permission = await Notifications.getPermissionsAsync();
+      if (!permission.granted) throw new Error('Allow Panda notifications in Android settings, then try again.');
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      if (deviceToken.type !== 'android' || typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) {
+        throw new Error('Panda could not get this device’s Firebase push token. Check Android Firebase setup and try again.');
+      }
+      const idToken = await getIdToken();
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/new-openings-notifications', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + idToken, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ action: 'send-test', fcmToken: deviceToken.data }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const messages = {
+          notifications_not_enabled: 'Turn on weekly openings first.',
+          device_not_registered: 'Switch weekly openings off and on to refresh this device registration.',
+          test_cooldown: 'Wait a minute before sending another test.',
+        };
+        throw new Error(messages[data.status as keyof typeof messages] || 'Panda could not send the test alert. Please try again.');
+      }
+      Alert.alert('Test alert sent', 'One alert was sent to this device only. Tap it to open New Openings.');
+    } catch (failure) {
+      const message = failure instanceof Error ? failure.message : 'Panda could not send the test alert.';
+      Alert.alert('Test alert not sent', message);
+    } finally {
+      setSendingNewOpeningsTest(false);
+    }
   };
 
   const handleNotificationsChange = async (enabled: boolean) => {
@@ -497,6 +539,8 @@ export default function ProfileScreen() {
         newOpeningsPushReady={newOpeningsPushReady}
         savingNewOpeningsPush={savingNewOpeningsPush}
         onNewOpeningsPushChange={(enabled) => { void handleNewOpeningsPushChange(enabled); }}
+        sendingNewOpeningsTest={sendingNewOpeningsTest}
+        onSendNewOpeningsTest={() => { void handleSendNewOpeningsTest(); }}
         onClose={() => setSettingsOpen(false)}
         onEditProfile={() => {
           setSettingsOpen(false);
@@ -687,6 +731,8 @@ function SettingsSheet({
   newOpeningsPushReady,
   savingNewOpeningsPush,
   onNewOpeningsPushChange,
+  sendingNewOpeningsTest,
+  onSendNewOpeningsTest,
   onClose,
   onEditProfile,
 }: {
@@ -699,6 +745,8 @@ function SettingsSheet({
   newOpeningsPushReady: boolean;
   savingNewOpeningsPush: boolean;
   onNewOpeningsPushChange: (value: boolean) => void;
+  sendingNewOpeningsTest: boolean;
+  onSendNewOpeningsTest: () => void;
   onClose: () => void;
   onEditProfile: () => void;
 }) {
@@ -771,6 +819,25 @@ function SettingsSheet({
             </View>
             {!newOpeningsPushReady || savingNewOpeningsPush ? null : !newOpeningsPushEnabled ? (
               <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>Turn this on to receive one weekly digest. Device notification permission is requested only when you opt in.</Text>
+            ) : null}
+            {newOpeningsPushEnabled && Platform.OS === 'android' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send a test alert to this device"
+                onPress={onSendNewOpeningsTest}
+                disabled={savingNewOpeningsPush || sendingNewOpeningsTest}
+                style={({ pressed }) => ({
+                  alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 13, paddingVertical: 10,
+                  flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 14, borderWidth: 1,
+                  backgroundColor: colors.card, borderColor: colors.border,
+                  opacity: pressed || savingNewOpeningsPush || sendingNewOpeningsTest ? 0.65 : 1,
+                })}
+              >
+                <Feather name="bell" size={15} color={colors.green700} />
+                <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
+                  {sendingNewOpeningsTest ? 'Sending test alert…' : 'Send a test alert to this device'}
+                </Text>
+              </Pressable>
             ) : null}
 
           </View>
