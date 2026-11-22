@@ -160,6 +160,16 @@ function serializableVenue(venue: Venue): Record<string, unknown> {
   return Object.fromEntries(Object.entries(data).filter(([key]) => SAVED_VENUE_FIELDS.has(key)));
 }
 
+function mergeSavedVenueIds(localIds: string[], previousCloudIds: string[], cloudIds: string[]) {
+  const next = new Set(localIds);
+  const currentCloud = new Set(cloudIds);
+  for (const id of previousCloudIds) {
+    if (!currentCloud.has(id)) next.delete(id);
+  }
+  for (const id of currentCloud) next.add(id);
+  return [...next];
+}
+
 export function SavedVenuesProvider({ children }: { children: React.ReactNode }) {
   const { account } = useAuth();
   const storageKey = account ? STORAGE_KEY + ':' + account.uid : STORAGE_KEY;
@@ -258,31 +268,36 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
     cloudIdsRef.current = [];
     setCloudReady(false);
     if (!account) return;
+    let live = true;
     try {
       const db = getPandaMeDb();
-      let firstSnapshot = true;
       const unsubscribe = onSnapshot(
         collection(db, 'users', account.uid, 'saved_venues'),
         (snapshot) => {
+          if (!live) return;
           const cloudIds = snapshot.docs.map((item) => item.id);
+          const previousCloudIds = cloudIdsRef.current;
           const cloudRecords: Record<string, Venue> = {};
           for (const item of snapshot.docs)
             cloudRecords[item.id] = savedVenueFromRecord(item.id, item.data());
           cloudIdsRef.current = cloudIds;
           setSavedVenueData((current) => ({ ...current, ...cloudRecords }));
-          if (firstSnapshot) {
-            firstSnapshot = false;
-            setSavedIds((current) => [...new Set([...current, ...cloudIds])]);
-          } else {
-            setSavedIds(cloudIds);
-          }
+          setSavedIds((current) => mergeSavedVenueIds(current, previousCloudIds, cloudIds));
           setCloudReady(true);
         },
-        () => setCloudReady(true),
+        () => {
+          if (live) setCloudReady(false);
+        },
       );
-      return unsubscribe;
+      return () => {
+        live = false;
+        unsubscribe();
+      };
     } catch {
-      setCloudReady(true);
+      if (live) setCloudReady(false);
+      return () => {
+        live = false;
+      };
     }
   }, [account?.uid]);
 
@@ -325,7 +340,6 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
       if (!after.has(id))
         deleteDoc(doc(db, 'users', account.uid, 'saved_venues', id)).catch(() => undefined);
     }
-    cloudIdsRef.current = [...savedIds];
   }, [savedIds, savedVenueData, account?.uid, cloudReady, hydrated]);
 
   const toggleSaved = (venue: Venue) => {
