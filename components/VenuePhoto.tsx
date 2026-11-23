@@ -5,6 +5,7 @@ import { PANDA_PARTNER_ACTIVITY_API, PANDA_PRODUCTION_API } from '@/constants/se
 import { getVenue } from '@/data/venues';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { safeVenuePhotoData, safeVenuePhotoLimit } from '@/utils/venue-photo-data';
 
 export type VenuePhotoItem = {
   uri: string;
@@ -14,27 +15,20 @@ export type VenuePhotoItem = {
 const MAX_VENUE_PHOTOS = 10;
 
 export function venuePhotoLimit(venue: Venue) {
-  const knownPhotoCount = Math.max(
-    Number.isFinite(venue.photoCount) ? Math.max(0, Math.floor(venue.photoCount!)) : 0,
-    venue.photoNames?.length ?? 0,
-    venue.photoUris?.length ?? 0,
-    venue.photoAttributions.length,
-    venue.photoName ? 1 : 0,
-    venue.primaryPhotoPath ? 1 : 0,
-  );
-  return Math.min(MAX_VENUE_PHOTOS, knownPhotoCount);
+  return safeVenuePhotoLimit(safeVenuePhotoData(venue));
 }
 
 export function venuePhotosFor(venueOrId: Venue | string): VenuePhotoItem[] {
   const venue = typeof venueOrId === 'string' ? getVenue(venueOrId) : venueOrId;
   if (!venue) return [];
   if (venue.source === 'openstreetmap' || venue.id.startsWith('osm:')) return [];
-  if (venue.photoUris?.length) return venue.photoUris.slice(0, MAX_VENUE_PHOTOS);
+  const photoData = safeVenuePhotoData(venue);
+  if (photoData.photoUris.length) return photoData.photoUris.slice(0, MAX_VENUE_PHOTOS);
   const venueId = venue.id;
-  const count = venuePhotoLimit(venue);
+  const count = safeVenuePhotoLimit(photoData);
   return Array.from({ length: count }, (_, index) => {
-    const photoName = venue.photoNames?.[index]?.name || (index === 0 ? venue.photoName : undefined);
-    const storedPath = index === 0 ? venue.primaryPhotoPath : undefined;
+    const photoName = photoData.photoNames[index]?.name || (index === 0 ? photoData.photoName : undefined);
+    const storedPath = index === 0 ? photoData.primaryPhotoPath : undefined;
     const storedPathUri = storedPath
       ? /^https?:\/\//i.test(storedPath)
         ? storedPath
@@ -45,9 +39,9 @@ export function venuePhotosFor(venueOrId: Venue | string): VenuePhotoItem[] {
         || (photoName
           ? `${PANDA_PRODUCTION_API}/api/place-photo?name=${encodeURIComponent(photoName)}&max=900`
           : `${PANDA_PARTNER_ACTIVITY_API}/api/partner/venues/${encodeURIComponent(venueId)}/photos/${index}/image`),
-      attribution: venue.photoNames?.[index]?.attribution
-        || venue.photoAttributions[index]
-        || venue.photoAttributions[0]
+      attribution: photoData.photoNames[index]?.attribution
+        || photoData.photoAttributions[index]
+        || photoData.photoAttributions[0]
         || venue.name,
     };
   });
