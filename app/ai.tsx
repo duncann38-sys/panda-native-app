@@ -802,7 +802,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const conversation: Message[] = [
       ...messages,
       { role: 'user', text: trimmed },
-      { role: 'model', requestId, text: 'Panda is thinking…' },
+      { role: 'model', requestId, text: '' },
     ];
     const needsCurrentLocation = requiresCurrentLocation(
       trimmed,
@@ -1357,6 +1357,10 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     ]);
   };
 
+  const visibleMessages = messages.filter(
+    (message) => !(message.role === 'model' && message.requestId && !message.text.trim()),
+  );
+
   return (
     <KeyboardAvoidingView
       behavior="padding"
@@ -1506,9 +1510,9 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {messages.map((message, index) => (
+        {visibleMessages.map((message, index) => (
           <View key={`${message.role}-${index}`} style={[styles.messageRow, polish.messageRow, message.role === 'user' && styles.userRow]}>
-            {message.role === 'model' && messages[index - 1]?.role !== 'model' ? (
+            {message.role === 'model' && visibleMessages[index - 1]?.role !== 'model' ? (
               <Text style={[polish.speaker, { color: isNight ? colors.goldLine : colors.green700 }]}>Panda</Text>
             ) : null}
             <View

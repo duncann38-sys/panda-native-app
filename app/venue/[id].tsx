@@ -199,6 +199,7 @@ export default function VenueDetailScreen() {
   const [profileResult, setGoogleProfile] = useState<GoogleVenueProfile | null>(null);
   const [profilePending, setProfilePending] = useState(false);
   const googleProfile = profileResult?.id === listingVenue?.id ? profileResult : null;
+  const googleHighlights = Array.isArray(googleProfile?.highlights) ? googleProfile.highlights : [];
   const venue = useMemo(() => hydrateVenueDetails(listingVenue, googleProfile), [listingVenue, googleProfile]);
   const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   const openedVenueId = useRef<string | null>(null);
@@ -251,7 +252,15 @@ export default function VenueDetailScreen() {
         if (!response.ok) throw new Error('Google venue profile unavailable');
         return response.json() as Promise<GoogleVenueProfile>;
       })
-      .then((profile) => setGoogleProfile(profile))
+      .then((profile) => {
+        const safeProfile = profile && typeof profile === 'object' ? profile : null;
+        setGoogleProfile(safeProfile
+          ? {
+              ...safeProfile,
+              highlights: Array.isArray(safeProfile.highlights) ? safeProfile.highlights : [],
+            }
+          : null);
+      })
       .catch((error: unknown) => {
         if (error instanceof Error && error.name === 'AbortError') return;
         setGoogleProfile(null);
@@ -322,7 +331,7 @@ export default function VenueDetailScreen() {
   }
 
   const displayedRating =
-    googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : venue.rating;
+    googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : String(venue.rating ?? '');
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;
   const displayedType = googleProfile?.primaryType || venue.type;
   const displayedOpenNow = fullCardOpenStatus(venue, googleProfile);
@@ -743,7 +752,7 @@ export default function VenueDetailScreen() {
             />
 
             <View style={styles.conciergeStack}>
-              {googleProfile?.highlights.length ? (
+              {googleHighlights.length ? (
                 <View style={styles.vibeSection}>
                   <View style={styles.vibeSectionHeading}>
                     <Text style={[styles.vibeSectionTitle, { color: colors.green800 }]}>Google venue details</Text>
@@ -754,7 +763,7 @@ export default function VenueDetailScreen() {
                   showsHorizontalScrollIndicator={false}
                   contentContainerStyle={styles.vibeRow}
                 >
-                  {googleProfile.highlights.map((highlight) => (
+                  {googleHighlights.map((highlight) => (
                       <View
                         key={highlight.id}
                         accessibilityLabel={`${highlight.label}, provided by Google Places`}

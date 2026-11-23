@@ -1,0 +1,12 @@
+name: Panda 95 - Complete Android Build
+on:
+  push:
+    branches:
+      - panda-apk-95-complete
+jobs:
+  build_android_preview:
+    name: Panda 95 Complete Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview

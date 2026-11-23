@@ -56,6 +56,7 @@ export type PlannerSearchResult = {
   mapsUri?: string;
   directionsLink?: string;
   photoAttribution?: string;
+  photoNames?: Array<{ name: string; attribution: string }>;
   photoName?: string;
   photoCount?: number;
   distanceMeters?: number;
@@ -197,9 +198,10 @@ export function venueFromSearchResult(
     premium: false,
     banging: false,
     promoted: false,
+    photoNames: result.photoNames,
     photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
-    photoName: result.photoName,
-    photoCount: result.photoCount ?? 0,
+    photoName: result.photoNames?.[0]?.name || result.photoName,
+    photoCount: result.photoCount ?? result.photoNames?.length ?? 0,
     detailsDeferred: result.detailsDeferred === true,
     discoveryCategories,
   };
@@ -675,7 +677,7 @@ export function PandaPlannerSheet({
                         accessibilityRole="button"
                         onPress={() => {
                           setOpen(false);
-                          onOpenDirections(venue, { plan, mode, price, location });
+                          onOpenVenue(venue, { plan, mode, price, location });
                         }}
                         style={[styles.venueCard, { backgroundColor: colors.card, borderColor: colors.border }]}
                       >
