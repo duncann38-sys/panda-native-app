@@ -16,6 +16,7 @@ export type BangingArea = {
 
 const cache = new Map<string, { expires: number; results: BangingArea }>();
 const flights = new Map<string, Promise<BangingArea>>();
+const failures = new Map<string, { expires: number; error: Error }>();
 
 async function fetchWithDeadline(input: string, milliseconds = 120_000) {
   const controller = new AbortController();
@@ -34,6 +35,9 @@ export function getBangingAreaResults(origin: Coordinates, premiumIds: string[] 
   const key = `${latitude}:${longitude}:${ids.join(',')}`;
   const stored = cache.get(key);
   if (stored && stored.expires > Date.now()) return Promise.resolve(stored.results);
+  const failed = failures.get(key);
+  if (failed && failed.expires > Date.now()) return Promise.reject(failed.error);
+  if (failed) failures.delete(key);
   const existing = flights.get(key);
   if (existing) return existing;
   for (const [oldKey, value] of cache) if (value.expires <= Date.now()) cache.delete(oldKey);
@@ -51,7 +55,12 @@ export function getBangingAreaResults(origin: Coordinates, premiumIds: string[] 
         throw new Error('Banging returned incomplete travel verification');
       }
       cache.set(key, { results: body, expires: Math.min(body.expiresAt, Date.now() + 3 * 60 * 60 * 1000) });
+      failures.delete(key);
       return body;
+    })
+    .catch(error => {
+      failures.set(key, { expires: Date.now() + 60_000, error });
+      throw error;
     })
     .finally(() => flights.delete(key));
   flights.set(key, promise);
