@@ -1,0 +1,12 @@
+name: Panda 96 - Card Tap Test Android Build
+on:
+  push:
+    branches:
+      - panda-apk-96-complete
+jobs:
+  build_android_preview:
+    name: Panda 96 Card Tap Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview
