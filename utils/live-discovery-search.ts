@@ -9,7 +9,7 @@ export const LIVE_DISCOVERY_SEARCH_QUERIES: Record<string, string> = {
   Japanese: 'japanese sushi',
   Mexican: 'mexican restaurants',
   Turkish: 'turkish restaurants',
-  Pubs: 'gastropub pub food',
+  Pubs: 'pubs gastropubs beer gardens',
   American: 'american diner',
   Meat: 'steakhouses barbecue restaurants',
   Bar: 'bars cocktail bars',
@@ -24,9 +24,11 @@ export const LIVE_DISCOVERY_SEARCH_QUERIES: Record<string, string> = {
   Bottomless: 'bottomless brunch',
   Dinner: 'dinner restaurants',
   Drinks: 'cocktail bars wine bars',
-  Sports: 'sports bars showing live football',
-  'Live Music': 'live music venues bars',
-  Nightlife: 'nightlife bars clubs',
+  Sports: 'sports bars showing football cricket darts and bowling',
+  'Live Music': 'live music venues concert halls karaoke music bars',
+  Nightlife: 'nightlife bars clubs dance halls karaoke',
+  Shops: 'shops off licences supermarkets grocery stores',
+  'Places of Interest': 'tourist attractions museums landmarks and art galleries',
 };
 
 export const LIVE_DISCOVERY_EXPANSION_RINGS_KM = [
