@@ -19,16 +19,11 @@ export function distanceBetween(
 export function interleavePromotions(source: Venue[]) {
   const organic = source.filter(venue => !venue.promoted);
   const promoted = source.filter(venue => venue.promoted);
-  if (!organic.length) return promoted;
   const result: Venue[] = [];
-  const interval = Math.max(1, Math.floor(organic.length / (promoted.length + 1)));
-  let promotedIndex = 0;
-  for (let index = 0; index < organic.length; index += 1) {
-    const venue = organic[index];
+  for (const venue of organic) {
     result.push(venue);
-    if (promotedIndex < promoted.length && (index + 1) % interval === 0) {
-      result.push(promoted[promotedIndex++]);
-    }
+    // Keep the release cadence: a promoted card occupies every fifth slot.
+    if ((result.length + 1) % 5 === 0 && promoted.length) result.push(promoted.shift()!);
   }
-  return [...result, ...promoted.slice(promotedIndex)];
+  return result;
 }
