@@ -36,10 +36,26 @@ function RootLayoutNav() {
   const router = useRouter();
   const handledOpeningNotification = useRef('');
   useEffect(() => {
+    Notifications.setNotificationHandler({
+      handleNotification: async () => ({
+        shouldShowBanner: true,
+        shouldShowList: true,
+        shouldPlaySound: true,
+        shouldSetBadge: false,
+      }),
+    });
     if (Platform.OS !== 'android') return;
     void Notifications.setNotificationChannelAsync('default', {
       name: 'Panda', importance: Notifications.AndroidImportance.DEFAULT,
       vibrationPattern: [0, 250, 250, 250], lightColor: '#C8A13A',
+    }).catch(() => {});
+    void Notifications.setNotificationChannelAsync('panda-messages', {
+      name: 'Panda messages',
+      importance: Notifications.AndroidImportance.HIGH,
+      vibrationPattern: [0, 300, 150, 300],
+      lightColor: '#C8A13A',
+      sound: 'default',
+      enableVibrate: true,
     }).catch(() => {});
   }, []);
   useEffect(() => {
@@ -47,7 +63,36 @@ function RootLayoutNav() {
       if (!response || !allowed) return;
       const content = response.notification.request.content;
       const data = content.data as Record<string, unknown> | undefined;
+      if (data?.kind === 'PANDA_ROUTE_CHANGE') {
+        const id = response.notification.request.identifier;
+        if (handledOpeningNotification.current === id) return;
+        handledOpeningNotification.current = id;
+        const venueData = typeof data.directionsVenueData === 'string' ? data.directionsVenueData : '';
+        router.push({
+          pathname: '/(tabs)/map',
+          params: {
+            directionsVenueId: String(data.venueId || ''),
+            directionsVenueData: venueData,
+            directionsReturn: 'map',
+            returnTo: 'panda-me',
+          },
+        });
+        return;
+      }
       const notificationType = data?.type;
+      if (notificationType === 'PANDA_MESSAGE') {
+        const threadId = typeof data?.threadId === 'string' ? data.threadId : '';
+        const messageId = typeof data?.messageId === 'string' ? data.messageId : '';
+        if (!threadId || !messageId) return;
+        const id = response.notification.request.identifier;
+        if (handledOpeningNotification.current === id) return;
+        handledOpeningNotification.current = id;
+        router.push({
+          pathname: '/(tabs)/panda-me',
+          params: { messageThreadId: threadId, notificationMessageId: messageId },
+        });
+        return;
+      }
       if (notificationType !== 'NEW_OPENINGS_WEEKLY' && notificationType !== 'NEW_OPENINGS_WEEKLY_TEST') return;
       const id = response.notification.request.identifier;
       if (handledOpeningNotification.current === id) return;

@@ -139,7 +139,7 @@ export default function SavedScreen() {
           <View style={styles.header}>
             <ProfileBackButton />
             <PandaMark compact />
-            <Text style={[styles.title, { color: colors.foreground }]}>Saved places</Text>
+            <Text style={[styles.title, { color: colors.foreground }]}>My Favourites</Text>
             <Text style={[styles.subtitle, { color: colors.mutedForeground }]}>
               Keep the good ones close.
             </Text>
@@ -170,7 +170,7 @@ export default function SavedScreen() {
               <View style={[styles.emptyIcon, { backgroundColor: colors.honeySoft }]}>
                 <Ionicons name="heart-outline" size={25} color={colors.honeyInk} />
               </View>
-              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>Your shortlist is empty</Text>
+              <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No favourites yet</Text>
               <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
                 Tap the heart on a place you like and it will show up here.
               </Text>

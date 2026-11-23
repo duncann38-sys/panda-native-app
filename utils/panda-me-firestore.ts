@@ -1,4 +1,5 @@
 import { getApps } from 'firebase/app';
+import { getAuth } from 'firebase/auth';
 import {
   arrayRemove,
   deleteDoc,
@@ -23,7 +24,8 @@ import {
   type QuerySnapshot,
   type Unsubscribe,
 } from 'firebase/firestore';
-import type { Venue } from '@/data/venues';
+import { getVenue, type Venue } from '@/data/venues';
+import { PANDA_RUNTIME_API } from '@/constants/services';
 
 export type PandaHomeAddress = {
   label: string;
@@ -148,6 +150,63 @@ function cleanHandle(value: string, uid: string) {
       .replace(/^-+|-+$/g, '')
       .slice(0, 18) || 'panda';
   return base + '-' + uid.slice(0, 4).toLowerCase();
+}
+
+function circlePulseVenue(placeId: string, data: DocumentData): Venue {
+  const fallback = getVenue(placeId);
+  const stored =
+    data.venueData && typeof data.venueData === 'object' && !Array.isArray(data.venueData)
+      ? (data.venueData as Partial<Venue>)
+      : {};
+  const name =
+    (typeof stored.name === 'string' && stored.name.trim()) ||
+    (typeof data.name === 'string' && data.name.trim()) ||
+    fallback?.name ||
+    'A saved place';
+  const category = stored.category || fallback?.category || 'Place of Interest';
+  const neighborhood =
+    (typeof stored.neighborhood === 'string' && stored.neighborhood) ||
+    (typeof data.neighborhood === 'string' && data.neighborhood) ||
+    fallback?.neighborhood ||
+    '';
+  const photoUris = Array.isArray(stored.photoUris)
+    ? stored.photoUris
+    : typeof data.photoUri === 'string' && data.photoUri
+      ? [{ uri: data.photoUri, attribution: name }]
+      : fallback?.photoUris || [];
+  return {
+    id: placeId,
+    name,
+    neighborhood,
+    category,
+    type: stored.type || fallback?.type || category,
+    distance: stored.distance || fallback?.distance || 'Saved',
+    walkingTime: stored.walkingTime || fallback?.walkingTime || '',
+    rating: stored.rating || fallback?.rating || '',
+    ratingCount: stored.ratingCount ?? fallback?.ratingCount ?? 0,
+    price: stored.price || fallback?.price || '',
+    distanceMeters: stored.distanceMeters ?? fallback?.distanceMeters ?? 0,
+    description: stored.description || fallback?.description || '',
+    hours: stored.hours || fallback?.hours || '',
+    feature: stored.feature || fallback?.feature || '',
+    fullAddress:
+      (typeof stored.fullAddress === 'string' && stored.fullAddress) ||
+      (typeof data.formattedAddress === 'string' && data.formattedAddress) ||
+      fallback?.fullAddress ||
+      neighborhood,
+    latitude: stored.latitude ?? (typeof data.latitude === 'number' ? data.latitude : fallback?.latitude),
+    longitude: stored.longitude ?? (typeof data.longitude === 'number' ? data.longitude : fallback?.longitude),
+    source: stored.source || fallback?.source,
+    openNow: stored.openNow ?? fallback?.openNow ?? false,
+    website: stored.website || fallback?.website || '',
+    mapsUri: stored.mapsUri || fallback?.mapsUri || '',
+    phone: stored.phone || fallback?.phone || '',
+    premium: stored.premium ?? fallback?.premium ?? false,
+    banging: stored.banging ?? fallback?.banging ?? false,
+    promoted: stored.promoted ?? fallback?.promoted ?? false,
+    photoAttributions: stored.photoAttributions || fallback?.photoAttributions || [],
+    photoUris,
+  };
 }
 
 export async function ensurePandaMeProfile(
@@ -441,6 +500,8 @@ function toDate(value: unknown): number {
 export async function createPandaTable(input: {
   host: PandaMeProfile;
   venueName: string;
+  venuePlaceId?: string | null;
+  venuePhoto?: string | null;
   neighborhood: string;
   venueAddress?: string;
   venueLat?: number;
@@ -464,9 +525,9 @@ export async function createPandaTable(input: {
   const batch = writeBatch(db);
   batch.set(bookingRef, {
     hostUid: input.host.uid,
-    venuePlaceId: null,
+    venuePlaceId: input.venuePlaceId || null,
     venueName: input.venueName.trim(),
-    venuePhoto: null,
+    venuePhoto: input.venuePhoto || null,
     neighborhood: input.neighborhood.trim(),
     venueAddress: input.venueAddress?.trim() || '',
     venueLat: input.venueLat ?? null,
@@ -679,6 +740,29 @@ export async function sendPandaMessage(
     createdAt: serverTimestamp(),
   });
   await batch.commit();
+  const app = getApps().find((candidate) => candidate.name === 'panda-native-auth');
+  const currentUser = app ? getAuth(app).currentUser : null;
+  if (currentUser) {
+    try {
+      const idToken = await currentUser.getIdToken();
+      await fetch(`${PANDA_RUNTIME_API}/api/panda-message-notifications`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'send',
+          threadId: thread.id,
+          messageId: messageRef.id,
+        }),
+      });
+    } catch {
+      // Message delivery must not fail because the optional push service is offline.
+    }
+  }
+  return messageRef.id;
 }
 
 export async function markPandaThreadRead(threadId: string, uid: string) {
@@ -693,6 +777,8 @@ export type PandaCirclePulseItem = {
   friendUid: string;
   friendName: string;
   friendHandle: string;
+  placeId: string;
+  venue: Venue;
   placeName: string;
   category: string;
   neighborhood: string;
@@ -732,17 +818,23 @@ export function subscribePandaCirclePulse(
       (snapshot) => {
         byFriend.set(
           friend.uid,
-          snapshot.docs.map((item) => ({
-            id: friend.uid + ':' + item.id,
-            friendUid: friend.uid,
-            friendName: friend.name,
-            friendHandle: friend.handle,
-            placeName: String(item.data().name || 'A saved place'),
-            category: String(item.data().category || 'Place'),
-            neighborhood: String(item.data().neighborhood || ''),
-            photoUri: typeof item.data().photoUri === 'string' ? item.data().photoUri : null,
-            savedAt: item.data().savedAt,
-          })),
+          snapshot.docs.map((item) => {
+            const data = item.data();
+            const venue = circlePulseVenue(item.id, data);
+            return {
+              id: friend.uid + ':' + item.id,
+              friendUid: friend.uid,
+              friendName: friend.name,
+              friendHandle: friend.handle,
+              placeId: item.id,
+              venue,
+              placeName: String(data.name || venue.name || 'A saved place'),
+              category: String(data.category || venue.category || 'Place'),
+              neighborhood: String(data.neighborhood || venue.neighborhood || ''),
+              photoUri: typeof data.photoUri === 'string' ? data.photoUri : null,
+              savedAt: data.savedAt,
+            };
+          }),
         );
         emit();
       },

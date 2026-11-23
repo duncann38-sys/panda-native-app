@@ -1,8 +1,9 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
-import { useRouter } from 'expo-router';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Image } from 'expo-image';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -19,10 +20,18 @@ import {
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ProfileAvatar } from '@/components/ProfileAvatar';
+import { SuggestionRow } from '@/components/SuggestionRow';
+import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useAuth } from '@/context/auth';
 import { useLiveVenues } from '@/context/live-venues';
 import { useSavedVenues } from '@/context/saved-venues';
+import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import {
+  buildLiveSavedVenue,
+  type LiveSavedVenuePhoto,
+  type LiveSavedVenueProfile,
+} from '@/utils/saved-venue-hydration';
 import {
   cancelPandaTable,
   createPandaTable,
@@ -53,6 +62,8 @@ import {
   type PandaTable,
   type PandaThread,
 } from '@/utils/panda-me-firestore';
+import { parseProfilePreferences } from '@/utils/profile-preferences';
+import { profilePreferenceStore } from '@/utils/profile-preferences-store';
 
 function formatTableDate(value: unknown) {
   const date =
@@ -118,18 +129,28 @@ function makeDateInput() {
 
 export default function PandaMeScreen() {
   const router = useRouter();
+  const { messageThreadId, notificationMessageId } = useLocalSearchParams<{
+    messageThreadId?: string | string[];
+    notificationMessageId?: string | string[];
+  }>();
   const insets = useSafeAreaInsets();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { account } = useAuth();
   const { liveArea, locationStatus, coordinates } = useLiveVenues();
-  const { savedIds, savedVenues, hydrated: savedHydrated } = useSavedVenues();
+  const {
+    savedIds,
+    savedVenues,
+    hydrated: savedHydrated,
+    syncError: savedSyncError,
+    toggleSaved,
+  } = useSavedVenues();
   const [profile, setProfile] = useState<PandaMeProfile | null>(null);
   const [home, setHome] = useState<{
     label: string;
     formattedAddress: string;
-    lat: number;
-    lng: number;
+    lat?: number;
+    lng?: number;
   } | null>(null);
   const [friends, setFriends] = useState<PandaFriend[]>([]);
   const [requests, setRequests] = useState<PandaFriendRequest[]>([]);
@@ -143,24 +164,183 @@ export default function PandaMeScreen() {
   const [tableOpen, setTableOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [homeInput, setHomeInput] = useState('');
+  const [homeSaveStatus, setHomeSaveStatus] = useState('');
+  const [permissionNotice, setPermissionNotice] = useState('');
   const [searchInput, setSearchInput] = useState('');
   const [friendResults, setFriendResults] = useState<PandaMeProfile[]>([]);
   const [searchingFriends, setSearchingFriends] = useState(false);
   const [savingHome, setSavingHome] = useState(false);
   const [activeThread, setActiveThread] = useState<PandaThread | null>(null);
+  const handledMessageNotification = useRef('');
   const [messages, setMessages] = useState<PandaMessage[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
   const [venueName, setVenueName] = useState('');
+  const [selectedVenue, setSelectedVenue] = useState<Venue | null>(null);
+  const venueNameRef = useRef('');
+  const venueInputRef = useRef<TextInput>(null);
+  const [tableValidationError, setTableValidationError] = useState('');
   const [venueNeighborhood, setVenueNeighborhood] = useState(liveArea || '');
   const [venueAddress, setVenueAddress] = useState('');
   const [tableDate, setTableDate] = useState(makeDateInput());
+  const [datePickerMode, setDatePickerMode] = useState<'date' | 'time' | null>(null);
   const [partySize, setPartySize] = useState('4');
   const [tableNotes, setTableNotes] = useState('');
   const [selectedGuests, setSelectedGuests] = useState<PandaFriend[]>([]);
   const [venueToShare, setVenueToShare] = useState<(typeof savedVenues)[number] | null>(null);
   const [creatingTable, setCreatingTable] = useState(false);
   const [editingTable, setEditingTable] = useState<PandaTable | null>(null);
+  const [liveSavedVenues, setLiveSavedVenues] = useState<Record<string, Venue>>({});
+  const [failedSavedIds, setFailedSavedIds] = useState<string[]>([]);
+  const [loadingSavedDetails, setLoadingSavedDetails] = useState(false);
+  const [savedRetryKey, setSavedRetryKey] = useState(0);
+  const [showAllFavourites, setShowAllFavourites] = useState(false);
+
+  useEffect(() => {
+    if (!savedHydrated || !savedIds.length) {
+      setLoadingSavedDetails(false);
+      return;
+    }
+
+    const existingById = new Map(
+      [...savedVenues, ...Object.values(liveSavedVenues)].map((venue) => [venue.id, venue]),
+    );
+    const placeIds = savedIds.filter((id) => {
+      const venue = existingById.get(id);
+      const name = venue?.name.trim().toLowerCase();
+      const needsDetails = !venue || !name || name === 'saved place' || name === 'a saved place';
+      return needsDetails && !liveSavedVenues[id] && !failedSavedIds.includes(id);
+    });
+    if (!placeIds.length) {
+      setLoadingSavedDetails(false);
+      return;
+    }
+
+    const controller = new AbortController();
+    setLoadingSavedDetails(true);
+    const pending = [...placeIds];
+    const results: Array<{ id: string; venue: Venue | null }> = [];
+    const loadOne = async (placeId: string) => {
+      const requestController = new AbortController();
+      const cancel = () => requestController.abort();
+      controller.signal.addEventListener('abort', cancel);
+      const timeout = setTimeout(cancel, 15_000);
+      try {
+        const profileResponse = await fetch(
+          `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`,
+          { signal: requestController.signal },
+        );
+        if (!profileResponse.ok) throw new Error('Venue details are unavailable.');
+        const profile = await profileResponse.json() as LiveSavedVenueProfile;
+        if (profile.id !== placeId) throw new Error('The saved venue did not match.');
+
+        let photos: LiveSavedVenuePhoto[] = [];
+        try {
+          const photosResponse = await fetch(
+            `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/photos`,
+            { signal: requestController.signal },
+          );
+          if (photosResponse.ok) {
+            const payload = await photosResponse.json() as { photos?: LiveSavedVenuePhoto[] };
+            photos = Array.isArray(payload.photos) ? payload.photos : [];
+          }
+        } catch {
+          if (controller.signal.aborted) throw new Error('Saved favourite loading was cancelled.');
+        }
+        return { id: placeId, venue: buildLiveSavedVenue(profile, photos, PANDA_RUNTIME_API) };
+      } catch {
+        return { id: placeId, venue: null };
+      } finally {
+        clearTimeout(timeout);
+        controller.signal.removeEventListener('abort', cancel);
+      }
+    };
+    const worker = async () => {
+      while (pending.length && !controller.signal.aborted) {
+        const id = pending.shift();
+        if (id) results.push(await loadOne(id));
+      }
+    };
+
+    Promise.all([worker(), worker()])
+      .then(() => {
+        if (controller.signal.aborted) return;
+        const successful = results.filter(
+          (result): result is { id: string; venue: Venue } => result.venue !== null,
+        );
+        const failed = results.filter((result) => result.venue === null).map((result) => result.id);
+        setLiveSavedVenues((current) => ({
+          ...current,
+          ...Object.fromEntries(successful.map((result) => [result.id, result.venue])),
+        }));
+        setFailedSavedIds((current) => [
+          ...current.filter((id) => savedIds.includes(id) && !placeIds.includes(id)),
+          ...failed,
+        ]);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadingSavedDetails(false);
+      });
+
+    return () => controller.abort();
+  }, [
+    failedSavedIds,
+    liveSavedVenues,
+    savedHydrated,
+    savedIds,
+    savedRetryKey,
+    savedVenues,
+  ]);
+
+  useEffect(() => {
+    setFailedSavedIds((current) => current.filter((id) => savedIds.includes(id)));
+  }, [savedIds]);
+
+  const favouriteVenues = useMemo(() => {
+    const byId = new Map([...savedVenues, ...Object.values(liveSavedVenues)].map((venue) => [venue.id, venue]));
+    return savedIds.flatMap((id) => {
+      const venue = byId.get(id);
+      if (!venue || !venue.name.trim() || /^(saved place|a saved place)$/i.test(venue.name.trim())) return [];
+      return [venue];
+    });
+  }, [liveSavedVenues, savedIds, savedVenues]);
+
+  const retrySavedDetails = () => {
+    setFailedSavedIds([]);
+    setSavedRetryKey((current) => current + 1);
+  };
+
+  const reportPandaMeError = (error: Error) => {
+    const isPermissionDenied = /permission[- ]denied|missing or insufficient permissions/i.test(
+      `${error.name} ${error.message}`,
+    );
+    setPermissionNotice(
+      isPermissionDenied
+        ? 'Panda Me account access is blocked by the current Firestore rules. Your device-saved places and home address remain available; account sync needs the Panda rules update.'
+        : error.message || 'Panda Me could not connect. Please try again.',
+    );
+  };
+
+  useEffect(() => {
+    let active = true;
+    profilePreferenceStore.read(account?.uid ?? null)
+      .then((stored) => {
+        if (!active) return;
+        const preferences = parseProfilePreferences(stored);
+        if (preferences.homeAddress) {
+          setHome({
+            label: 'Home',
+            formattedAddress: preferences.homeAddress,
+            lat: preferences.homeLatitude ?? undefined,
+            lng: preferences.homeLongitude ?? undefined,
+          });
+        }
+      })
+      .catch(() => {
+        if (active) setHomeSaveStatus('This device could not read its secure home-address storage.');
+      });
+    return () => { active = false; };
+  }, [account?.uid]);
 
   useEffect(() => {
     if (!account) {
@@ -189,26 +369,38 @@ export default function PandaMeScreen() {
           account.uid,
           (data) => {
             if (data) {
-              const nextHome = data.homeAddress as typeof home;
-              setHome(nextHome && typeof nextHome.formattedAddress === 'string' ? nextHome : null);
+              const remoteHome = data.homeAddress;
+              if (
+                remoteHome
+                && typeof remoteHome === 'object'
+                && 'formattedAddress' in remoteHome
+                && typeof remoteHome.formattedAddress === 'string'
+              ) {
+                const nextHome = remoteHome as { label?: string; formattedAddress: string; lat?: number; lng?: number };
+                setHome({
+                  label: nextHome.label || 'Home',
+                  formattedAddress: nextHome.formattedAddress,
+                  lat: nextHome.lat,
+                  lng: nextHome.lng,
+                });
+                void profilePreferenceStore.update(account.uid, {
+                  homeAddress: nextHome.formattedAddress,
+                  homeLatitude: typeof nextHome.lat === 'number' ? nextHome.lat : null,
+                  homeLongitude: typeof nextHome.lng === 'number' ? nextHome.lng : null,
+                }).catch(() => undefined);
+              }
             }
           },
-          () => undefined,
+          reportPandaMeError,
         );
-        offFriends = subscribePandaFriends(account.uid, setFriends, () => undefined);
-        offRequests = subscribeIncomingPandaRequests(account.uid, setRequests, () => undefined);
-        offTables = subscribePandaBookings(account.uid, setTables, () => undefined);
-        offThreads = subscribePandaThreads(account.uid, setThreads, () => undefined);
-        offPromotions = subscribePandaPromotions(setPromotions, () => undefined);
+        offFriends = subscribePandaFriends(account.uid, setFriends, reportPandaMeError);
+        offRequests = subscribeIncomingPandaRequests(account.uid, setRequests, reportPandaMeError);
+        offTables = subscribePandaBookings(account.uid, setTables, reportPandaMeError);
+        offThreads = subscribePandaThreads(account.uid, setThreads, reportPandaMeError);
+        offPromotions = subscribePandaPromotions(setPromotions, reportPandaMeError);
       })
       .catch((error) => {
-        if (live)
-          Alert.alert(
-            'Panda Me',
-            error instanceof Error
-              ? error.message
-              : 'Panda Me could not connect. Please try again.',
-          );
+        if (live) reportPandaMeError(error instanceof Error ? error : new Error('Panda Me could not connect.'));
       });
     return () => {
       live = false;
@@ -227,9 +419,10 @@ export default function PandaMeScreen() {
       return;
     }
     try {
-      return subscribePandaGuestStatuses(account.uid, setGuestStatuses, () => undefined);
-    } catch {
+      return subscribePandaGuestStatuses(account.uid, setGuestStatuses, reportPandaMeError);
+    } catch (error) {
       setGuestStatuses({});
+      reportPandaMeError(error instanceof Error ? error : new Error('Guest access is unavailable right now.'));
     }
   }, [account?.uid]);
 
@@ -240,13 +433,32 @@ export default function PandaMeScreen() {
     }
     let off = () => {};
     try {
-      off = subscribePandaMessages(activeThread.id, setMessages, () => undefined);
-      if (account) markPandaThreadRead(activeThread.id, account.uid).catch(() => undefined);
-    } catch {
-      /* Firebase may still be restoring the signed-in session. */
+      off = subscribePandaMessages(activeThread.id, setMessages, reportPandaMeError);
+      if (account) {
+        markPandaThreadRead(activeThread.id, account.uid).catch((error) => {
+          reportPandaMeError(error instanceof Error ? error : new Error('Could not mark this conversation as read.'));
+        });
+      }
+    } catch (error) {
+      reportPandaMeError(error instanceof Error ? error : new Error('This conversation is unavailable right now.'));
     }
     return () => off();
   }, [activeThread?.id, account?.uid]);
+
+  useEffect(() => {
+    const threadId = Array.isArray(messageThreadId) ? messageThreadId[0] : messageThreadId;
+    const messageId = Array.isArray(notificationMessageId)
+      ? notificationMessageId[0]
+      : notificationMessageId;
+    if (!account?.uid || !threadId || !messageId) return;
+    const notificationKey = `${threadId}:${messageId}`;
+    if (handledMessageNotification.current === notificationKey) return;
+    const thread = threads.find((item) => item.id === threadId);
+    if (!thread) return;
+    handledMessageNotification.current = notificationKey;
+    setActiveThread(thread);
+    setMessagesOpen(true);
+  }, [account?.uid, messageThreadId, notificationMessageId, threads]);
 
   useEffect(() => {
     if (liveArea && !venueNeighborhood) setVenueNeighborhood(liveArea);
@@ -258,40 +470,72 @@ export default function PandaMeScreen() {
       return;
     }
     try {
-      return subscribePandaCirclePulse(friends, setCirclePulse, () => undefined);
-    } catch {
+      return subscribePandaCirclePulse(friends, setCirclePulse, reportPandaMeError);
+    } catch (error) {
       setCirclePulse([]);
+      reportPandaMeError(error instanceof Error ? error : new Error('Your circle activity is unavailable right now.'));
     }
   }, [friends]);
 
   const openHome = () => {
     setHomeInput(home?.formattedAddress || '');
+    setHomeSaveStatus('');
     setHomeOpen(true);
   };
+  const openPandaMap = (params: Record<string, string> = {}) => {
+    router.push({
+      pathname: '/(tabs)/map',
+      params: { returnTo: 'panda-me', ...params },
+    });
+  };
   const saveHomeAddress = async () => {
-    if (!account || !homeInput.trim()) {
-      Alert.alert('Add your home address', 'Enter an address first.');
+    if (!homeInput.trim()) {
+      setHomeSaveStatus('Enter a home address before saving.');
       return;
     }
     setSavingHome(true);
     try {
-      const locations = await Location.geocodeAsync(homeInput.trim());
-      if (!locations.length)
-        throw new Error('Panda could not find that address. Check it and try again.');
+      const formattedAddress = homeInput.trim();
+      const locations = await Location.geocodeAsync(formattedAddress).catch(() => []);
       const first = locations[0];
+      await profilePreferenceStore.update(account?.uid ?? null, {
+        homeAddress: formattedAddress,
+        homeLatitude: first?.latitude ?? null,
+        homeLongitude: first?.longitude ?? null,
+      });
       const address = {
         label: 'Home',
-        formattedAddress: homeInput.trim(),
-        lat: first.latitude,
-        lng: first.longitude,
+        formattedAddress,
+        ...(first ? { lat: first.latitude, lng: first.longitude } : {}),
       };
-      await savePandaHome(account.uid, address);
       setHome(address);
+      let synced = false;
+      if (account && first) {
+        try {
+          await savePandaHome(account.uid, {
+            label: 'Home',
+            formattedAddress,
+            lat: first.latitude,
+            lng: first.longitude,
+          });
+          synced = true;
+        } catch (error) {
+          reportPandaMeError(error instanceof Error ? error : new Error('Panda account sync is unavailable.'));
+        }
+      }
+      setHomeSaveStatus(
+        synced
+          ? 'Home saved securely on this device and synced with your Panda account.'
+          : first
+            ? 'Home saved securely on this device. Account sync is unavailable right now.'
+            : 'Home saved securely on this device. Address coordinates could not be verified, but Uber can still use the address.',
+      );
       setHomeOpen(false);
     } catch (error) {
-      Alert.alert(
-        'Could not save home',
-        error instanceof Error ? error.message : 'Please check the address and try again.',
+      setHomeSaveStatus(
+        error instanceof Error
+          ? `Could not save securely: ${error.message}`
+          : 'Could not save securely on this device. Please try again.',
       );
     } finally {
       setSavingHome(false);
@@ -304,10 +548,7 @@ export default function PandaMeScreen() {
     try {
       setFriendResults(await searchPandaProfiles(searchInput, account.uid));
     } catch (error) {
-      Alert.alert(
-        'Friend search',
-        error instanceof Error ? error.message : 'Search is unavailable right now.',
-      );
+      reportPandaMeError(error instanceof Error ? error : new Error('Friend search is unavailable right now.'));
     } finally {
       setSearchingFriends(false);
     }
@@ -320,10 +561,7 @@ export default function PandaMeScreen() {
       setFriendResults((current) => current.filter((item) => item.uid !== person.uid));
       Alert.alert('Request sent', 'Panda will let you know when ' + person.name + ' responds.');
     } catch (error) {
-      Alert.alert(
-        'Friend request',
-        error instanceof Error ? error.message : 'Could not send the request.',
-      );
+      reportPandaMeError(error instanceof Error ? error : new Error('Could not send the friend request.'));
     }
   };
 
@@ -332,10 +570,7 @@ export default function PandaMeScreen() {
     try {
       await respondToPandaRequest(item, profile, decision);
     } catch (error) {
-      Alert.alert(
-        'Friend request',
-        error instanceof Error ? error.message : 'Could not update the request.',
-      );
+      reportPandaMeError(error instanceof Error ? error : new Error('Could not update the friend request.'));
     }
   };
 
@@ -376,10 +611,7 @@ export default function PandaMeScreen() {
         );
         setVenueToShare(null);
       } catch (error) {
-        Alert.alert(
-          'Place not shared',
-          error instanceof Error ? error.message : 'Please try again.',
-        );
+        reportPandaMeError(error instanceof Error ? error : new Error('Place not shared. Please try again.'));
         return;
       }
     }
@@ -395,20 +627,21 @@ export default function PandaMeScreen() {
       await sendPandaMessage(activeThread, account.uid, messageInput.trim());
       setMessageInput('');
     } catch (error) {
-      Alert.alert(
-        'Message not sent',
-        error instanceof Error ? error.message : 'Try again in a moment.',
-      );
+      reportPandaMeError(error instanceof Error ? error : new Error('Message not sent. Try again in a moment.'));
     } finally {
       setSendingMessage(false);
     }
   };
 
-  const openNewTable = () => {
+  const openNewTable = (preset?: (typeof savedVenues)[number]) => {
     setEditingTable(null);
-    setVenueName('');
-    setVenueNeighborhood(liveArea || '');
-    setVenueAddress('');
+    const initialVenue = preset?.name || '';
+    setSelectedVenue(preset ?? null);
+    venueNameRef.current = initialVenue;
+    setVenueName(initialVenue);
+    setTableValidationError('');
+    setVenueNeighborhood(preset?.neighborhood || liveArea || '');
+    setVenueAddress(preset?.fullAddress || '');
     setTableDate(makeDateInput());
     setPartySize('4');
     setTableNotes('');
@@ -418,7 +651,10 @@ export default function PandaMeScreen() {
 
   const editTable = (table: PandaTable) => {
     setEditingTable(table);
+    setSelectedVenue(null);
+    venueNameRef.current = table.venueName;
     setVenueName(table.venueName);
+    setTableValidationError('');
     setVenueNeighborhood(table.neighborhood);
     setVenueAddress(table.venueAddress || '');
     setTableDate(asLocalDateInput(table.dateTime));
@@ -449,28 +685,33 @@ export default function PandaMeScreen() {
   };
 
   const submitTable = async () => {
-    if (!profile || !venueName.trim()) {
-      Alert.alert('Add a venue', 'Give your table a venue name first.');
+    const resolvedVenueName = venueNameRef.current.trim() || venueName.trim();
+    if (!profile) {
+      setTableValidationError('Your Panda profile is still connecting. Please try again in a moment.');
       return;
     }
+    if (!resolvedVenueName) {
+      setTableValidationError('Add a venue name, or choose one from your saved places.');
+      venueInputRef.current?.focus();
+      return;
+    }
+    setTableValidationError('');
     const requestedPartySize = Math.max(2, Math.min(12, Math.floor(Number(partySize) || 4)));
     if (selectedGuests.length + 1 > requestedPartySize) {
-      Alert.alert(
-        'Party size is too small',
-        'Increase the party size or remove a guest before saving.',
-      );
+      setTableValidationError('Increase the party size or remove a guest before saving.');
       return;
     }
     const date = new Date(tableDate);
     if (Number.isNaN(date.getTime()) || date.getTime() <= Date.now()) {
-      Alert.alert('Check the date', 'Choose a future date and time.');
+      setTableValidationError('Choose a future date and time.');
       return;
     }
+    setTableValidationError('');
     setCreatingTable(true);
     try {
-      let lat: number | undefined;
-      let lng: number | undefined;
-      if (venueAddress.trim()) {
+      let lat: number | undefined = selectedVenue?.latitude;
+      let lng: number | undefined = selectedVenue?.longitude;
+      if ((typeof lat !== 'number' || typeof lng !== 'number') && venueAddress.trim()) {
         const geocoded = await Location.geocodeAsync(venueAddress.trim()).catch(() => []);
         if (geocoded[0]) {
           lat = geocoded[0].latitude;
@@ -479,7 +720,7 @@ export default function PandaMeScreen() {
       }
       if (editingTable) {
         await updatePandaTable(editingTable.id, {
-          venueName,
+          venueName: resolvedVenueName,
           neighborhood: venueNeighborhood || liveArea || 'Nearby',
           venueAddress,
           venueLat: lat ?? null,
@@ -494,7 +735,9 @@ export default function PandaMeScreen() {
       } else {
         const created = await createPandaTable({
           host: profile,
-          venueName,
+          venueName: resolvedVenueName,
+          venuePlaceId: selectedVenue?.source === 'google_places' ? selectedVenue.id : null,
+          venuePhoto: selectedVenue?.photoUris?.[0]?.uri ?? null,
           neighborhood: venueNeighborhood || liveArea || 'Nearby',
           venueAddress,
           venueLat: lat,
@@ -506,6 +749,8 @@ export default function PandaMeScreen() {
         });
         setTableOpen(false);
         setVenueName('');
+      venueNameRef.current = '';
+      setSelectedVenue(null);
         setVenueAddress('');
         setTableNotes('');
         setSelectedGuests([]);
@@ -519,10 +764,9 @@ export default function PandaMeScreen() {
         );
       }
     } catch (error) {
-      Alert.alert(
-        'Could not create table',
-        error instanceof Error ? error.message : 'Please try again.',
-      );
+      const message = error instanceof Error ? error.message : 'Could not save this plan. Please try again.';
+      setTableValidationError(message);
+      reportPandaMeError(error instanceof Error ? error : new Error(message));
     } finally {
       setCreatingTable(false);
     }
@@ -567,6 +811,7 @@ export default function PandaMeScreen() {
         directionsVenueId: venue.placeId,
         directionsVenueData: JSON.stringify(routeVenue),
         directionsReturn: 'back',
+        returnTo: 'panda-me',
         routeMode: 'walking',
       },
     });
@@ -649,6 +894,19 @@ export default function PandaMeScreen() {
             {unread ? <View style={styles.unreadDot} /> : null}
           </Pressable>
         </View>
+        {permissionNotice ? (
+          <View style={styles.permissionNotice}>
+            <Ionicons name="lock-closed-outline" size={16} color={colors.goldDeep} />
+            <Text style={styles.permissionNoticeText}>{permissionNotice}</Text>
+            <Pressable
+              accessibilityLabel="Dismiss Panda Me sync notice"
+              onPress={() => setPermissionNotice('')}
+              style={styles.permissionNoticeClose}
+            >
+              <Ionicons name="close" size={16} color={colors.green800} />
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.profileRow}>
           <ProfileAvatar
             size={62}
@@ -684,25 +942,26 @@ export default function PandaMeScreen() {
             <Text style={styles.smallEditText}>{home ? 'Edit' : 'Set'}</Text>
           </Pressable>
         </View>
+        {homeSaveStatus ? <Text style={styles.homeSaveStatus}>{homeSaveStatus}</Text> : null}
 
-        <View style={styles.mapCard}>
-          <View style={styles.mapOrb}>
-            <Ionicons name="map-outline" size={23} color={colors.ivory} />
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Search venues on Google Maps near ${areaLabel}`}
+          onPress={() => openPandaMap()}
+          style={({ pressed }) => [styles.discoveryRow, pressed && styles.discoveryRowPressed]}
+        >
+          <View style={styles.discoveryIcon}>
+            <Ionicons name="map-outline" size={20} color={colors.green800} />
           </View>
-          <View style={styles.mapCopy}>
-            <Text style={styles.mapEyebrow}>DISCOVER AROUND YOU</Text>
-            <Text style={styles.mapTitle}>{areaLabel}</Text>
-            <Text style={styles.mapSubtitle}>
-              {coordinates
-                ? 'Your device location is ready for nearby places.'
-                : 'Nearby discovery and directions are still here.'}
+          <View style={styles.discoveryCopy}>
+            <Text style={styles.discoveryEyebrow}>EXPLORE WITH GOOGLE</Text>
+            <Text style={styles.discoveryTitle}>Search places anywhere</Text>
+            <Text style={styles.discoverySubtitle}>
+              {coordinates ? `Nearby first · currently around ${areaLabel}` : 'Search a venue or city worldwide'}
             </Text>
           </View>
-          <Pressable onPress={() => router.push('/map')} style={styles.mapButton}>
-            <Text style={styles.mapButtonText}>Explore map</Text>
-            <Ionicons name="arrow-forward" size={16} color={colors.green950} />
-          </Pressable>
-        </View>
+          <Ionicons name="arrow-forward" size={17} color={colors.green800} />
+        </Pressable>
 
         {requests.length ? (
           <View style={styles.requestSection}>
@@ -749,7 +1008,7 @@ export default function PandaMeScreen() {
               <Ionicons name="sparkles-outline" size={25} color={colors.honeySoft} />
             </View>
             <View style={styles.tableActions}>
-              <Pressable style={styles.tablePrimary} onPress={openNewTable}>
+              <Pressable style={styles.tablePrimary} onPress={() => openNewTable()}>
                 <Ionicons name="add" size={18} color={colors.green950} />
                 <Text style={styles.tablePrimaryText}>Plan a table</Text>
               </Pressable>
@@ -890,7 +1149,16 @@ export default function PandaMeScreen() {
               {circlePulse.slice(0, 5).map((item) => (
                 <Pressable
                   key={item.id}
-                  onPress={() => router.push('/map')}
+                  testID={`circle-saved-${item.placeId}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Open ${item.placeName} venue card`}
+                  onPress={() => router.push({
+                    pathname: '/venue/[id]',
+                    params: {
+                      id: item.placeId,
+                      venueData: JSON.stringify(item.venue),
+                    },
+                  })}
                   style={styles.pulseRow}
                 >
                   {item.photoUri ? (
@@ -928,58 +1196,90 @@ export default function PandaMeScreen() {
         <View style={styles.section}>
           <SectionTitle
             eyebrow="KEEP YOUR FAVOURITES CLOSE"
-            title="Saved places"
-            action="See all"
-            onPress={() => router.push('/saved')}
+            title="My Favourites"
+            action={favouriteVenues.length > 4 ? (showAllFavourites ? 'Show fewer' : 'See all') : undefined}
+            onPress={() => setShowAllFavourites((current) => !current)}
           />
-          {savedHydrated && savedVenues.length ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.savedRail}
-            >
-              {savedVenues.slice(0, 8).map((venue) => (
-                <View key={venue.id} style={styles.savedCard}>
-                  {venue.photoUris?.[0]?.uri ? (
-                    <Image
-                      source={{ uri: venue.photoUris[0].uri }}
-                      contentFit="cover"
-                      style={styles.savedPhoto}
+          {account && savedHydrated && savedSyncError ? (
+            <Text accessibilityLiveRegion="polite" style={styles.homeSaveStatus}>{savedSyncError}</Text>
+          ) : null}
+          {savedHydrated && favouriteVenues.length ? (
+            <View>
+              {favouriteVenues
+                .slice(0, showAllFavourites ? favouriteVenues.length : 4)
+                .map((venue) => (
+                  <View key={venue.id} style={styles.favouriteEntry}>
+                    <SuggestionRow
+                      venue={venue}
+                      activitySurface="saved"
+                      saved
+                      onToggleSaved={() => toggleSaved(venue)}
+                      onPress={() => router.push({
+                        pathname: '/venue/[id]',
+                        params: {
+                          id: venue.id,
+                          venueData: JSON.stringify({
+                            ...venue,
+                            activityContext: { surface: 'saved', placement: 'other' },
+                          }),
+                        },
+                      })}
                     />
-                  ) : (
-                    <View style={[styles.savedPhoto, styles.savedPhotoFallback]}>
-                      <Ionicons name="heart" size={25} color={colors.honey} />
+                    <View style={styles.savedActions}>
+                      <Pressable
+                        accessibilityLabel={`Plan a table at ${venue.name}`}
+                        onPress={() => openNewTable(venue)}
+                        style={styles.savedPlanButton}
+                      >
+                        <Ionicons name="calendar-outline" size={13} color={colors.green950} />
+                        <Text style={styles.savedPlanText}>Plan</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityLabel={`Share ${venue.name} with friends`}
+                        onPress={() => {
+                          setVenueToShare(venue);
+                          setFriendOpen(true);
+                        }}
+                        style={styles.shareButton}
+                      >
+                        <Ionicons name="paper-plane-outline" size={13} color={colors.green900} />
+                        <Text style={styles.shareText}>Share</Text>
+                      </Pressable>
                     </View>
-                  )}
-                  <Text style={styles.savedName} numberOfLines={1}>
-                    {venue.name}
-                  </Text>
-                  <Text style={styles.savedMeta} numberOfLines={1}>
-                    {venue.category} · {venue.neighborhood}
-                  </Text>
-                  <Pressable
-                    onPress={() => {
-                      setVenueToShare(venue);
-                      setFriendOpen(true);
-                    }}
-                    style={styles.shareButton}
-                  >
-                    <Ionicons name="paper-plane-outline" size={14} color={colors.green900} />
-                    <Text style={styles.shareText}>Share</Text>
+                  </View>
+                ))}
+              {failedSavedIds.length ? (
+                <View style={styles.favoriteRefreshNotice}>
+                  <Text style={styles.emptyText}>Some favourite details could not be refreshed.</Text>
+                  <Pressable accessibilityRole="button" onPress={retrySavedDetails}>
+                    <Text style={styles.textActionText}>Retry</Text>
                   </Pressable>
                 </View>
-              ))}
-            </ScrollView>
+              ) : loadingSavedDetails ? (
+                <View style={styles.favoriteRefreshNotice}>
+                  <ActivityIndicator color={colors.green700} />
+                  <Text style={styles.emptyText}>Refreshing your favourites…</Text>
+                </View>
+              ) : null}
+            </View>
           ) : (
             <View style={styles.emptyInline}>
               <Text style={styles.emptyText}>
-                {savedIds.length
-                  ? savedIds.length + ' saved places are on this device.'
-                  : 'Save a place you love and it will appear here.'}
+                {!savedHydrated || loadingSavedDetails
+                  ? 'Loading your favourites…'
+                  : savedIds.length
+                    ? 'Your saved venues are here, but their details could not be refreshed yet.'
+                    : 'Save a place you love and it will appear here.'}
               </Text>
-              <Pressable onPress={() => router.push('/saved')}>
-                <Text style={styles.textActionText}>Browse saved places</Text>
-              </Pressable>
+              {savedIds.length && failedSavedIds.length ? (
+                <Pressable accessibilityRole="button" onPress={retrySavedDetails}>
+                  <Text style={styles.textActionText}>Retry</Text>
+                </Pressable>
+              ) : !savedIds.length ? (
+                <Pressable onPress={() => openPandaMap()}>
+                  <Text style={styles.textActionText}>Explore places to save</Text>
+                </Pressable>
+              ) : null}
             </View>
           )}
         </View>
@@ -1191,11 +1491,20 @@ export default function PandaMeScreen() {
               <ScrollView style={styles.formScroll} keyboardShouldPersistTaps="handled">
                 <Text style={styles.inputLabel}>VENUE</Text>
                 <TextInput
+                  ref={venueInputRef}
                   value={venueName}
-                  onChangeText={setVenueName}
+                  onChangeText={(value) => {
+                    venueNameRef.current = value;
+                    setVenueName(value);
+                    if (selectedVenue && value !== selectedVenue.name) setSelectedVenue(null);
+                    if (tableValidationError) setTableValidationError('');
+                  }}
+                  onEndEditing={(event) => { venueNameRef.current = event.nativeEvent.text; }}
                   placeholder="Restaurant, pub or bar"
                   placeholderTextColor={colors.mutedForeground}
                   style={styles.input}
+                  accessibilityLabel="Venue name"
+                  returnKeyType="done"
                 />
                 <Text style={styles.inputLabel}>AREA</Text>
                 <TextInput
@@ -1214,22 +1523,72 @@ export default function PandaMeScreen() {
                   style={styles.input}
                 />
                 <Text style={styles.inputLabel}>DATE AND TIME</Text>
-                <TextInput
-                  value={tableDate}
-                  onChangeText={setTableDate}
-                  placeholder="YYYY-MM-DDTHH:mm"
-                  placeholderTextColor={colors.mutedForeground}
-                  style={styles.input}
-                />
+                <View style={styles.dateTimeRow}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose plan date"
+                    onPress={() => setDatePickerMode('date')}
+                    style={styles.dateTimeChoice}
+                  >
+                    <Ionicons name="calendar-outline" size={18} color={colors.green800} />
+                    <View>
+                      <Text style={styles.dateTimeLabel}>DATE</Text>
+                      <Text style={styles.dateTimeValue}>
+                        {new Date(tableDate).toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      </Text>
+                    </View>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Choose plan time"
+                    onPress={() => setDatePickerMode('time')}
+                    style={styles.dateTimeChoice}
+                  >
+                    <Ionicons name="time-outline" size={18} color={colors.green800} />
+                    <View>
+                      <Text style={styles.dateTimeLabel}>TIME</Text>
+                      <Text style={styles.dateTimeValue}>
+                        {new Date(tableDate).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    </View>
+                  </Pressable>
+                </View>
+                {datePickerMode ? (
+                  <DateTimePicker
+                    value={Number.isNaN(new Date(tableDate).getTime()) ? new Date() : new Date(tableDate)}
+                    mode={datePickerMode}
+                    display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                    minimumDate={datePickerMode === 'date' ? new Date() : undefined}
+                    onChange={(event, selectedDate) => {
+                      if (event.type === 'dismissed' || !selectedDate) {
+                        setDatePickerMode(null);
+                        return;
+                      }
+                      const next = new Date(tableDate);
+                      if (datePickerMode === 'date') {
+                        next.setFullYear(selectedDate.getFullYear(), selectedDate.getMonth(), selectedDate.getDate());
+                      } else {
+                        next.setHours(selectedDate.getHours(), selectedDate.getMinutes(), 0, 0);
+                      }
+                      setTableDate(asLocalDateInput(next));
+                      setDatePickerMode(null);
+                    }}
+                  />
+                ) : null}
                 <Text style={styles.inputLabel}>PARTY SIZE</Text>
-                <TextInput
-                  value={partySize}
-                  onChangeText={setPartySize}
-                  keyboardType="number-pad"
-                  placeholder="4"
-                  placeholderTextColor={colors.mutedForeground}
-                  style={styles.input}
-                />
+                <View style={styles.partySizeRail}>
+                  {['2', '3', '4', '6', '8', '10', '12'].map((size) => (
+                    <Pressable
+                      key={size}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: partySize === size }}
+                      onPress={() => setPartySize(size)}
+                      style={[styles.partySizeChoice, partySize === size && styles.partySizeChoiceSelected]}
+                    >
+                      <Text style={[styles.partySizeText, partySize === size && styles.partySizeTextSelected]}>{size}</Text>
+                    </Pressable>
+                  ))}
+                </View>
                 <Text style={styles.inputLabel}>INVITE FRIENDS</Text>
                 <Text style={styles.planMeta}>
                   Choose up to {Math.min(9, Math.max(1, Math.floor(Number(partySize) || 4) - 1))}{' '}
@@ -1281,6 +1640,9 @@ export default function PandaMeScreen() {
                   multiline
                 />
               </ScrollView>
+              {tableValidationError ? (
+                <Text accessibilityLiveRegion="polite" style={styles.formError}>{tableValidationError}</Text>
+              ) : null}
               <Pressable
                 disabled={creatingTable}
                 onPress={submitTable}
@@ -1308,7 +1670,7 @@ export default function PandaMeScreen() {
               <Pressable
                 onPress={() => {
                   setTableOpen(false);
-                  router.push('/map');
+                  openPandaMap();
                 }}
                 style={styles.sheetCancel}
               >
@@ -1566,6 +1928,33 @@ function createStyles(c: ReturnType<typeof useColors>) {
       gap: 12,
       padding: 13,
     },
+    homeSaveStatus: {
+      color: c.green700,
+      fontFamily: 'Inter_500Medium',
+      fontSize: 10,
+      lineHeight: 15,
+      marginTop: -12,
+      paddingHorizontal: 4,
+    },
+    permissionNotice: {
+      alignItems: 'center',
+      backgroundColor: c.honeySoft,
+      borderColor: c.goldLine,
+      borderRadius: 14,
+      borderWidth: 1,
+      flexDirection: 'row',
+      gap: 9,
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+    },
+    permissionNoticeText: {
+      color: c.green900,
+      flex: 1,
+      fontFamily: 'Inter_500Medium',
+      fontSize: 10,
+      lineHeight: 15,
+    },
+    permissionNoticeClose: { alignItems: 'center', height: 28, justifyContent: 'center', width: 26 },
     homeIcon: {
       alignItems: 'center',
       backgroundColor: c.honeySoft,
@@ -1591,6 +1980,30 @@ function createStyles(c: ReturnType<typeof useColors>) {
       paddingVertical: 8,
     },
     smallEditText: { color: c.green800, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+    discoveryRow: {
+      alignItems: 'center',
+      backgroundColor: c.card,
+      borderColor: c.border,
+      borderRadius: 19,
+      borderWidth: 1,
+      flexDirection: 'row',
+      gap: 12,
+      paddingHorizontal: 13,
+      paddingVertical: 12,
+    },
+    discoveryRowPressed: { opacity: 0.82, transform: [{ scale: 0.99 }] },
+    discoveryIcon: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderRadius: 14,
+      height: 42,
+      justifyContent: 'center',
+      width: 42,
+    },
+    discoveryCopy: { flex: 1, gap: 3 },
+    discoveryEyebrow: { color: c.goldDeep, fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 1.1 },
+    discoveryTitle: { color: c.green950, fontFamily: 'Inter_700Bold', fontSize: 13 },
+    discoverySubtitle: { color: c.mutedForeground, fontFamily: 'Inter_400Regular', fontSize: 10 },
     mapCard: {
       backgroundColor: c.green950,
       borderRadius: 22,
@@ -1820,13 +2233,37 @@ function createStyles(c: ReturnType<typeof useColors>) {
     savedCard: {
       backgroundColor: c.card,
       borderColor: c.border,
-      borderRadius: 17,
+      borderRadius: 20,
       borderWidth: 1,
       overflow: 'hidden',
-      paddingBottom: 10,
-      width: 190,
+      paddingBottom: 11,
+      width: 224,
     },
-    savedPhoto: { height: 103, width: '100%' },
+    savedMedia: { height: 138, overflow: 'hidden', position: 'relative', width: '100%' },
+    savedPhoto: { height: 138, width: '100%' },
+    savedCategoryPill: {
+      backgroundColor: 'rgba(255, 250, 238, 0.95)',
+      borderRadius: 12,
+      left: 10,
+      paddingHorizontal: 9,
+      paddingVertical: 6,
+      position: 'absolute',
+      top: 10,
+    },
+    savedCategoryText: { color: c.green900, fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 0.9 },
+    savedOpenOverlay: {
+      alignItems: 'center',
+      backgroundColor: 'rgba(4, 28, 20, 0.62)',
+      bottom: 0,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      left: 0,
+      paddingHorizontal: 12,
+      paddingVertical: 9,
+      position: 'absolute',
+      right: 0,
+    },
+    savedOpenText: { color: c.ivory, fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1 },
     savedPhotoFallback: {
       alignItems: 'center',
       backgroundColor: c.secondary,
@@ -1835,28 +2272,52 @@ function createStyles(c: ReturnType<typeof useColors>) {
     savedName: {
       color: c.foreground,
       fontFamily: 'Inter_700Bold',
-      fontSize: 13,
-      marginHorizontal: 11,
+      fontSize: 14,
+      marginHorizontal: 12,
       marginTop: 9,
     },
     savedMeta: {
       color: c.mutedForeground,
       fontFamily: 'Inter_400Regular',
       fontSize: 10,
-      marginHorizontal: 11,
+      marginHorizontal: 12,
       marginTop: 3,
     },
-    shareButton: {
+    savedActions: {
+      flexDirection: 'row',
+      gap: 7,
+      marginHorizontal: 10,
+      marginTop: 9,
+    },
+    favouriteEntry: { marginBottom: 13 },
+    favoriteRefreshNotice: {
       alignItems: 'center',
-      alignSelf: 'flex-start',
-      backgroundColor: c.secondary,
+      flexDirection: 'row',
+      gap: 9,
+      justifyContent: 'center',
+      paddingHorizontal: 8,
+      paddingVertical: 8,
+    },
+    savedPlanButton: {
+      alignItems: 'center',
+      backgroundColor: c.honey,
       borderRadius: 10,
+      flex: 1,
       flexDirection: 'row',
       gap: 5,
-      marginHorizontal: 11,
-      marginTop: 8,
-      paddingHorizontal: 9,
-      paddingVertical: 6,
+      height: 34,
+      justifyContent: 'center',
+    },
+    savedPlanText: { color: c.green950, fontFamily: 'Inter_700Bold', fontSize: 10 },
+    shareButton: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderRadius: 10,
+      flex: 1,
+      flexDirection: 'row',
+      gap: 5,
+      height: 34,
+      justifyContent: 'center',
     },
     shareText: { color: c.green900, fontFamily: 'Inter_600SemiBold', fontSize: 10 },
     emptyInline: {
@@ -2030,8 +2491,46 @@ function createStyles(c: ReturnType<typeof useColors>) {
       letterSpacing: 1.2,
       marginTop: 14,
     },
+    formError: {
+      color: c.destructive,
+      fontFamily: 'Inter_500Medium',
+      fontSize: 11,
+      lineHeight: 16,
+      marginTop: 6,
+      paddingHorizontal: 2,
+    },
     formScroll: { flexGrow: 0, marginTop: 4 },
     notesInput: { minHeight: 72, paddingTop: 12, textAlignVertical: 'top' },
+    dateTimeRow: { flexDirection: 'row', gap: 9, marginTop: 9 },
+    dateTimeChoice: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderColor: c.border,
+      borderRadius: 14,
+      borderWidth: 1,
+      flex: 1,
+      flexDirection: 'row',
+      gap: 10,
+      minHeight: 58,
+      paddingHorizontal: 12,
+    },
+    dateTimeLabel: { color: c.green700, fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 1 },
+    dateTimeValue: { color: c.green950, fontFamily: 'Inter_700Bold', fontSize: 13, marginTop: 3 },
+    partySizeRail: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 9 },
+    partySizeChoice: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderColor: c.border,
+      borderRadius: 14,
+      borderWidth: 1,
+      height: 40,
+      justifyContent: 'center',
+      minWidth: 43,
+      paddingHorizontal: 11,
+    },
+    partySizeChoiceSelected: { backgroundColor: c.green800, borderColor: c.green800 },
+    partySizeText: { color: c.green900, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+    partySizeTextSelected: { color: c.ivory },
     guestChips: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 9 },
     guestChip: {
       backgroundColor: c.secondary,

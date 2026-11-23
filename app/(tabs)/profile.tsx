@@ -12,7 +12,6 @@ import { ProfileAvatar } from '@/components/ProfileAvatar';
 import { KeyboardAwareScrollViewCompat } from '@/components/KeyboardAwareScrollViewCompat';
 import { useAuth, type PandaAuthProvider } from '@/context/auth';
 import { useBookingReminders } from '@/context/booking-reminders';
-import { useSavedVenues } from '@/context/saved-venues';
 import { useColors } from '@/hooks/useColors';
 import { useLiveVenues } from '@/context/live-venues';
 import {
@@ -46,7 +45,6 @@ export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const profileTopPadding = Platform.OS === 'web' ? 21 : insets.top + 8;
-  const { savedIds } = useSavedVenues();
   const { coordinates, liveArea } = useLiveVenues();
   const { account, getIdToken, signingIn, error: authError, signIn, signOut, clearError } = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -63,6 +61,10 @@ export default function ProfileScreen() {
   const [newOpeningsPushReady, setNewOpeningsPushReady] = useState(false);
   const [savingNewOpeningsPush, setSavingNewOpeningsPush] = useState(false);
   const [sendingNewOpeningsTest, setSendingNewOpeningsTest] = useState(false);
+  const [messagePushEnabled, setMessagePushEnabled] = useState(false);
+  const [messagePushReady, setMessagePushReady] = useState(false);
+  const [savingMessagePush, setSavingMessagePush] = useState(false);
+  const [sendingMessageTest, setSendingMessageTest] = useState(false);
   const preferencesKey = profilePreferencesStorageKey(account?.uid);
   const ownerKey = useRef(preferencesKey);
   ownerKey.current = preferencesKey;
@@ -157,6 +159,124 @@ export default function ProfileScreen() {
     })();
     return () => { active = false; };
   }, [account?.uid, getIdToken]));
+
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    setMessagePushEnabled(false);
+    setMessagePushReady(!account?.uid);
+    if (!account?.uid) return () => { active = false; };
+    (async () => {
+      try {
+        const idToken = await getIdToken();
+        const response = await fetch(PANDA_PRODUCTION_API + '/api/panda-message-notifications', {
+          headers: { Authorization: 'Bearer ' + idToken, Accept: 'application/json' },
+        });
+        const data = await response.json();
+        if (active && response.ok) setMessagePushEnabled(data.enabled === true);
+      } catch { /* Keep the switch off if the message alert service is unavailable. */ }
+      finally { if (active) setMessagePushReady(true); }
+    })();
+    return () => { active = false; };
+  }, [account?.uid, getIdToken]));
+
+  const handleMessagePushChange = async (enabled: boolean) => {
+    if (!account?.uid) {
+      Alert.alert('Sign in to enable message alerts', 'Friend message alerts are saved to your Panda account.');
+      return;
+    }
+    setSavingMessagePush(true);
+    try {
+      let fcmToken: string | undefined;
+      if (enabled) {
+        if (Platform.OS !== 'android') {
+          throw new Error('Message push alerts are currently configured for Android.');
+        }
+        let permission = await Notifications.getPermissionsAsync();
+        if (!permission.granted) permission = await Notifications.requestPermissionsAsync();
+        if (!permission.granted) throw new Error('Allow Panda to send notifications in Android settings, then try again.');
+        const deviceToken = await Notifications.getDevicePushTokenAsync();
+        if (deviceToken.type !== 'android' || typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) {
+          throw new Error('Panda could not obtain an Android Firebase token on this build.');
+        }
+        fcmToken = deviceToken.data;
+      }
+      const idToken = await getIdToken();
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/panda-message-notifications', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + idToken,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          action: 'register',
+          enabled,
+          ...(fcmToken ? { fcmToken } : {}),
+        }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(
+        data.status === 'fcm_token_required'
+          ? 'Panda needs a valid Firebase token before enabling message alerts.'
+          : 'Panda could not save this message-alert setting. Please try again.',
+      );
+      setMessagePushEnabled(data.enabled === true);
+    } catch (failure) {
+      Alert.alert(
+        'Message alerts',
+        failure instanceof Error ? failure.message : 'Panda could not update message alerts.',
+      );
+    } finally {
+      setSavingMessagePush(false);
+    }
+  };
+
+  const handleSendMessageTest = async () => {
+    if (!account?.uid || !messagePushEnabled) {
+      Alert.alert('Turn on message alerts first', 'Enable Friend message alerts before sending a device test.');
+      return;
+    }
+    if (Platform.OS !== 'android') {
+      Alert.alert('Android test only', 'Direct Firebase push testing is currently available on Android.');
+      return;
+    }
+    setSendingMessageTest(true);
+    try {
+      const permission = await Notifications.getPermissionsAsync();
+      if (!permission.granted) throw new Error('Allow Panda notifications in Android settings, then try again.');
+      const deviceToken = await Notifications.getDevicePushTokenAsync();
+      if (deviceToken.type !== 'android' || typeof deviceToken.data !== 'string' || !deviceToken.data.trim()) {
+        throw new Error('Panda could not get this device’s Firebase push token.');
+      }
+      const idToken = await getIdToken();
+      const response = await fetch(PANDA_PRODUCTION_API + '/api/panda-message-notifications', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + idToken,
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({ action: 'send-test', fcmToken: deviceToken.data }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const messages: Record<string, string> = {
+          notifications_not_enabled: 'Turn on Friend message alerts first.',
+          device_not_registered: 'Switch Friend message alerts off and on to refresh this device registration.',
+          test_cooldown: 'Wait a minute before sending another test.',
+        };
+        throw new Error(messages[data.status] || 'Panda could not send the message test alert.');
+      }
+      Alert.alert('Test alert sent', 'One message alert was sent to this Android device.');
+    } catch (failure) {
+      Alert.alert(
+        'Test alert not sent',
+        failure instanceof Error ? failure.message : 'Panda could not send the test alert.',
+      );
+    } finally {
+      setSendingMessageTest(false);
+    }
+  };
 
   const handleNewOpeningsPushChange = async (enabled: boolean) => {
     if (!account?.uid) {
@@ -388,13 +508,6 @@ export default function ProfileScreen() {
         <Text style={[styles.sectionLabel, { color: colors.green700 }]}>YOUR PANDA</Text>
         <View style={[styles.groupCard, { backgroundColor: colors.card }]}>
           <ProfileMenuRow
-            icon="bookmark"
-            title="Saved places"
-            subtitle={savedIds.length ? `${savedIds.length} place${savedIds.length === 1 ? '' : 's'} saved` : 'Your collection of favourites'}
-            colors={colors}
-            onPress={() => router.push('/saved')}
-          />
-          <ProfileMenuRow
             icon="home"
             title="Home for Uber"
             subtitle={profilePreferences.homeAddress ? 'Saved privately on this device' : 'Add your home for one-tap ride estimates'}
@@ -535,6 +648,12 @@ export default function ProfileScreen() {
         notificationsEnabled={profilePreferences.notificationsEnabled}
         notificationsReady={profilePreferencesReady}
         onNotificationsChange={(enabled) => { void handleNotificationsChange(enabled); }}
+        messagePushEnabled={messagePushEnabled}
+        messagePushReady={messagePushReady}
+        savingMessagePush={savingMessagePush}
+        onMessagePushChange={(enabled) => { void handleMessagePushChange(enabled); }}
+        sendingMessageTest={sendingMessageTest}
+        onSendMessageTest={() => { void handleSendMessageTest(); }}
         newOpeningsPushEnabled={newOpeningsPushEnabled}
         newOpeningsPushReady={newOpeningsPushReady}
         savingNewOpeningsPush={savingNewOpeningsPush}
@@ -727,6 +846,12 @@ function SettingsSheet({
   notificationsEnabled,
   notificationsReady,
   onNotificationsChange,
+  messagePushEnabled,
+  messagePushReady,
+  savingMessagePush,
+  onMessagePushChange,
+  sendingMessageTest,
+  onSendMessageTest,
   newOpeningsPushEnabled,
   newOpeningsPushReady,
   savingNewOpeningsPush,
@@ -741,6 +866,12 @@ function SettingsSheet({
   notificationsEnabled: boolean;
   notificationsReady: boolean;
   onNotificationsChange: (value: boolean) => void;
+  messagePushEnabled: boolean;
+  messagePushReady: boolean;
+  savingMessagePush: boolean;
+  onMessagePushChange: (value: boolean) => void;
+  sendingMessageTest: boolean;
+  onSendMessageTest: () => void;
   newOpeningsPushEnabled: boolean;
   newOpeningsPushReady: boolean;
   savingNewOpeningsPush: boolean;
@@ -800,6 +931,52 @@ function SettingsSheet({
             <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
               This preference is saved on this device.
             </Text>
+            <View style={styles.settingRow}>
+              <View style={[styles.accountIcon, { backgroundColor: colors.secondary }]}>
+                <Feather name="message-circle" size={19} color={colors.green700} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.settingTitle, { color: colors.foreground }]}>Friend message alerts</Text>
+                <Text style={[styles.settingsHint, { color: colors.mutedForeground }]}>
+                  Sound and vibrate when someone messages you.
+                </Text>
+              </View>
+              <Switch
+                accessibilityLabel="Friend message alerts"
+                value={messagePushEnabled}
+                onValueChange={onMessagePushChange}
+                disabled={!messagePushReady || savingMessagePush}
+                trackColor={{ false: colors.border, true: colors.green600 }}
+                thumbColor={colors.card}
+              />
+            </View>
+            {messagePushEnabled && Platform.OS === 'android' ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Send a test message alert to this device"
+                onPress={onSendMessageTest}
+                disabled={savingMessagePush || sendingMessageTest}
+                style={({ pressed }) => ({
+                  alignSelf: 'flex-start',
+                  marginTop: 10,
+                  paddingHorizontal: 13,
+                  paddingVertical: 10,
+                  flexDirection: 'row',
+                  alignItems: 'center',
+                  gap: 8,
+                  borderRadius: 14,
+                  borderWidth: 1,
+                  backgroundColor: colors.card,
+                  borderColor: colors.border,
+                  opacity: pressed || savingMessagePush || sendingMessageTest ? 0.65 : 1,
+                })}
+              >
+                <Feather name="bell" size={15} color={colors.green700} />
+                <Text style={{ color: colors.foreground, fontFamily: 'Inter_600SemiBold', fontSize: 13 }}>
+                  {sendingMessageTest ? 'Sending test alert…' : 'Test message alert'}
+                </Text>
+              </Pressable>
+            ) : null}
             <View style={styles.settingRow}>
               <View style={[styles.accountIcon, { backgroundColor: colors.goldSoft }]}>
                 <Feather name="star" size={20} color={colors.goldDeep} />
