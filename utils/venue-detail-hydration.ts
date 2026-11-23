@@ -1,13 +1,13 @@
 import type { Venue } from '@/data/venues';
 import { venuePresentationCategory } from './venue-presentation-category';
 
-type Profile = {
+export type DeferredVenueProfile = {
   id: string;
+  address: string;
   rating: number | null;
   ratingCount: number | null;
-  address: string | null;
-  primaryType: string | null;
   openNow: boolean | null;
+  primaryType: string;
   price?: string;
   todayHours?: string | null;
   phone?: string | null;
@@ -18,7 +18,9 @@ type Profile = {
   photoNames?: Array<{ name: string; attribution: string }>;
 };
 
-export function hydrateVenueDetails(venue: Venue, profile: Profile | null): Venue {
+// Enrich the opened card only. Do not replace paid placement or owner metadata.
+export function hydrateVenueDetails(venue: Venue | undefined, profile: DeferredVenueProfile | null): Venue | undefined {
+  if (!venue) return venue;
   if (!profile || profile.id !== venue.id) return { ...venue, category: venuePresentationCategory(venue) };
   const photos = profile.photoNames?.filter(photo => Boolean(photo.name));
   return {
@@ -28,7 +30,7 @@ export function hydrateVenueDetails(venue: Venue, profile: Profile | null): Venu
     fullAddress: profile.address || venue.fullAddress,
     type: profile.primaryType || venue.type,
     category: venuePresentationCategory({ ...venue, type: profile.primaryType || venue.type }),
-    price: profile.price || venue.price,
+    price: (profile.price || venue.price) as Venue['price'],
     hours: profile.todayHours || venue.hours,
     openNow: profile.openNow ?? venue.openNow,
     phone: profile.phone || venue.phone,
@@ -36,12 +38,16 @@ export function hydrateVenueDetails(venue: Venue, profile: Profile | null): Venu
     mapsUri: profile.googleMapsUrl || venue.mapsUri,
     latitude: profile.latitude ?? venue.latitude,
     longitude: profile.longitude ?? venue.longitude,
-    ...(photos ? { photoNames: photos, photoName: photos[0]?.name,
-      photoCount: photos.length, photoAttributions: photos.map(photo => photo.attribution) } : {}),
+    ...(photos ? {
+      photoNames: photos,
+      photoName: photos[0]?.name,
+      photoCount: photos.length,
+      photoAttributions: photos.map(photo => photo.attribution),
+    } : {}),
   };
 }
 
-export function fullCardOpenStatus(venue: Venue, profile: Profile | null): boolean | null {
+export function fullCardOpenStatus(venue: Venue, profile: DeferredVenueProfile | null): boolean | null {
   if (profile?.id === venue.id) return profile.openNow;
   return venue.detailsDeferred ? null : venue.openNow;
 }

@@ -5,6 +5,7 @@ import { useAuth } from './auth';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
 import { useColors } from '@/hooks/useColors';
 import { bookingCounts, bookingReminderPlan, type ReminderBooking } from '@/utils/booking-reminders';
+
 const device = () => import('@/utils/booking-reminder-device');
 type ReminderState = {
   ids: Set<string>; ready: boolean; error: string; count: number | null; countLabel: string;
@@ -12,6 +13,7 @@ type ReminderState = {
   notificationsChanged: (enabled: boolean) => Promise<void>;
 };
 const Context = createContext<ReminderState | null>(null);
+
 export function BookingRemindersProvider({ children }: { children: ReactNode }) {
   const { account, ready: authReady } = useAuth();
   const uid = account?.uid;
@@ -77,11 +79,13 @@ export function BookingRemindersProvider({ children }: { children: ReactNode }) 
       : history.isLoading ? 'Checking your bookings…' : counts.label,
   }}>{children}</Context.Provider>;
 }
+
 export function useBookingReminders() {
   const context = useContext(Context);
   if (!context) throw new Error('Booking reminders require their provider.');
   return context;
 }
+
 export function BookingReminderControl({ booking }: { booking: ReminderBooking }) {
   const reminders = useBookingReminders();
   const colors = useColors();

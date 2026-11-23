@@ -15,6 +15,7 @@ import { getPandaMeDb } from '@/utils/panda-me-firestore';
 
 const STORAGE_KEY = '@panda-mobile/saved-venue-ids';
 const RECORDS_KEY = STORAGE_KEY + ':records';
+const SAVED_SYNC_UNAVAILABLE = 'Saved places are saved on this device, but Panda account sync is unavailable right now.';
 const SAVED_VENUE_FIELDS = new Set([
   'id',
   'name',
@@ -71,6 +72,7 @@ type SavedVenuesContextValue = {
   isSaved: (venueId: string) => boolean;
   toggleSaved: (venue: Venue) => void;
   hydrated: boolean;
+  syncError: string | null;
 };
 const SavedVenuesContext = createContext<SavedVenuesContextValue | null>(null);
 const venueCategories: VenueCategory[] = [
@@ -178,6 +180,7 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
   const [savedVenueData, setSavedVenueData] = useState<Record<string, Venue>>({});
   const [hydrated, setHydrated] = useState(false);
   const [cloudReady, setCloudReady] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
   const cloudIdsRef = useRef<string[]>([]);
 
   useEffect(() => {
@@ -267,6 +270,7 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
   useEffect(() => {
     cloudIdsRef.current = [];
     setCloudReady(false);
+    setSyncError(null);
     if (!account) return;
     let live = true;
     try {
@@ -283,10 +287,13 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
           cloudIdsRef.current = cloudIds;
           setSavedVenueData((current) => ({ ...current, ...cloudRecords }));
           setSavedIds((current) => mergeSavedVenueIds(current, previousCloudIds, cloudIds));
+          setSyncError(null);
           setCloudReady(true);
         },
         () => {
-          if (live) setCloudReady(false);
+          if (!live) return;
+          setCloudReady(false);
+          setSyncError(SAVED_SYNC_UNAVAILABLE);
         },
       );
       return () => {
@@ -294,7 +301,10 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
         unsubscribe();
       };
     } catch {
-      if (live) setCloudReady(false);
+      if (live) {
+        setCloudReady(false);
+        setSyncError(SAVED_SYNC_UNAVAILABLE);
+      }
       return () => {
         live = false;
       };
@@ -334,11 +344,13 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
           updatedAt: serverTimestamp(),
         },
         { merge: true },
-      ).catch(() => undefined);
+      ).then(() => setSyncError(null)).catch(() => setSyncError(SAVED_SYNC_UNAVAILABLE));
     }
     for (const id of before) {
       if (!after.has(id))
-        deleteDoc(doc(db, 'users', account.uid, 'saved_venues', id)).catch(() => undefined);
+        deleteDoc(doc(db, 'users', account.uid, 'saved_venues', id))
+          .then(() => setSyncError(null))
+          .catch(() => setSyncError(SAVED_SYNC_UNAVAILABLE));
     }
   }, [savedIds, savedVenueData, account?.uid, cloudReady, hydrated]);
 
@@ -372,8 +384,9 @@ export function SavedVenuesProvider({ children }: { children: React.ReactNode })
       isSaved: (venueId) => savedIds.includes(venueId),
       toggleSaved,
       hydrated,
+      syncError,
     }),
-    [hydrated, savedIds, savedVenues],
+    [hydrated, savedIds, savedVenues, syncError],
   );
   return <SavedVenuesContext.Provider value={value}>{children}</SavedVenuesContext.Provider>;
 }

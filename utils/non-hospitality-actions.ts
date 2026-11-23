@@ -45,6 +45,8 @@ export async function loadVisitInformation(venue: Venue, signal: AbortSignal): P
 export function nonHospitalityActions(venue: Venue): NonHospitalityAction[] {
   if (!isNonHospitalityVenue(venue)) return [];
   const website = safeVenueUrl(venue.website);
+  // A Google-supplied official website can itself be an explicit ticket/visit page.
+  // Never build a ticket URL from the name or substitute a restaurant reservation URL.
   let ticket: string | null = null;
   const category = venuePresentationCategory(venue);
   if (category === 'Place of Interest' && website) {
@@ -70,6 +72,7 @@ export function nonHospitalityActions(venue: Venue): NonHospitalityAction[] {
 
 export async function openNonHospitalityAction(venue: Venue, action: NonHospitalityAction, surface: VenueActivitySurface = 'discovery') {
   if (!isNonHospitalityVenue(venue)) throw new Error('This action is only available for shops and places to visit.');
+  // Rebuild from the venue, rather than trusting an arbitrary caller-provided URL.
   const current = nonHospitalityActions(venue).find(item => item.kind === action.kind);
   if (!current) throw new Error('No verified link is available for this action.');
   if (current.kind === 'directions' || current.kind === 'transit') {
@@ -85,5 +88,6 @@ export async function openNonHospitalityAction(venue: Venue, action: NonHospital
     finally { clearTimeout(timer); }
   }
   if (!url) throw new Error('No official website has been verified for this place yet. Directions will take you to its Google listing.');
+  // Website/ticket handoffs are not restaurant bookings or confirmed ticket purchases.
   await Linking.openURL(url);
 }

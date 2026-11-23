@@ -1,307 +1,153 @@
-import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Svg, { Path } from 'react-native-svg';
 import { VenuePhoto } from '@/components/VenuePhoto';
+import { ReserveButton } from '@/components/ReserveButton';
+import { NonHospitalityCard } from '@/components/NonHospitalityCard';
+import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
 import type { Venue } from '@/data/venues';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
 import { useColors } from '@/hooks/useColors';
-import { NonHospitalityCard } from '@/components/NonHospitalityCard';
-import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
-import { PANDA_PRODUCTION_API } from '@/constants/services';
-import { DiscoverVenueCard } from '@/components/DiscoverVenueCard';
-
-let nextProfileRequestAt = 0;
-let profileQueue: Promise<void> = Promise.resolve();
-let blockedProfileMessage: string | null = null;
-const profileCache = new Map<string, Record<string, unknown>>();
-const pendingProfiles = new Map<string, Promise<Record<string, unknown>>>();
-
-function pause(ms: number, signal: AbortSignal) {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const timer = setTimeout(done, ms);
-    function done() {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-    signal.addEventListener('abort', done, { once: true });
-  });
-}
-
-function fetchLiveProfile(placeId: string, signal: AbortSignal): Promise<Record<string, unknown>> {
-  if (blockedProfileMessage) return Promise.reject(new Error(blockedProfileMessage));
-  const cached = profileCache.get(placeId);
-  if (cached) return Promise.resolve(cached);
-  const pending = pendingProfiles.get(placeId);
-  if (pending) return pending;
-
-  const request = profileQueue.then(async () => {
-    if (blockedProfileMessage) throw new Error(blockedProfileMessage);
-    if (signal.aborted) throw new Error('Profile request cancelled');
-    const waitForSlot = Math.max(0, nextProfileRequestAt - Date.now());
-    if (waitForSlot) await pause(waitForSlot, signal);
-    if (signal.aborted) throw new Error('Profile request cancelled');
-    nextProfileRequestAt = Date.now() + 400;
-
-    const response = await fetch(
-      `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`,
-      { headers: { Accept: 'application/json' }, signal },
-    );
-    const profile = await response.json().catch(() => ({})) as Record<string, unknown>;
-    const providerMessage = typeof profile.error === 'string' ? profile.error : '';
-    const dailyQuotaExceeded = response.status === 429
-      && /GetPlaceRequest.*per day|per day.*GetPlaceRequest|quota exceeded.*per day/i.test(providerMessage);
-    if (dailyQuotaExceeded) {
-      blockedProfileMessage = 'Google daily venue-details quota reached. Raise Places API (New) “GetPlaceRequest per day” or wait for its reset.';
-      throw new Error(blockedProfileMessage);
-    }
-    if (response.status === 429 || profile.limited === true || profile.dataMode === 'independent_baseline') {
-      blockedProfileMessage = typeof profile.availabilityMessage === 'string'
-        ? profile.availabilityMessage
-        : 'Google venue details are temporarily unavailable. The saved venue index is intact; live details can be retried shortly.';
-      throw new Error(blockedProfileMessage);
-    }
-    if (!response.ok) {
-      if (response.status >= 500) {
-        blockedProfileMessage = 'Google venue details are temporarily unavailable. The saved 200-ID category feed is still intact.';
-      }
-      throw new Error(`Venue profile request failed: ${response.status}`);
-    }
-    if (typeof profile.name !== 'string' || !profile.name.trim()) {
-      throw new Error('Google did not return venue details for this place.');
-    }
-    if (profileCache.size >= 400) profileCache.delete(profileCache.keys().next().value as string);
-    profileCache.set(placeId, profile);
-    return profile;
-  });
-  profileQueue = request.then(() => undefined, () => undefined);
-  pendingProfiles.set(placeId, request);
-  void request.finally(() => {
-    if (pendingProfiles.get(placeId) === request) pendingProfiles.delete(placeId);
-  }).catch(() => {});
-  return request;
-}
+import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
 
 export function SuggestionRow({
   venue,
   saved,
-  isVisible = true,
   onPress,
   onToggleSaved,
   activitySurface = 'discovery',
 }: {
   venue: Venue;
   saved: boolean;
-  isVisible?: boolean;
   onPress: () => void;
   onToggleSaved: () => void;
   activitySurface?: 'discovery' | 'saved';
 }) {
   const colors = useColors();
-  const [hydratedVenue, setHydratedVenue] = useState<Venue | null>(null);
-  const [profileFailureMessage, setProfileFailureMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    setHydratedVenue(null);
-    setProfileFailureMessage(null);
-    const hasNameAndCover = Boolean(venue.name.trim() && venue.photoName?.trim());
-    if (!isVisible || !venue.detailsDeferred || venue.id.startsWith('osm:') || hasNameAndCover) return;
-    const controller = new AbortController();
-    let timedOut = false;
-    const timeout = setTimeout(() => {
-      timedOut = true;
-      controller.abort();
-    }, 15_000);
-    void fetchLiveProfile(venue.id, controller.signal).then((profile) => {
-      const photos = Array.isArray(profile.photoNames) ? profile.photoNames.flatMap((item) => {
-        if (!item || typeof item !== 'object') return [];
-        const photo = item as Record<string, unknown>;
-        return typeof photo.name === 'string'
-          ? [{ name: photo.name, attribution: typeof photo.attribution === 'string' ? photo.attribution : '' }]
-          : [];
-      }) : [];
-      const display = {
-        ...venue,
-        name: profile.name,
-        fullAddress: typeof profile.address === 'string' ? profile.address : venue.fullAddress,
-        type: typeof profile.primaryType === 'string' ? profile.primaryType : venue.type,
-        rating: typeof profile.rating === 'number' ? profile.rating.toFixed(1) : venue.rating,
-        ratingCount: typeof profile.ratingCount === 'number' ? profile.ratingCount : venue.ratingCount,
-        price: typeof profile.price === 'string' ? profile.price : venue.price,
-        openNow: typeof profile.openNow === 'boolean' ? profile.openNow : venue.openNow,
-        hours: typeof profile.todayHours === 'string' ? profile.todayHours : venue.hours,
-        phone: typeof profile.phone === 'string' ? profile.phone : venue.phone,
-        website: typeof profile.website === 'string' ? profile.website : venue.website,
-        latitude: typeof profile.latitude === 'number' ? profile.latitude : venue.latitude,
-        longitude: typeof profile.longitude === 'number' ? profile.longitude : venue.longitude,
-        photoNames: photos,
-        photoName: photos[0]?.name,
-        photoAttributions: photos[0]?.attribution ? [photos[0].attribution] : [],
-        photoCount: photos.length,
-        detailsDeferred: false,
-        cached: false,
-      } as Venue;
-      setHydratedVenue(display);
-    }).catch((error: unknown) => {
-      if (timedOut) {
-        setProfileFailureMessage('Google venue details took too long to load. Try again after the details quota is available.');
-      } else if (!controller.signal.aborted) {
-        setProfileFailureMessage(error instanceof Error ? error.message : 'Google venue details are unavailable.');
-      }
+  const { cardColors, fonts } = useVenueCardDesign();
+  const scale = useSharedValue(1);
+  const motion = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const setPressed = (pressed: boolean) => {
+    scale.value = withSpring(pressed ? 0.985 : 1, {
+      damping: 22, stiffness: 320, reduceMotion: ReduceMotion.System,
     });
-    return () => {
-      clearTimeout(timeout);
-      controller.abort();
-    };
-  }, [venue.id, venue.detailsDeferred, isVisible]);
+  };
+  const cardMeta = [
+    venue.type && venue.type !== 'Venue' ? venue.type : undefined,
+    venue.walkingTime,
+  ].filter(Boolean).join(' · ');
+  const photoCredit = venue.photoAttributions[0]?.trim();
+  const rating = Number(venue.rating);
+  const hasRating = Number.isFinite(rating) && rating > 0 && rating <= 5;
+  if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} activitySurface={activitySurface} />;
 
-  const card = hydratedVenue ?? venue;
-  if (isNonHospitalityVenue(card)) return <NonHospitalityCard venue={card} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} activitySurface={activitySurface} />;
-  const cardTitle = card.name.trim()
-    ? card.name
-    : card.detailsDeferred
-      ? profileFailureMessage ? 'Venue details paused' : 'Loading venue…'
-      : card.name;
-
-  return <DiscoverVenueCard
-    activitySurface={activitySurface}
-    venue={{ ...card, name: cardTitle }}
-    saved={saved}
-    onPress={onPress}
-    onToggleSaved={() => { recordVenueActivity('save_click', venue, activitySurface); onToggleSaved(); }}
-    warning={profileFailureMessage}
-  />;
+  return (
+    <Animated.View style={[
+      styles.row, motion,
+      {
+        backgroundColor: venue.promoted ? cardColors.premiumSurface : cardColors.row,
+        borderColor: venue.promoted ? cardColors.gold : cardColors.border,
+        shadowColor: venue.promoted ? cardColors.goldInk : cardColors.ink,
+      },
+      venue.promoted && styles.promoted,
+    ]}>
+      {venue.promoted && <View pointerEvents="none" style={[styles.goldRail, { backgroundColor: cardColors.gold }]} />}
+      <Pressable
+        testID={`suggestion-${venue.id}`}
+        accessibilityRole="button"
+        accessibilityLabel={`Open ${venue.name}${cardMeta ? `, ${cardMeta}` : ''}`}
+        onPress={onPress}
+        onPressIn={() => setPressed(true)}
+        onPressOut={() => setPressed(false)}
+        style={styles.open}
+      >
+        <View style={styles.photo}>
+          <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={74} />
+          {photoCredit ? (
+            <View pointerEvents="none" style={[styles.photoCredit, { backgroundColor: cardColors.photoCreditBackground }]}>
+              <Text numberOfLines={1} style={[styles.photoCreditText, { color: cardColors.photoCreditForeground, fontFamily: fonts.medium }]}>{photoCredit}</Text>
+            </View>
+          ) : null}
+        </View>
+        <View style={styles.copy}>
+          {venue.promoted && (
+            <View style={[styles.promotedLabel, { backgroundColor: cardColors.goldSoft, borderColor: cardColors.gold }]}>
+              <Text style={[styles.promotedLabelText, { color: cardColors.goldInk, fontFamily: fonts.bold }]}>PANDA PREMIUM</Text>
+            </View>
+          )}
+          <Text numberOfLines={2} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+          {cardMeta ? <Text numberOfLines={1} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{cardMeta}</Text> : null}
+          <ReserveButton venue={venue} activitySurface={activitySurface} compact style={styles.reserve} />
+        </View>
+      </Pressable>
+      <View style={styles.rail}>
+        {hasRating ? (
+          <View accessibilityLabel={`Rated ${venue.rating} out of 5`} style={styles.rating}>
+            <Svg width={11} height={11} viewBox="0 0 24 24" fill={cardColors.goldInk}>
+              <Path d="m12 2.5 2.9 5.9 6.5.9-4.7 4.6 1.1 6.5-5.8-3.1-5.8 3.1 1.1-6.5-4.7-4.6 6.5-.9L12 2.5Z" />
+            </Svg>
+            <Text style={[styles.ratingText, { color: cardColors.goldInk, fontFamily: fonts.bold }]}>{venue.rating}</Text>
+          </View>
+        ) : <View />}
+        <Pressable
+          testID={`suggestion-save-${venue.id}`}
+          accessibilityLabel={saved ? `Remove ${venue.name} from saved venues` : `Save ${venue.name}`}
+          accessibilityRole="button"
+          accessibilityState={{ selected: saved }}
+          onPress={() => { recordVenueActivity('save_click', venue, activitySurface); onToggleSaved(); }}
+          style={({ pressed }) => [
+            styles.heart,
+            { backgroundColor: saved ? cardColors.savedSurface : 'transparent' },
+            pressed && styles.iconPressed,
+          ]}
+        >
+          <Svg width={20} height={20} viewBox="0 0 24 24">
+            <Path
+              d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"
+              fill={saved ? colors.destructive : 'none'}
+              stroke={saved ? colors.destructive : cardColors.muted}
+              strokeWidth={1.6}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </Svg>
+        </Pressable>
+      </View>
+    </Animated.View>
+  );
 }
 
 const styles = StyleSheet.create({
   row: {
     alignItems: 'center',
-    borderRadius: 20,
+    borderRadius: 15,
     borderWidth: 1,
     elevation: 2,
     flexDirection: 'row',
-    gap: 10,
+    gap: 4,
     marginBottom: 6,
-    minHeight: 76,
+    minHeight: 90,
     overflow: 'hidden',
     padding: 6,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.08,
-    shadowRadius: 11,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
   },
-  promoted: {
-    borderWidth: 2,
-    elevation: 5,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.19,
-    shadowRadius: 13,
-  },
-  photo: {
-    borderWidth: 0,
-    borderRadius: 14,
-    height: 64,
-    overflow: 'hidden',
-    width: 64,
-  },
-  copy: {
-    flex: 1,
-    minWidth: 0,
-    paddingRight: 2,
-  },
-  titleRow: {
-    alignItems: 'flex-start',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  titleWrap: {
-    alignItems: 'flex-start',
-    flex: 1,
-    flexDirection: 'row',
-    gap: 6,
-    minWidth: 0,
-  },
-  name: {
-    flex: 1,
-    fontFamily: 'serif',
-    fontSize: 15,
-    fontWeight: '700',
-    lineHeight: 18,
-    letterSpacing: -0.25,
-  },
-  promotedLabel: {
-    alignItems: 'center',
-    borderRadius: 999,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 3,
-    marginTop: 1,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-  },
-  promotedLabelText: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 7,
-    letterSpacing: 0.65,
-  },
-  heart: {
-    alignItems: 'center',
-    height: 27,
-    justifyContent: 'center',
-    width: 27,
-  },
-  addressRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    marginTop: 3,
-  },
-  address: {
-    flex: 1,
-    fontFamily: 'Inter_400Regular',
-    fontSize: 10,
-  },
-  metaRow: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 4,
-    marginTop: 3,
-    minWidth: 0,
-  },
-  open: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  meta: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 10,
-  },
-  type: {
-    flex: 1,
-  },
-  pressed: {
-    opacity: 0.78,
-    transform: [{ scale: 0.99 }],
-  },
-  iconPressed: {
-    opacity: 0.55,
-    transform: [{ scale: 0.9 }],
-  },
-  goldRail: {
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-    top: 0,
-    width: 5,
-  },
-  goldGlow: {
-    borderRadius: 999,
-    height: 110,
-    opacity: 0.38,
-    position: 'absolute',
-    right: -52,
-    top: -55,
-    width: 110,
-  },
+  promoted: { shadowOpacity: 0.11, elevation: 3 },
+  open: { flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: 10, alignSelf: 'stretch' },
+  photo: { borderRadius: 11, height: 74, overflow: 'hidden', width: 70 },
+  photoCredit: { borderRadius: 4, bottom: 4, left: 4, maxWidth: 62, paddingHorizontal: 4, paddingVertical: 2, position: 'absolute' },
+  photoCreditText: { fontSize: 7 },
+  copy: { flex: 1, minWidth: 0 },
+  name: { fontSize: 19, lineHeight: 22, letterSpacing: -0.15 },
+  promotedLabel: { alignSelf: 'flex-start', borderRadius: 999, borderWidth: 1, marginBottom: 4, paddingHorizontal: 6, paddingVertical: 2 },
+  promotedLabelText: { fontSize: 7, letterSpacing: 0.65 },
+  meta: { fontSize: 10, marginTop: 5 },
+  reserve: { alignSelf: 'flex-start', marginTop: 7 },
+  rail: { alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', minWidth: 44 },
+  rating: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingTop: 2 },
+  ratingText: { fontSize: 10 },
+  heart: { alignItems: 'center', height: 44, justifyContent: 'center', width: 44, borderRadius: 22 },
+  iconPressed: { opacity: 0.6, transform: [{ scale: 0.92 }] },
+  goldRail: { bottom: 0, left: 0, position: 'absolute', top: 0, width: 3 },
 });

@@ -1,11 +1,11 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { createElement, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AppState,
   Keyboard,
-  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -19,22 +19,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { ReserveButton } from '@/components/ReserveButton';
 import NativeGoogleMap from '@/components/NativeGoogleMap';
-import { googleDirectionsUrl } from '@/utils/venue-actions';
 import PandaRouteSheet, { type WalkingStep } from '@/components/PandaRouteSheet';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { venues, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
+import { isGooglePlaceVenue } from '@/utils/google-place-eligibility';
+import { mergeGoogleMapSearchResults, normalizeGoogleMapSearchVenue } from '@/utils/google-map-search';
+import { findTflRouteDisruption } from '@/utils/tfl-disruptions';
+import { describeTransitRouteChange } from '@/utils/route-watch';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
+import { loadPlannerWalkingRoute, type PlannerWalkingLeg } from '@/utils/planner-walking-route';
 import { decodeRoutePolyline, distanceBetweenCoordinates, distanceFromCoordinateToSegment } from '@/utils/route-geometry';
 
 type Percentage = `${number}%`;
 
 type TransitStep = {
   mode: 'WALK' | 'TRANSIT';
-  vehicleType?: string;
-  intermediateStops?: Array<{ name: string }>;
-  stopCount?: number;
   instruction: string;
   durationMinutes: number;
   distanceMeters: number;
@@ -69,6 +70,10 @@ type TransitRouteContext = {
 const GOOGLE_MAP_CENTER = '51.49,-0.14';
 const CARD_WIDTH = 292;
 const RAIL_GAP = 12;
+const TFL_TUBE_LINES = new Set([
+  'bakerloo', 'central', 'circle', 'district', 'hammersmith city',
+  'jubilee', 'metropolitan', 'northern', 'piccadilly', 'victoria', 'waterloo city',
+]);
 
 const markerLayout: Array<{ left: Percentage; top: Percentage; price: string }> = [
   { left: '15%', top: '27%', price: '£££' },
@@ -109,11 +114,6 @@ function parseTransitSteps(value: string): TransitStep[] {
 
       return [{
         mode: step.mode,
-        vehicleType: 'vehicleType' in step && typeof step.vehicleType === 'string' ? step.vehicleType : undefined,
-        stopCount: 'stopCount' in step && typeof step.stopCount === 'number' ? step.stopCount : undefined,
-        intermediateStops: 'intermediateStops' in step && Array.isArray(step.intermediateStops)
-          ? step.intermediateStops.filter((stop: unknown): stop is { name: string } =>
-            !!stop && typeof stop === 'object' && 'name' in stop && typeof stop.name === 'string') : undefined,
         instruction: step.instruction,
         durationMinutes: step.durationMinutes,
         distanceMeters: step.distanceMeters,
@@ -213,18 +213,17 @@ function parseWalkingSteps(value: unknown): WalkingStep[] {
 export default function MapScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { coordinates, liveArea, liveVenues, listedVenues, refreshLocation } = useLiveVenues();
+  const { coordinates, liveArea, liveVenues, refreshLocation } = useLiveVenues();
   const {
     directionsVenueData,
     directionsVenueId,
     directionsReturn,
-    routeMode: requestedRouteMode,
+    returnTo,
     plannerIds,
     plannerVenues: plannerVenueData,
     plannerLocation,
     plannerMode,
     plannerPrice,
-    plannerRouteSegments,
     transitOriginName,
     transitDestinationName,
     transitOriginCoordinates,
@@ -244,13 +243,12 @@ export default function MapScreen() {
     directionsVenueData?: string;
     directionsVenueId?: string;
     directionsReturn?: 'back' | 'map';
-    routeMode?: 'walking' | 'transit';
+    returnTo?: 'panda-me' | 'map';
     plannerIds?: string;
     plannerVenues?: string;
     plannerLocation?: string;
     plannerMode?: string;
     plannerPrice?: string;
-    plannerRouteSegments?: string;
     transitOriginName?: string;
     transitDestinationName?: string;
     transitOriginCoordinates?: string;
@@ -286,45 +284,41 @@ export default function MapScreen() {
   }, [dynamicPlannerVenues, plannerIds]);
   const plannerContextAvailable = plannerVenues.length > 0;
   const plannerActive = plannerContextAvailable && !directionsVenueId;
-  const plannedSegments = useMemo(() => {
-    try {
-      const value = JSON.parse(String(plannerRouteSegments || '[]'));
-      return Array.isArray(value) ? value.filter((segment): segment is { encoded: string; mode: 'walking' | 'transit' } =>
-        typeof segment?.encoded === 'string' && ['walking', 'transit'].includes(segment.mode)) : [];
-    } catch { return []; }
-  }, [plannerRouteSegments]);
-  const baseDiscoveryVenues = listedVenues ?? liveVenues;
+  const baseDiscoveryVenues = liveVenues;
   const discoveryVenues = useMemo(
     () => dynamicDirectionsVenue && !baseDiscoveryVenues.some((venue) => venue.id === dynamicDirectionsVenue.id)
       ? [dynamicDirectionsVenue, ...baseDiscoveryVenues]
       : baseDiscoveryVenues,
     [dynamicDirectionsVenue, baseDiscoveryVenues],
   );
-  const mapVenues = plannerActive ? plannerVenues : discoveryVenues;
+  const baseMapVenues = plannerActive ? plannerVenues : discoveryVenues;
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [googleSearchVenues, setGoogleSearchVenues] = useState<Venue[]>([]);
+  const [googleSearchLoading, setGoogleSearchLoading] = useState(false);
+  const [googleSearchError, setGoogleSearchError] = useState<string | null>(null);
+  const [selectedGoogleVenue, setSelectedGoogleVenue] = useState<Venue | null>(null);
+  const mapVenues = useMemo(() => {
+    if (plannerActive) return plannerVenues;
+    const additions = searchFocused && searchQuery.trim()
+      ? googleSearchVenues
+      : selectedGoogleVenue ? [selectedGoogleVenue] : [];
+    return mergeGoogleMapSearchResults(additions, baseMapVenues);
+  }, [baseMapVenues, googleSearchVenues, plannerActive, plannerVenues, searchFocused, searchQuery, selectedGoogleVenue]);
   const [selectedIndex, setSelectedIndex] = useState(() => {
     const firstId = String(plannerIds || '').split(',')[0];
     const requestedVenueId = String(directionsVenueId || firstId);
     return Math.max(0, mapVenues.findIndex((venue) => venue.id === requestedVenueId));
   });
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchFocused, setSearchFocused] = useState(false);
   const [resultsRailVisible, setResultsRailVisible] = useState(false);
   const [directionsVenue, setDirectionsVenue] = useState<Venue | null>(() =>
     dynamicDirectionsVenue
     ?? mapVenues.find((venue) => venue.id === String(directionsVenueId || ''))
     ?? null,
   );
-  useEffect(() => {
-    if (!plannerActive) return;
-    setDirectionsVenue(null);
-    setSearchQuery('');
-    setSelectedIndex(0);
-    setResultsRailVisible(true);
-  }, [plannerActive, plannerIds, plannerVenueData]);
   const [routeMode, setRouteMode] = useState<'walking' | 'transit'>(
-    requestedRouteMode === 'transit' || (transitOriginName && transitDestinationName) ? 'transit' : 'walking',
+    transitOriginName && transitDestinationName ? 'transit' : 'walking',
   );
-  useEffect(() => { setRouteMode(requestedRouteMode === 'transit' ? 'transit' : 'walking'); }, [directionsVenueId, requestedRouteMode]);
   type WalkingRoute = { distanceMeters: number; durationMinutes: number; polyline?: string; steps?: WalkingStep[] };
   const [navigationActive, setNavigationActive] = useState(false);
   const [walkStartRequested, setWalkStartRequested] = useState(false);
@@ -347,6 +341,11 @@ export default function MapScreen() {
   } | null>(null);
   const [transitRefreshing, setTransitRefreshing] = useState(false);
   const [transitError, setTransitError] = useState<string | null>(null);
+  const [routeWatchEnabled, setRouteWatchEnabled] = useState(false);
+  const [routeWatchStatus, setRouteWatchStatus] = useState<string | null>(null);
+  const routeWatchEnabledRef = useRef(false);
+  const routeWatchSnapshot = useRef<{ venueId: string; lines: string; durationMinutes: number } | null>(null);
+  const routeWatchDisruption = useRef('');
   const [walkingRouteResult, setWalkingRouteResult] = useState<{
     key: string; route: WalkingRoute;
   } | null>(null);
@@ -399,9 +398,40 @@ export default function MapScreen() {
       : null;
   }, [freshTransit, directionsVenue?.id, transitOriginCoordinates, transitDestinationCoordinates,
     transitRoute?.originName, transitRoute?.destinationName]);
+  const plannerWalkingKey = plannerActive
+    ? plannerVenues.map((venue) => `${venue.id}:${venue.latitude},${venue.longitude}`).join('|')
+    : '';
+  const plannerWalkingCache = useRef(new Map<string, PlannerWalkingLeg[]>());
+  const [plannerWalking, setPlannerWalking] = useState<{ key: string; legs: PlannerWalkingLeg[]; state: 'loading' | 'ready' | 'error' }>({ key: '', legs: [], state: 'loading' });
+  useEffect(() => {
+    if (!plannerWalkingKey) return;
+    const cached = plannerWalkingCache.current.get(plannerWalkingKey);
+    if (cached) {
+      setPlannerWalking({ key: plannerWalkingKey, legs: cached, state: 'ready' });
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    const deadline = setTimeout(() => controller.abort(), 12_000);
+    setPlannerWalking({ key: plannerWalkingKey, legs: [], state: 'loading' });
+    void loadPlannerWalkingRoute(plannerVenues, PANDA_RUNTIME_API, controller.signal)
+      .then((legs) => {
+        if (!active || controller.signal.aborted) return;
+        if (plannerWalkingCache.current.size >= 20) plannerWalkingCache.current.clear();
+        plannerWalkingCache.current.set(plannerWalkingKey, legs);
+        setPlannerWalking({ key: plannerWalkingKey, legs, state: 'ready' });
+      })
+      .catch(() => {
+        if (!active) return;
+        // Preserve the numbered itinerary, never draw a guessed walking path.
+        setPlannerWalking((current) => current.key === plannerWalkingKey ? { key: plannerWalkingKey, legs: [], state: 'error' } : current);
+      })
+      .finally(() => clearTimeout(deadline));
+    return () => { active = false; clearTimeout(deadline); controller.abort(); };
+  }, [plannerWalkingKey]);
+  const plannerWalkingLegs = plannerWalking.key === plannerWalkingKey && plannerWalking.state === 'ready' ? plannerWalking.legs : [];
   const routeSegments = useMemo(() => {
-    if (plannerActive) return plannedSegments;
-    if (!directionsVenue) return [];
+    if (!directionsVenue) return plannerActive ? plannerWalkingLegs : [];
     if (routeMode === 'walking') {
       return walkingRoute?.polyline
         ? [{ encoded: walkingRoute.polyline, mode: 'walking' as const }]
@@ -417,7 +447,7 @@ export default function MapScreen() {
       { encoded: transitRoute.polyline, mode: 'transit' as const },
       { encoded: transitRoute.destinationPolyline, mode: 'walking' as const },
     ].filter((segment) => Boolean(segment.encoded));
-  }, [plannerActive, plannedSegments, directionsVenue?.id, routeMode, walkingRoute?.polyline,
+  }, [directionsVenue?.id, routeMode, walkingRoute?.polyline, plannerActive, plannerWalkingLegs,
     transitRoute?.originPolyline, transitRoute?.polyline, transitRoute?.destinationPolyline, transitRoute?.steps]);
   const hasMappedRoute = Platform.OS !== 'web'
     && routeSegments.some((segment) => decodeRoutePolyline(segment.encoded).length > 1);
@@ -471,7 +501,7 @@ export default function MapScreen() {
 
   const refreshTransit = useCallback(async () => {
     const venueId = directionsVenue?.id;
-    if (!venueId?.startsWith('ChIJ') || transitRefreshing) return;
+    if (!venueId || !isGooglePlaceVenue(directionsVenue) || transitRefreshing) return;
     setTransitRefreshing(true);
     setTransitError(null);
     try {
@@ -491,8 +521,6 @@ export default function MapScreen() {
         ? 'Please wait a moment before refreshing departures.'
         : 'Transit connections are unavailable right now.');
       const data = await response.json() as {
-        recommendation?: string;
-        reason?: string;
         originStation?: { name?: string; latitude?: number; longitude?: number };
         destinationStation?: { name?: string; latitude?: number; longitude?: number };
         originWalk?: { durationMinutes?: number; distanceMeters?: number; polyline?: string } | null;
@@ -503,11 +531,6 @@ export default function MapScreen() {
         venueWalk?: { durationMinutes?: number; distanceMeters?: number; polyline?: string } | null;
         updatedAt?: string;
       };
-      if (data.recommendation === 'walk') {
-        setRouteMode('walking');
-        setNavigationError(data.reason || 'Walking is the better option for this nearby venue.');
-        return;
-      }
       const origin = data.originStation;
       const destination = data.destinationStation;
       const route = data.transitRoute;
@@ -521,23 +544,80 @@ export default function MapScreen() {
       if (!parsed.some((step) => step.mode === 'TRANSIT')) {
         throw new Error('No public transport connection was found.');
       }
+      const nextTransit: TransitRouteContext = {
+        originName: origin.name,
+        destinationName: destination.name,
+        originWalkMinutes: String(data.originWalk?.durationMinutes ?? ''),
+        originWalkDistance: String(data.originWalk?.distanceMeters ?? ''),
+        durationMinutes: String(route.durationMinutes),
+        distanceMeters: String(route.distanceMeters ?? ''),
+        steps: parsed,
+        walkMinutes: String(data.venueWalk?.durationMinutes ?? ''),
+        walkDistance: String(data.venueWalk?.distanceMeters ?? ''),
+        originPolyline: data.originWalk?.polyline ?? '',
+        polyline: route.polyline ?? '',
+        destinationPolyline: data.venueWalk?.polyline ?? '',
+        updatedAt: route.updatedAt ?? data.updatedAt,
+      };
+      const routeLineNames = parsed
+        .filter((step) => step.mode === 'TRANSIT')
+        .map((step) => step.lineName || step.headsign || step.arrivalStop || 'Transit');
+      const lineSignature = routeLineNames.join(' → ');
+      const durationMinutes = Number(route.durationMinutes);
+      const previousRoute = routeWatchSnapshot.current;
+      const nextRouteSnapshot = { venueId, lines: lineSignature, durationMinutes };
+      const routeChange = routeWatchEnabledRef.current
+        ? describeTransitRouteChange(previousRoute, nextRouteSnapshot, directionsVenue?.name || 'your destination')
+        : null;
+      let disruptionMessage = '';
+      if (routeWatchEnabledRef.current && routeLineNames.some((line) => (
+        TFL_TUBE_LINES.has(line.toLowerCase().replace(/\bline\b/g, '').replace(/[^a-z0-9]+/g, ' ').trim())
+      ))) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5_000);
+        try {
+          const tflResponse = await fetch('https://api.tfl.gov.uk/Line/Mode/tube/Status?detail=true', {
+            signal: controller.signal,
+            headers: { Accept: 'application/json' },
+          });
+          if (tflResponse.ok) {
+            const tflPayload = await tflResponse.json() as unknown;
+            const disruption = findTflRouteDisruption(routeLineNames, tflPayload);
+            const disruptionKey = disruption ? `${disruption.lineId}:${disruption.status}:${disruption.reason}` : '';
+            if (disruption && disruptionKey !== routeWatchDisruption.current) {
+              disruptionMessage = `${disruption.lineName} line: ${disruption.status}${disruption.reason ? `. ${disruption.reason}` : ''}`;
+              routeWatchDisruption.current = disruptionKey;
+            } else if (!disruption) {
+              routeWatchDisruption.current = '';
+            }
+          }
+        } catch {
+          // TfL is a London-only status overlay; Google route checks still work if it is unavailable.
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+      if (routeChange || disruptionMessage) {
+        const body = [routeChange?.message, disruptionMessage].filter(Boolean).join(' ');
+        void Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Your Panda route changed',
+            body,
+            sound: 'default',
+            data: {
+              kind: 'PANDA_ROUTE_CHANGE',
+              venueId,
+              directionsVenueData: directionsVenue ? JSON.stringify(directionsVenue) : '',
+            },
+          },
+          trigger: null,
+        }).catch(() => undefined);
+        setRouteWatchStatus(disruptionMessage || routeChange?.message || 'Your route changed. Panda has sent a notification.');
+      }
+      routeWatchSnapshot.current = { venueId, lines: lineSignature, durationMinutes };
       setFreshTransit({
         venueId,
-        route: {
-          originName: origin.name,
-          destinationName: destination.name,
-          originWalkMinutes: String(data.originWalk?.durationMinutes ?? ''),
-          originWalkDistance: String(data.originWalk?.distanceMeters ?? ''),
-          durationMinutes: String(route.durationMinutes),
-          distanceMeters: String(route.distanceMeters ?? ''),
-          steps: parsed,
-          walkMinutes: String(data.venueWalk?.durationMinutes ?? ''),
-          walkDistance: String(data.venueWalk?.distanceMeters ?? ''),
-          originPolyline: data.originWalk?.polyline ?? '',
-          polyline: route.polyline ?? '',
-          destinationPolyline: data.venueWalk?.polyline ?? '',
-          updatedAt: route.updatedAt ?? data.updatedAt,
-        },
+        route: nextTransit,
         stations: {
           origin: { name: origin.name, coordinate: { latitude: origin.latitude!, longitude: origin.longitude! } },
           destination: {
@@ -551,7 +631,7 @@ export default function MapScreen() {
     } finally {
       setTransitRefreshing(false);
     }
-  }, [coordinates, directionsVenue?.id, refreshLocation, transitRefreshing]);
+  }, [coordinates, directionsVenue?.id, directionsVenue?.source, refreshLocation, transitRefreshing]);
 
   useEffect(() => {
     if (!directionsVenue || routeMode !== 'transit' || !coordinates) return;
@@ -560,6 +640,69 @@ export default function MapScreen() {
     }, 60_000);
     return () => clearInterval(timer);
   }, [coordinates, directionsVenue?.id, routeMode, refreshTransit]);
+
+  useEffect(() => {
+    routeWatchEnabledRef.current = routeWatchEnabled;
+  }, [routeWatchEnabled]);
+
+  useEffect(() => {
+    routeWatchEnabledRef.current = false;
+    routeWatchSnapshot.current = null;
+    routeWatchDisruption.current = '';
+    setRouteWatchEnabled(false);
+    setRouteWatchStatus(null);
+  }, [directionsVenue?.id]);
+
+  const toggleRouteWatch = async () => {
+    setRouteWatchStatus(null);
+    if (routeWatchEnabled) {
+      routeWatchEnabledRef.current = false;
+      routeWatchDisruption.current = '';
+      setRouteWatchEnabled(false);
+      setRouteWatchStatus('Route alerts are off for this journey.');
+      return;
+    }
+    if (Platform.OS === 'web') {
+      setRouteWatchStatus('Route alerts are available in the Panda mobile app.');
+      return;
+    }
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('panda-route-changes', {
+          name: 'Route changes',
+          importance: Notifications.AndroidImportance.DEFAULT,
+          lockscreenVisibility: Notifications.AndroidNotificationVisibility.PRIVATE,
+        });
+      }
+      let permission = await Notifications.getPermissionsAsync();
+      if (!permission.granted && permission.canAskAgain) {
+        permission = await Notifications.requestPermissionsAsync();
+      }
+      const notificationsAllowed = permission.granted
+        || permission.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+      if (!notificationsAllowed) {
+        setRouteWatchStatus('Allow Panda notifications in your device settings to receive route alerts.');
+        return;
+      }
+      const currentRoute = transitRoute;
+      routeWatchDisruption.current = '';
+      if (currentRoute) {
+        routeWatchSnapshot.current = {
+          venueId: directionsVenue?.id || '',
+          lines: currentRoute.steps
+            .filter((step) => step.mode === 'TRANSIT')
+            .map((step) => step.lineName || step.headsign || step.arrivalStop || 'Transit')
+            .join(' → '),
+          durationMinutes: Number(currentRoute.durationMinutes),
+        };
+      }
+      routeWatchEnabledRef.current = true;
+      setRouteWatchEnabled(true);
+      setRouteWatchStatus('Panda will check this transit route while the app is open.');
+    } catch {
+      setRouteWatchStatus('Panda could not enable route alerts just now. Please try again.');
+    }
+  };
 
   const stopNavigation = () => {
     setWalkStartRequested(false);
@@ -658,25 +801,90 @@ export default function MapScreen() {
 
   const changeRouteMode = (mode: 'walking' | 'transit') => {
     if (mode !== 'walking') stopNavigation();
+    if (mode !== 'transit') {
+      routeWatchEnabledRef.current = false;
+      routeWatchDisruption.current = '';
+      setRouteWatchEnabled(false);
+      setRouteWatchStatus(null);
+    }
     setRouteMode(mode);
     if (mode === 'walking' && !navigationActive) setWalkStartRequested(true);
     if (mode === 'transit' && !transitRoute) void refreshTransit();
   };
   const filteredVenues = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
-    if (!query) return plannerActive ? plannerVenues : discoveryVenues;
-    return mapVenues
+    if (!query) return plannerActive ? plannerVenues : mapVenues.slice(0, 12);
+    const localMatches = baseMapVenues
       .filter((venue) =>
         [venue.name, venue.type, venue.category, venue.neighborhood, venue.fullAddress]
           .join(' ')
           .toLowerCase()
           .includes(query),
-      )
-      ;
-  }, [discoveryVenues, mapVenues, plannerActive, plannerVenues, searchQuery]);
+      );
+    return mergeGoogleMapSearchResults(googleSearchVenues, localMatches).slice(0, 12);
+  }, [baseMapVenues, googleSearchVenues, mapVenues, plannerActive, plannerVenues, searchQuery]);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (plannerActive || query.length < 2) {
+      setGoogleSearchVenues([]);
+      setGoogleSearchLoading(false);
+      setGoogleSearchError(null);
+      return;
+    }
+    const controller = new AbortController();
+    setGoogleSearchVenues([]);
+    setGoogleSearchError(null);
+    setGoogleSearchLoading(true);
+    const timer = setTimeout(() => {
+      void (async () => {
+        try {
+          const response = await fetch(`${PANDA_RUNTIME_API}/api/panda-ai`, {
+            method: 'POST',
+            signal: controller.signal,
+            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+            body: JSON.stringify({
+              venuesOnly: true,
+              query,
+              ...(coordinates ? {
+                location: { lat: coordinates.latitude, lng: coordinates.longitude },
+              } : {}),
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(response.status === 429
+              ? 'Google place search is busy. Try again in a moment.'
+              : 'Google place search is unavailable right now.');
+          }
+          const payload = await response.json() as { venues?: unknown };
+          const rawResults = Array.isArray(payload.venues) ? payload.venues : [];
+          const normalized = rawResults
+            .map((item) => normalizeGoogleMapSearchVenue(
+              item,
+              coordinates ? { latitude: coordinates.latitude, longitude: coordinates.longitude } : null,
+            ))
+            .filter((venue): venue is Venue => venue !== null);
+          if (!controller.signal.aborted) setGoogleSearchVenues(normalized.slice(0, 12));
+        } catch (error) {
+          if (!controller.signal.aborted) {
+            setGoogleSearchError(error instanceof Error ? error.message : 'Google place search is unavailable right now.');
+          }
+        } finally {
+          if (!controller.signal.aborted) setGoogleSearchLoading(false);
+        }
+      })();
+    }, 450);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [coordinates, plannerActive, searchQuery]);
 
   const closeDirections = () => {
     stopNavigation();
+    routeWatchEnabledRef.current = false;
+    routeWatchDisruption.current = '';
+    setRouteWatchEnabled(false);
     setFreshTransit(null);
     if (directionsReturn === 'back' && router.canGoBack()) {
       router.back();
@@ -685,6 +893,22 @@ export default function MapScreen() {
     setDirectionsVenue(null);
     clearRouteParams();
     setResultsRailVisible(true);
+  };
+  const returnFromMap = () => {
+    stopNavigation();
+    routeWatchEnabledRef.current = false;
+    routeWatchDisruption.current = '';
+    setRouteWatchEnabled(false);
+    if (returnTo === 'panda-me') {
+      if (router.canDismiss()) {
+        router.dismissTo('/(tabs)/panda-me');
+      } else {
+        router.replace('/(tabs)/panda-me');
+      }
+      return;
+    }
+    if (router.canGoBack()) router.back();
+    else router.replace('/');
   };
   const clearRouteParams = () => {
     if (!directionsVenueId && !transitOriginName) return;
@@ -714,11 +938,11 @@ export default function MapScreen() {
       pathname: '/' as const,
       params: {
         openPlanner: String(plannerMode || 'night'),
-        plannerReturn: String(Date.now()),
+        plannerRequest: String(Date.now()),
         plannerIds: String(plannerIds || ''),
         plannerVenues: String(plannerVenueData || ''),
         plannerLocation: String(plannerLocation || 'Current location'),
-        plannerPrice: String(plannerPrice || '££££'),
+        plannerPrice: String(plannerPrice || '££'),
       },
     };
     if (router.canDismiss()) {
@@ -731,21 +955,31 @@ export default function MapScreen() {
   const selectVenue = (venue: Venue, clearSearch = false) => {
     stopNavigation();
     setFreshTransit(null);
-    const nextIndex = mapVenues.findIndex((item) => item.id === venue.id);
-    if (nextIndex < 0) return;
-    setSelectedIndex(nextIndex);
+    const baseIndex = baseMapVenues.findIndex((item) => item.id === venue.id);
+    const isLocalVenue = baseIndex >= 0;
+    const currentIndex = mapVenues.findIndex((item) => item.id === venue.id);
+    if (!isLocalVenue && currentIndex < 0) return;
+    if (isLocalVenue) {
+      setSelectedGoogleVenue(null);
+      setSelectedIndex(baseIndex);
+    } else {
+      setSelectedGoogleVenue(venue);
+      setSelectedIndex(clearSearch ? 0 : currentIndex);
+    }
     setDirectionsVenue(null);
     clearRouteParams();
     setSearchFocused(false);
-    setResultsRailVisible(true);
+    setResultsRailVisible(clearSearch);
     if (clearSearch) setSearchQuery('');
     Keyboard.dismiss();
-    const railSource = clearSearch ? mapVenues : filteredVenues;
+    const railSource = clearSearch
+      ? isLocalVenue ? baseMapVenues.slice(0, 12) : [venue, ...baseMapVenues].slice(0, 12)
+      : filteredVenues;
     const railIndex = railSource.findIndex((item) => item.id === venue.id);
     if (railIndex >= 0) {
       const scrollToVenue = () =>
         railRef.current?.scrollTo({ x: railIndex * (CARD_WIDTH + RAIL_GAP), animated: true });
-      if (typeof requestAnimationFrame === 'function') {
+      if (clearSearch && typeof requestAnimationFrame === 'function') {
         requestAnimationFrame(scrollToVenue);
       } else {
         scrollToVenue();
@@ -841,6 +1075,15 @@ export default function MapScreen() {
       {!directionsVenue && !plannerActive ? (
       <View style={[styles.searchShell, { top: Math.max(14, insets.top + 8) }]}>
         <View style={[styles.searchField, { backgroundColor: colors.card }]}>
+          <Pressable
+            accessibilityLabel={returnTo === 'panda-me' ? 'Back to Panda Me' : 'Close map'}
+            accessibilityRole="button"
+            hitSlop={8}
+            onPress={returnFromMap}
+            style={styles.mapBackButton}
+          >
+            <Feather name="arrow-left" size={18} color={colors.green800} />
+          </Pressable>
           <Ionicons name="search" size={20} color={colors.green700} />
           <TextInput
             testID="map-search"
@@ -891,9 +1134,16 @@ export default function MapScreen() {
                   <Feather name="arrow-up-right" size={16} color={colors.border} />
                 </Pressable>
               ))
+            ) : googleSearchLoading ? (
+              <Text style={[styles.noResults, { color: colors.mutedForeground }]}>Searching Google Maps…</Text>
             ) : (
-              <Text style={[styles.noResults, { color: colors.mutedForeground }]}>No nearby places found</Text>
+              <Text style={[styles.noResults, { color: colors.mutedForeground }]}>
+                {googleSearchError || 'No matching places yet. Try a venue name with its city.'}
+              </Text>
             )}
+            {googleSearchLoading && filteredVenues.length ? (
+              <Text style={[styles.noResults, { color: colors.mutedForeground }]}>Searching Google Maps…</Text>
+            ) : null}
           </View>
         ) : null}
       </View>
@@ -913,6 +1163,13 @@ export default function MapScreen() {
             <Text style={[styles.plannerBannerEyebrow, { color: colors.honey }]}>PANDA ROUTE</Text>
             <Text style={[styles.plannerBannerTitle, { color: colors.primaryForeground }]}>
               {plannerMode === 'morning' ? 'Your morning' : plannerMode === 'lunch' ? 'Your lunch' : 'Your night'} · {plannerVenues.length} stops
+            </Text>
+            <Text style={{ color: colors.mint300, fontSize: 11, marginTop: 4 }}>
+              {plannerWalkingLegs.length
+                ? `${Math.ceil(plannerWalkingLegs.reduce((total, leg) => total + leg.durationMinutes, 0))} min walking between stops`
+                : plannerWalking.key === plannerWalkingKey && plannerWalking.state === 'error'
+                  ? 'Walking paths unavailable · numbered stop order shown'
+                  : 'Checking walking paths between stops…'}
             </Text>
             <View style={styles.plannerStopRow}>
               {plannerVenues.slice(0, 3).map((venue, index) => (
@@ -941,9 +1198,9 @@ export default function MapScreen() {
 
       {!directionsVenue && !plannerActive ? (
       <Pressable
-        accessibilityLabel="Close map"
+        accessibilityLabel={returnTo === 'panda-me' ? 'Back to Panda Me' : 'Close map'}
         accessibilityRole="button"
-        onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))}
+        onPress={returnFromMap}
         style={[styles.closeButton, { backgroundColor: colors.card, top: Math.max(14, insets.top + 8) }]}
       >
         <Feather name="x" size={21} color={colors.foreground} />
@@ -960,17 +1217,22 @@ export default function MapScreen() {
           mode={routeMode}
           onModeChange={changeRouteMode}
           hasMappedRoute={hasMappedRoute}
-          transitAvailable={directionsVenue.id.startsWith('ChIJ')}
+          transitAvailable={isGooglePlaceVenue(directionsVenue)}
           transitRefreshing={transitRefreshing}
           transitError={transitError}
+          routeWatchEnabled={routeWatchEnabled}
+          routeWatchStatus={routeWatchStatus}
+          onRouteWatchToggle={() => void toggleRouteWatch()}
           onRefreshTransit={() => void refreshTransit()}
           navigationActive={navigationActive}
           navigationStepIndex={navigationStepIndex}
           navigationError={routeUpdateError ?? navigationError}
           onStartNavigation={() => {
-            recordVenueActivity('directions_click', directionsVenue);
-            void Linking.openURL(googleDirectionsUrl(directionsVenue, routeMode))
-              .catch(() => setNavigationError('Google Maps could not open. Please check your maps app.'));
+            if (!walkingRoute?.steps?.length) {
+              setNavigationError('Step-by-step walking directions are unavailable for this route.');
+              return;
+            }
+            setWalkStartRequested(true);
           }}
           onStopNavigation={stopNavigation}
           onReroute={() => {
@@ -1065,7 +1327,7 @@ export default function MapScreen() {
                                   plannerVenues: String(plannerVenueData || ''),
                                   plannerMode: String(plannerMode || 'night'),
                                   plannerLocation: String(plannerLocation || 'Current location'),
-                                  plannerPrice: String(plannerPrice || '££££'),
+                                  plannerPrice: String(plannerPrice || '££'),
                                 }
                               : liveVenues.some((item) => item.id === venue.id)
                                 ? {
@@ -1207,6 +1469,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 9,
   },
+  mapBackButton: { alignItems: 'center', height: 34, justifyContent: 'center', width: 28 },
   searchInput: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 14, marginLeft: 9, paddingVertical: 0 },
   clearSearch: { padding: 3 },
   searchResults: {

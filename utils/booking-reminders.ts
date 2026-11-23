@@ -4,6 +4,7 @@ export type ReminderBooking = {
 };
 export type ReminderKind = 'day-before' | 'two-hours';
 export type BookingReminder = { kind: ReminderKind; at: number };
+
 function localStamp(value: Date, timeZone: string) {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
@@ -12,6 +13,8 @@ function localStamp(value: Date, timeZone: string) {
   const n = (type: string) => Number(parts.find(p => p.type === type)?.value);
   return Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'));
 }
+
+// Provider values are restaurant-local, not the phone's local timezone.
 export function restaurantInstant(local: string, timeZone: string | null): number {
   if (!timeZone) throw new Error('The restaurant timezone is missing. Panda cannot safely schedule this reminder yet.');
   const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(local);
@@ -29,6 +32,7 @@ export function restaurantInstant(local: string, timeZone: string | null): numbe
   }
   return candidate;
 }
+
 export function bookingReminderPlan(booking: ReminderBooking, now = Date.now()): BookingReminder[] {
   if (booking.status !== 'confirmed') return [];
   const start = restaurantInstant(booking.startDateTime, booking.timeZone);
@@ -40,6 +44,7 @@ export function bookingReminderPlan(booking: ReminderBooking, now = Date.now()):
     { kind: 'two-hours' as const, at: start - 2 * 3_600_000 },
   ].filter(reminder => reminder.at > now);
 }
+
 export function bookingCounts(bookings: ReminderBooking[]) {
   const confirmed = [...new Map(bookings.filter(b => b.status === 'confirmed').map(b => [b.id, b])).values()];
   const tests = confirmed.filter(b => b.environment === 'sandbox').length;
@@ -49,6 +54,7 @@ export function bookingCounts(bookings: ReminderBooking[]) {
     : `${real} confirmed booking${real === 1 ? '' : 's'}`;
   return { total: confirmed.length, real, tests, label };
 }
+
 export type ScheduledBookingReminder = { id: string; owner: string; booking: string; fingerprint: string };
 type Adapter = {
   key: (value: string) => Promise<string>;
@@ -59,6 +65,8 @@ type Adapter = {
 };
 export const reminderFingerprint = (booking: ReminderBooking) =>
   `${booking.startDateTime}|${booking.timeZone}|${booking.partySize}|${booking.venueName}|${booking.environment}`;
+
+// One queue avoids duplicate schedules; owner changes invalidate in-flight work immediately.
 export function createBookingReminderScheduler(adapter: Adapter) {
   let active: string | null = null;
   let revision = 0;
@@ -89,6 +97,7 @@ export function createBookingReminderScheduler(adapter: Adapter) {
       for (const reminder of plan) {
         check();
         const id = `panda-booking-${owner}-${booking}-${reminder.kind}`;
+        // Include the identifier before awaiting: cancellation can clean up uncertain schedules too.
         created.push(id);
         await adapter.schedule(id, owner, booking, b, reminder);
       }

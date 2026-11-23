@@ -16,13 +16,8 @@ type LiveVenuesContextValue = {
   coordinates: UserCoordinates | null;
   liveArea: string;
   liveVenues: Venue[];
-  listedVenues: Venue[] | null;
-  setListedVenues: React.Dispatch<React.SetStateAction<Venue[] | null>>;
   locationStatus: 'loading' | UserLocationSnapshot['status'];
-  refreshLocation: (
-    requestPermission?: boolean,
-    options?: { forceFresh?: boolean },
-  ) => Promise<UserLocationSnapshot>;
+  refreshLocation: (requestPermission?: boolean) => Promise<UserLocationSnapshot>;
   setLiveArea: React.Dispatch<React.SetStateAction<string>>;
   setLiveVenues: React.Dispatch<React.SetStateAction<Venue[]>>;
 };
@@ -51,14 +46,9 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
   const [coordinates, setCoordinates] = useState<UserCoordinates | null>(null);
   const [liveArea, setLiveArea] = useState('');
   const [liveVenues, setLiveVenues] = useState<Venue[]>([]);
-  const [listedVenues, setListedVenues] = useState<Venue[] | null>(null);
   const [locationStatus, setLocationStatus] = useState<LiveVenuesContextValue['locationStatus']>('loading');
 
-  const refreshLocation = useCallback(async (
-    requestPermission = true,
-    options: { forceFresh?: boolean } = {},
-  ): Promise<UserLocationSnapshot> => {
-    const forceFresh = options.forceFresh === true;
+  const refreshLocation = useCallback(async (requestPermission = true): Promise<UserLocationSnapshot> => {
     setLocationStatus('loading');
 
     try {
@@ -71,7 +61,7 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
           geolocation.getCurrentPosition(
             ({ coords }) => resolve({ latitude: coords.latitude, longitude: coords.longitude }),
             reject,
-            { enableHighAccuracy: true, maximumAge: forceFresh ? 0 : 30_000, timeout: 12_000 },
+            { enableHighAccuracy: true, maximumAge: 30_000, timeout: 12_000 },
           );
         });
       } else {
@@ -91,15 +81,13 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
           // discovery indefinitely when Android's location provider stalls.
           position = await getCurrentPositionWithTimeout();
         } catch {
-          if (!forceFresh) {
-            try {
-              position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
-            } catch {
-              position = null;
-            }
+          try {
+            position = await Location.getLastKnownPositionAsync({ maxAge: 120_000 });
+          } catch {
+            position = null;
           }
         }
-        if (!position && !forceFresh) {
+        if (!position) {
           try {
             position = await Location.getLastKnownPositionAsync();
           } catch {
@@ -143,14 +131,12 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
       coordinates,
       liveArea,
       liveVenues,
-      listedVenues,
-      setListedVenues,
       locationStatus,
       refreshLocation,
       setLiveArea,
       setLiveVenues,
     }),
-    [coordinates, liveArea, liveVenues, listedVenues, locationStatus, refreshLocation],
+    [coordinates, liveArea, liveVenues, locationStatus, refreshLocation],
   );
 
   return <LiveVenuesContext.Provider value={value}>{children}</LiveVenuesContext.Provider>;

@@ -6,6 +6,8 @@ export type ProfilePreferences = {
   homeAddress: string;
   homeLatitude: number | null;
   homeLongitude: number | null;
+  pandaMemoryEnabled: boolean;
+  pandaMemories: string[];
 };
 
 export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
@@ -16,6 +18,8 @@ export const DEFAULT_PROFILE_PREFERENCES: ProfilePreferences = {
   homeAddress: '',
   homeLatitude: null,
   homeLongitude: null,
+  pandaMemoryEnabled: false,
+  pandaMemories: [],
 };
 
 export function profilePreferencesStorageKey(userId?: string | null): string {
@@ -100,6 +104,12 @@ export function parseProfilePreferences(value: string | null): ProfilePreference
   try {
     const parsed = JSON.parse(value) as Partial<ProfilePreferences>;
     const dateOfBirth = typeof parsed.dateOfBirth === 'string' ? parsed.dateOfBirth : '';
+    const pandaMemories = Array.isArray(parsed.pandaMemories)
+      ? [...new Set(parsed.pandaMemories
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim().slice(0, 180))
+        .filter(Boolean))].slice(0, 20)
+      : [];
     return {
       displayName: typeof parsed.displayName === 'string' ? parsed.displayName.trim().slice(0, 60) : '',
       dateOfBirth: validateDateOfBirth(dateOfBirth) ? '' : dateOfBirth,
@@ -119,8 +129,39 @@ export function parseProfilePreferences(value: string | null): ProfilePreference
         && Math.abs(parsed.homeLongitude) <= 180
         ? parsed.homeLongitude
         : null,
+      pandaMemoryEnabled: typeof parsed.pandaMemoryEnabled === 'boolean'
+        ? parsed.pandaMemoryEnabled
+        : DEFAULT_PROFILE_PREFERENCES.pandaMemoryEnabled,
+      pandaMemories,
     };
   } catch {
     return { ...DEFAULT_PROFILE_PREFERENCES };
   }
+}
+
+export type PandaMemoryCommand =
+  | { action: 'remember'; memory: string }
+  | { action: 'forget'; memory: string }
+  | { action: 'forget-all' }
+  | { action: 'blocked' };
+
+/** Save only short, explicit, non-sensitive facts on the signed-in device. */
+export function parsePandaMemoryCommand(text: string): PandaMemoryCommand | null {
+  const clean = text.trim().replace(/[.!?]+$/, '').trim();
+  const prefix = /^(?:hey\s+)?(?:panda[\s,:-]+)?/i;
+  const command = clean.replace(prefix, '');
+  if (/^forget(?: everything| all(?: memories)?)$/i.test(command)) {
+    return { action: 'forget-all' };
+  }
+  const remember = /^remember(?: that)?\s+(.+)$/i.exec(command);
+  if (remember) {
+    const memory = remember[1].trim().slice(0, 180);
+    if (!memory || /\b(password|passcode|one[- ]time code|bank account|card number|cvv|security code|national insurance number|passport number|diagnos(?:is|ed)|medication|medical condition|allerg(?:y|ies))\b/i.test(memory)) {
+      return { action: 'blocked' };
+    }
+    return { action: 'remember', memory };
+  }
+  const forget = /^forget(?: that)?\s+(.+)$/i.exec(command);
+  if (forget) return { action: 'forget', memory: forget[1].trim().slice(0, 180) };
+  return null;
 }

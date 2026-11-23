@@ -2,8 +2,8 @@ import { Feather, Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   Keyboard,
-  Linking,
   Modal,
   Pressable,
   ScrollView,
@@ -16,62 +16,52 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaLogo } from '@/components/PandaLogo';
 import { VenuePhoto } from '@/components/VenuePhoto';
 import { ReserveButton } from '@/components/ReserveButton';
-import { PANDA_RUNTIME_API } from '@/constants/services';
+import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { getPandaTimeMode } from '@/constants/panda-time';
-import { venues, type Venue } from '@/data/venues';
-import { useColors } from '@/hooks/useColors';
 import { useLiveVenues } from '@/context/live-venues';
-import { choosePlanStops, googleDirectionsUrl, knownPriceWithinBudget, plannerVenueEligible, isLateNightVenue } from '@/utils/venue-actions';
-import { fetchWithDeadline } from '@/utils/banging-area-search';
-import { PLANNER_FACT_TTL_MS, PlannerResourceCache, stablePlannerSelection, canReusePlannerFacts, type PlannerSelection } from '@/utils/planner-performance';
+import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
+import type { Venue } from '@/data/venues';
+import { useColors } from '@/hooks/useColors';
 import { restorePlannerSnapshot } from '@/utils/planner-snapshot';
-import { isGooglePlaceVenue } from '@/utils/google-place-eligibility';
+import { createPlannerProfileLoader, hasVerifiedPlannerFacts, retainPlannerSelection, verifyPlannerCandidates, type PlannerSelection } from '@/utils/planner-candidates';
+
+const loadPlannerProfile = createPlannerProfileLoader(PANDA_DISCOVERY_API);
 
 export type PlannerMode = 'morning' | 'lunch' | 'night';
-const plannerRoutes = new PlannerResourceCache<{ durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }>();
-const plannerProfiles = new PlannerResourceCache<GooglePlannerProfile>();
-const plannerSearches = new Map<string, { values: PlannerSearchResult[]; expires: number }>();
-const plannerSearchInFlight = new Map<string, Promise<PlannerSearchResult[]>>();
 
 type PlannerStop = {
   icon: string;
   label: string;
-  categories: Array<Venue['category']>;
+  tags: DiscoveryCategory[];
   terms?: string[];
-  lateNight?: boolean;
-};
-
-type GooglePlannerProfile = {
-  id: string;
-  name: string;
-  address: string;
-  primaryType: string;
-  rating: number | null;
-  ratingCount: number | null;
-  price: string | null;
-  openNow: boolean | null;
-  todayHours: string | null;
-  googleMapsUrl: string;
-  source: 'google_places';
-  latitude?: number | null;
-  longitude?: number | null;
-  website?: string | null;
-  photoNames?: Array<{ name: string; attribution: string }>;
 };
 
 export type PlannerSearchResult = {
-  rating?: number;
-  ratingCount?: number;
   id: string;
   name: string;
   address: string;
-  category: string;
-  price?: string | null;
-  latitude?: number | null;
-  longitude?: number | null;
-  openNow?: boolean | null;
-  todayHours?: string | null;
-  photoNames?: Array<{ name: string; attribution: string }>;
+  fullAddress?: string;
+  lat?: number;
+  lng?: number;
+  type: string;
+  rating?: number;
+  ratingCount?: number;
+  price?: string;
+  openNow?: boolean;
+  detailsDeferred?: boolean;
+  openingHours?: string[];
+  phone?: string;
+  website?: string;
+  menuLink?: string;
+  mapsUri?: string;
+  directionsLink?: string;
+  photoAttribution?: string;
+  photoName?: string;
+  photoCount?: number;
+  distanceMeters?: number;
+  primaryType?: string;
+  types?: string[];
+  categories?: DiscoveryCategory[];
 };
 
 const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: PlannerStop[]; greetings: string[] }> = {
@@ -83,8 +73,8 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
       'Rise and shine — your easy-going morning is ready to roll. 🐼',
     ],
     stops: [
-      { icon: '☕', label: 'Coffee', categories: ['Coffee'], terms: ['coffee', 'cafe'] },
-      { icon: '🍳', label: 'Breakfast', categories: ['Restaurant'], terms: ['breakfast', 'all day'] },
+      { icon: '☕', label: 'Coffee', tags: ['Coffee'], terms: ['coffee', 'cafe'] },
+      { icon: '🍳', label: 'Breakfast', tags: ['Breakfast'], terms: ['breakfast', 'all day'] },
     ],
   },
   lunch: {
@@ -95,8 +85,8 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
       'No sad desk lunch today — Panda has lined up something worth leaving the house for.',
     ],
     stops: [
-      { icon: '🥗', label: 'Lunch', categories: ['Restaurant'] },
-      { icon: '☕', label: 'Coffee', categories: ['Coffee'], terms: ['coffee', 'cafe'] },
+      { icon: '🥗', label: 'Lunch', tags: ['Lunch'] },
+      { icon: '☕', label: 'Coffee', tags: ['Coffee'], terms: ['coffee', 'cafe'] },
     ],
   },
   night: {
@@ -107,9 +97,9 @@ const PLAN_MODES: Record<PlannerMode, { emoji: string; title: string; stops: Pla
       'Consider the evening upgraded: good food, great drinks and absolutely no boring plans.',
     ],
     stops: [
-      { icon: '🍽️', label: 'Dinner', categories: ['Restaurant'] },
-      { icon: '🍸', label: 'Drinks', categories: ['Bar', 'Pub'] },
-      { icon: '🪩', label: 'Late night', categories: ['Bar', 'Pub'], terms: ['nightclub', 'disco', 'late bar'], lateNight: true },
+      { icon: '🍽️', label: 'Dinner', tags: ['Dinner'] },
+      { icon: '🍸', label: 'Drinks', tags: ['Drinks', 'Bar'] },
+      { icon: '🌙', label: 'Late night', tags: ['Nightlife', 'Bar', 'Pubs'], terms: ['bar', 'pub', 'rooftop', 'cocktail'] },
     ],
   },
 };
@@ -127,12 +117,6 @@ const AREA_SUGGESTIONS = [
   'Islington',
   'Greenwich',
 ] as const;
-const REMOTE_SEARCH_TERMS: Record<PlannerMode, string> = {
-  morning: 'coffee breakfast brunch',
-  lunch: 'lunch restaurants cafes',
-  night: 'restaurants cocktail bars nightclubs late-night bars',
-};
-
 function defaultMode(): PlannerMode {
   return getPandaTimeMode();
 }
@@ -157,72 +141,101 @@ function plannerCategory(category: string): Venue['category'] {
   const normalized = category.toLowerCase();
   if (normalized.includes('coffee') || normalized.includes('cafe') || normalized.includes('bakery')) return 'Coffee';
   if (normalized.includes('pub')) return 'Pub';
-  if (normalized.includes('bar') || normalized.includes('cocktail') || normalized.includes('club') || normalized.includes('disco')) return 'Bar';
+  if (normalized.includes('bar') || normalized.includes('cocktail')) return 'Bar';
   return 'Restaurant';
 }
 
-export function venueFromSearchResult(
+function venueFromSearchResult(
   result: PlannerSearchResult,
   location: string,
 ): Venue {
-  const category = plannerCategory(result.category);
+  const classification = classifyGooglePlace({
+    primaryType: result.primaryType,
+    types: result.types,
+    type: result.type,
+    name: result.name,
+  });
+  const discoveryCategories = [...new Set([
+    ...classification.categories,
+    ...(result.categories ?? []),
+  ])];
+  const category = discoveryCategories.includes('Coffee')
+    ? 'Coffee'
+    : discoveryCategories.includes('Pubs')
+      ? 'Pub'
+      : discoveryCategories.some((tag) => ['Bar', 'Drinks', 'Nightlife'].includes(tag))
+        ? 'Bar'
+        : plannerCategory(result.type);
+  const todayIndex = (new Date().getDay() + 6) % 7;
+  const todayHours = result.openingHours?.[todayIndex]?.replace(/^[^:]+:\s*/, '');
+  const mapsUri =
+    result.directionsLink
+    || result.mapsUri
+    || `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`;
   return {
     id: result.id,
     name: result.name,
     neighborhood: location,
     category,
-    type: result.category,
+    type: result.type,
     distance: 'Live route',
     walkingTime: 'Directions available',
-    rating: result.rating != null ? result.rating.toFixed(1) : '',
+    rating: result.rating?.toFixed(1) ?? '',
     ratingCount: result.ratingCount ?? 0,
-    price: result.price || '',
-    latitude: result.latitude ?? undefined,
-    longitude: result.longitude ?? undefined,
-    distanceMeters: 0,
-    description: `${result.category} in ${location}.`,
-    hours: result.todayHours || 'Loading live details',
-    feature: result.category,
-    fullAddress: result.address,
+    price: result.price ?? '',
+    distanceMeters: result.distanceMeters ?? 0,
+    description: `${result.type} in ${location}.`,
+    hours: todayHours ?? 'Live hours unavailable',
+    feature: result.type,
+    fullAddress: result.fullAddress || result.address,
+    latitude: result.lat,
+    longitude: result.lng,
     openNow: result.openNow === true,
-    photoNames: result.photoNames,
-    photoName: result.photoNames?.[0]?.name,
-    photoCount: result.photoNames?.length,
-    website: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`,
-    mapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(result.name)}&query_place_id=${encodeURIComponent(result.id)}`,
-    phone: '',
+    website: result.website || result.menuLink || mapsUri,
+    mapsUri,
+    phone: result.phone ?? '',
     premium: false,
     banging: false,
     promoted: false,
-    photoAttributions: [],
+    photoAttributions: result.photoAttribution ? [result.photoAttribution] : [],
+    photoName: result.photoName,
+    photoCount: result.photoCount ?? 0,
+    detailsDeferred: result.detailsDeferred === true,
+    discoveryCategories,
   };
 }
 
-function buildRemotePlan(
-  mode: PlannerMode,
-  location: string,
-  results: Array<{ id: string; name: string; address: string; category: string }>,
-) {
-  const available = results.map((result) => venueFromSearchResult(result, location));
-  const used = new Set<string>();
-
-  return PLAN_MODES[mode].stops.flatMap((stop) => {
-    const match = available.find((venue) => {
-      if (used.has(venue.id)) return false;
-      const searchable = `${venue.category} ${venue.type} ${venue.feature} ${venue.name}`.toLowerCase();
-      return Boolean(stop.terms?.some((term) => searchable.includes(term)) || stop.categories.includes(venue.category));
-    }) ?? available.find((venue) => !used.has(venue.id));
-    if (!match) return [];
-    used.add(match.id);
-    return [match];
-  });
+function plannerTags(venue: Venue) {
+  if (venue.discoveryCategories?.length) return venue.discoveryCategories;
+  if (venue.category === 'Coffee') return ['Coffee', 'Breakfast', 'Lunch'] as DiscoveryCategory[];
+  if (venue.category === 'Pub') return ['Pubs', 'Bar', 'Drinks', 'Lunch', 'Dinner'] as DiscoveryCategory[];
+  if (venue.category === 'Bar') return ['Bar', 'Drinks', 'Nightlife', 'Dinner'] as DiscoveryCategory[];
+  return ['Lunch', 'Dinner'] as DiscoveryCategory[];
 }
 
-function getPlan(mode: PlannerMode, price: string, location: string, offset: number) {
+function priceLevel(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.min(4, Math.round(value)));
+  const text = String(value ?? '').trim();
+  const pounds = text.match(/£/g)?.length ?? 0;
+  if (pounds) return Math.min(pounds, 4);
+  const numeric = Number(text);
+  return Number.isFinite(numeric) ? Math.max(0, Math.min(4, Math.round(numeric))) : 0;
+}
+
+function getPlan(
+  mode: PlannerMode,
+  price: string,
+  location: string,
+  offset: number,
+  currentLocationVenues: Venue[],
+): Array<Venue | null> {
   const used = new Set<string>();
   const locationQuery = plannerLocationQuery(location);
-  const nearby = venues.filter((venue) => {
-    const withinPrice = Math.max(1, venue.price.length || 2) <= price.length;
+  const sourceVenues = locationQuery ? [] : currentLocationVenues.filter((venue) =>
+    !venue.id.startsWith('osm:') && venue.source !== 'openstreetmap');
+  const nearby = sourceVenues.filter((venue) => {
+    const level = priceLevel(venue.price);
+    const withinPrice = hasVerifiedPlannerFacts(venue) && level > 0 && level <= priceLevel(price);
     const withinArea =
       !locationQuery ||
       [venue.neighborhood, venue.fullAddress].join(' ').toLowerCase().includes(locationQuery);
@@ -230,11 +243,7 @@ function getPlan(mode: PlannerMode, price: string, location: string, offset: num
   });
   if (locationQuery && !nearby.length) return [];
 
-  const source = locationQuery
-    ? nearby
-    : nearby.filter((venue) => venue.id.startsWith('ChI')).length >= 3
-      ? nearby
-      : venues.filter((venue) => venue.id.startsWith('ChI') && Math.max(1, venue.price.length || 2) <= price.length);
+  const source = nearby;
 
   return PLAN_MODES[mode].stops.map((stop, stopIndex) => {
     const candidates = source
@@ -242,21 +251,20 @@ function getPlan(mode: PlannerMode, price: string, location: string, offset: num
         if (used.has(venue.id)) return false;
         const searchable = `${venue.category} ${venue.type} ${venue.feature}`.toLowerCase();
         const termMatch = stop.terms?.some((term) => searchable.includes(term));
-        return Boolean(termMatch || stop.categories.includes(venue.category));
+        return Boolean(termMatch || stop.tags.some((tag) => plannerTags(venue).includes(tag)));
       })
       .sort((a, b) => venueScore(b) - venueScore(a) || a.distanceMeters - b.distanceMeters);
-    const fallback = source.filter((venue) => !used.has(venue.id)).sort((a, b) => venueScore(b) - venueScore(a));
-    const pool = candidates.length ? candidates : fallback;
-    const venue = pool[(offset + stopIndex) % Math.max(1, Math.min(pool.length, 8))]
-      ?? source[(offset + stopIndex) % Math.max(1, source.length)]
-      ?? venues[stopIndex];
+    const venue = candidates.length
+      ? candidates[(offset + stopIndex) % candidates.length]
+      : null;
+    if (!venue) return null;
     used.add(venue.id);
     return venue;
   });
 }
 
-function walkBetween(first: Venue, second: Venue, route?: { durationMinutes: number; mode?: 'walking' | 'transit' }) {
-  return route ? `${route.durationMinutes} min ${route.mode === 'transit' ? 'transit' : 'walk'} · Google route` : 'Journey unavailable';
+function walkBetween(first: Venue, second: Venue) {
+  return first.id !== second.id ? 'View route for walking time' : '';
 }
 
 export function PandaPlannerSheet({
@@ -278,7 +286,7 @@ export function PandaPlannerSheet({
   onOpenMap: (
     plan: Venue[],
     mode: PlannerMode,
-    context: { price: string; location: string; routeSegments: Array<{ encoded: string; mode: 'walking' | 'transit' }> },
+    context: { price: string; location: string },
   ) => void;
   onOpenDirections: (
     venue: Venue,
@@ -292,195 +300,63 @@ export function PandaPlannerSheet({
 }) {
   const colors = useColors();
   const insets = useSafeAreaInsets();
+  const { liveVenues, coordinates } = useLiveVenues();
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<PlannerMode>(initialMode ?? defaultMode);
   const [price, setPrice] = useState<(typeof PRICE_OPTIONS)[number]>(
-    initialPrice === '££' || initialPrice === '£££' || initialPrice === '££££' ? initialPrice : '££££',
+    initialPrice === '££' || initialPrice === '£££' || initialPrice === '££££' ? initialPrice : '££',
   );
   const [location, setLocation] = useState(initialLocation || 'Current location');
   const [locationFocused, setLocationFocused] = useState(false);
   const [shuffle, setShuffle] = useState(0);
-  const [seenChoices, setSeenChoices] = useState<{ scope: string; ids: string[] }>({ scope: '', ids: [] });
-  const [expansion, setExpansion] = useState<{ scope: string; wide: boolean }>({ scope: '', wide: false });
-  const [blockedChoices, setBlockedChoices] = useState<{ scope: string; ids: string[] }>({ scope: '', ids: [] });
-  const [googleProfiles, setGoogleProfiles] = useState<Record<string, GooglePlannerProfile | null>>({});
-  const [remotePlan, setRemotePlan] = useState<Venue[] | null>(null);
+  const [remoteCandidates, setRemoteCandidates] = useState<Venue[] | null>(null);
   const [remoteLocation, setRemoteLocation] = useState('');
-  const [remoteReadyScope, setRemoteReadyScope] = useState('');
   const [remoteSearchState, setRemoteSearchState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
-  const [retryVersion, setRetryVersion] = useState(0);
-  const [planProgress, setPlanProgress] = useState('Checking venue details…');
-  const [planError, setPlanError] = useState<string | null>(null);
-  const selectionRef = useRef<PlannerSelection<Venue> | null>(null);
+  const stableSelection = useRef<PlannerSelection | null>(null);
+  const pullHint = useRef(new Animated.Value(0)).current;
   const restoredPlan = useMemo(() => {
     const ids = String(initialPlanIds || '').split(',').filter(Boolean);
-    return restorePlannerSnapshot(initialPlanVenues, ids);
-  }, [initialPlanIds, initialPlanVenues]);
-  const { liveVenues, listedVenues, coordinates } = useLiveVenues();
+    if (
+      ids.length !== PLAN_MODES[mode].stops.length || shuffle !== 0
+      || (initialMode && mode !== initialMode)
+      || (initialPrice && price !== initialPrice)
+      || location !== (initialLocation || 'Current location')
+    ) return null;
+    const snapshot = restorePlannerSnapshot(initialPlanVenues, ids);
+    const restored = ids.map((id) => snapshot?.find((venue) => venue.id === id) ?? liveVenues.find((venue) => venue.id === id));
+    return restored.every((venue) => venue && hasVerifiedPlannerFacts(venue)) ? (restored as Venue[]) : null;
+  }, [initialPlanIds, initialPlanVenues, initialMode, initialPrice, initialLocation, location, mode, price, shuffle, liveVenues]);
   const config = PLAN_MODES[mode];
   const locationQuery = plannerLocationQuery(location);
-  const searchArea = locationQuery || (coordinates ? `${coordinates.latitude.toFixed(2)}, ${coordinates.longitude.toFixed(2)}` : '');
-  const choiceScope = `${mode}:${searchArea}:${price}`;
-  const excludedIds = [
-    ...(seenChoices.scope === choiceScope ? seenChoices.ids : []),
-    ...(blockedChoices.scope === choiceScope ? blockedChoices.ids : []),
-  ];
-  const wide = expansion.scope === choiceScope && expansion.wide;
-  const sourceVenues = useMemo(() => {
-    if (!open) return [];
-    // Reuse real Google venues already visible in Discovery, including
-    // resolved partner cards, rather than silently omitting those choices.
-    const visible = (listedVenues ?? []).filter(venue =>
-      (venue.photoName || venue.photoNames?.length) && isGooglePlaceVenue(venue));
-    const source = [...liveVenues, ...visible,
-      ...(!locationQuery && remotePlan && remoteLocation === searchArea ? remotePlan : [])];
-    return [...new Map(source.slice().reverse().map(venue => [venue.id, venue])).values()];
-  }, [open, liveVenues, listedVenues, remotePlan, remoteLocation, searchArea, locationQuery]);
   const localPlan = useMemo(
-    () => choosePlanStops(config.stops, sourceVenues, price, 0, { origin: coordinates, excludedIds }),
-    [config.stops, sourceVenues, price, coordinates, seenChoices, blockedChoices, choiceScope],
+    () => restoredPlan ?? getPlan(mode, price, locationQuery || location, shuffle, liveVenues),
+    [liveVenues, location, locationQuery, mode, price, restoredPlan, shuffle],
   );
-  const restoredForScope = shuffle === 0 && mode === initialMode
-    && price === initialPrice
-    && locationQuery === plannerLocationQuery(initialLocation || 'Current location')
-    && restoredPlan?.length === config.stops.length
-    && restoredPlan.every(venue => plannerVenueEligible(venue, price) && !excludedIds.includes(venue.id))
-      ? restoredPlan.map(venue => ({ ...venue, cached: true })) : null;
-  const proposedPlan = !open ? [] : restoredForScope ?? (remotePlan && remoteLocation === locationQuery
-    ? choosePlanStops(config.stops, remotePlan, price, 0, { origin: coordinates, excludedIds }) : locationQuery ? [] : localPlan
+  const needsNearbyDetails = !locationQuery && !restoredPlan && (
+    liveVenues.length === 0
+    || localPlan.length !== config.stops.length
+    || localPlan.some((venue) => !venue)
   );
-   const selectionKey = `${choiceScope}:${shuffle}:${initialPlanIds || ''}`;
-   const selection = stablePlannerSelection(selectionRef.current, selectionKey, proposedPlan, config.stops.length, excludedIds);
-   const candidatePlan = selection.plan;
-   const candidateKey = `${mode}:${searchArea}:${price}:${coordinates?.latitude.toFixed(4)}:${coordinates?.longitude.toFixed(4)}:${candidatePlan.map(venue => venue.id).join(',')}`;
-    const [verified, setVerified] = useState<{ key: string; expires: number; plan: Venue[]; legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }> } | null>(null);
-  const [planCheck, setPlanCheck] = useState<'loading' | 'ready' | 'error' | 'empty'>('empty');
-   const plan = open && verified?.key === candidateKey ? verified.plan : [];
-  const verifiedLegs = verified?.key === candidateKey ? verified.legs : {};
-
-  useEffect(() => { if (open) selectionRef.current = selection; }, [open, selection]);
-
+  // Price, shuffle and day/night choices only reselect from the same returned
+  // candidate set. They must not restart an identical area search.
+  const remotePlan = useMemo(
+    () => remoteCandidates
+      ? getPlan(mode, price, 'Current location', shuffle, remoteCandidates)
+      : null,
+    [mode, price, remoteCandidates, shuffle],
+  );
+  const proposedSlots = remotePlan && remoteLocation === locationQuery
+    ? remotePlan
+    : needsNearbyDetails
+      ? config.stops.map(() => null)
+      : localPlan;
+  const selectionKey = JSON.stringify([mode, price, locationQuery, shuffle, openRequest]);
+  const selection = retainPlannerSelection(stableSelection.current, selectionKey, proposedSlots, config.stops.length);
+  const planSlots = selection.venues;
   useEffect(() => {
-    if (!open || locationFocused) return;
-    if (verified?.key === candidateKey && verified.expires > Date.now()) {
-      setPlanCheck('ready');
-      return;
-    }
-    let active = true;
-    if (candidatePlan.length < config.stops.length) { setVerified(null); setPlanCheck('empty'); return; }
-    setPlanCheck('loading');
-    setPlanError(null);
-    setPlanProgress('Checking venue details…');
-    const checkStartedAt = Date.now();
-    let profilesFinishedAt = checkStartedAt;
-    void (async () => {
-      const profiles = await Promise.all(candidatePlan.map(async venue => {
-        return plannerProfiles.get(venue.id, async () => {
-        // Nearby discovery and planner search already contain verified provider facts.
-        // Do not block every plan on three redundant detail requests.
-        if (canReusePlannerFacts(venue, plannerVenueEligible(venue, price))) {
-          return {
-            id: venue.id, name: venue.name, address: venue.fullAddress, primaryType: venue.type,
-            price: venue.price, rating: Number(venue.rating), ratingCount: venue.ratingCount,
-            latitude: venue.latitude, longitude: venue.longitude, openNow: venue.openNow,
-            todayHours: venue.hours, googleMapsUrl: venue.mapsUri || venue.website,
-            photoNames: venue.photoNames, website: venue.website, source: 'google_places',
-          } as GooglePlannerProfile;
-        }
-        const response = await fetchWithDeadline(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(venue.id)}/profile`);
-        if (!response.ok) throw new Error('Venue facts unavailable');
-        const value = await response.json() as GooglePlannerProfile;
-        if (value.source !== 'google_places') throw new Error('Verified venue facts unavailable');
-        return value;
-        });
-      }));
-      if (!active) return;
-      profilesFinishedAt = Date.now();
-      const proofExpiries = candidatePlan.map(venue => plannerProfiles.expiresAt(venue.id));
-      const invalidIndex = profiles.findIndex((profile, index) => !knownPriceWithinBudget(profile.price, price) ||
-        !plannerVenueEligible({ ...candidatePlan[index], price: profile.price || '', rating: String(profile.rating ?? '') }, price) ||
-        !Number.isFinite(profile.latitude) || !Number.isFinite(profile.longitude));
-      if (invalidIndex >= 0) {
-        throw Object.assign(new Error('A venue has no verified price within the selected budget'),
-          { blockedId: candidatePlan[invalidIndex].id });
-      }
-      const verifiedVenues = candidatePlan.map((venue, index) => ({
-        ...venue, name: profiles[index].name || venue.name, fullAddress: profiles[index].address || venue.fullAddress,
-        price: profiles[index].price!, latitude: profiles[index].latitude!,
-        longitude: profiles[index].longitude!, mapsUri: profiles[index].googleMapsUrl || venue.mapsUri,
-        website: profiles[index].website || venue.website, photoNames: profiles[index].photoNames || venue.photoNames,
-      }));
-      const legs: Record<string, { durationMinutes: number; mode?: 'walking' | 'transit'; polyline?: string }> = {};
-      setPlanProgress('Checking walking and public transport…');
-      const checks: Promise<void>[] = [];
-      for (let first = 0; first < verifiedVenues.length; first++) {
-        for (let second = first + 1; second < verifiedVenues.length; second++) {
-          checks.push((async () => {
-          const from = verifiedVenues[first], to = verifiedVenues[second];
-          const isLateLeg = mode === 'night' && first === 1 && second === 2;
-          const isLateJourney = true;
-          const key = `${from.id}:${to.id}:transit:${isLateLeg ? 40 : 60}`;
-          const route = await plannerRoutes.get(key, async () => {
-            const response = await fetchWithDeadline(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(to.id)}/${isLateJourney ? 'transit' : 'walking'}?latitude=${from.latitude}&longitude=${from.longitude}&planner=1&max_minutes=${isLateLeg ? 40 : 60}`);
-            if (!response.ok) throw Object.assign(new Error('Inter-venue journey unavailable'),
-              { blockedId: response.status === 404 ? to.id : undefined });
-             const payload = await response.json() as { durationMinutes: number; polyline?: string; recommendation?: string; directWalk?: { durationMinutes: number; polyline?: string }; transitRoute?: { durationMinutes: number; polyline?: string } };
-            const durationMinutes = isLateJourney
-              ? payload.recommendation === 'walk' ? payload.directWalk?.durationMinutes : payload.transitRoute?.durationMinutes
-              : payload.durationMinutes;
-            if (!Number.isFinite(durationMinutes) || durationMinutes! < 1) throw new Error('Invalid verified journey');
-             const polyline = isLateJourney ? payload.recommendation === 'walk' ? payload.directWalk?.polyline : payload.transitRoute?.polyline : payload.polyline;
-             return { durationMinutes: durationMinutes!, mode: isLateJourney && payload.recommendation !== 'walk' ? 'transit' as const : 'walking' as const, polyline };
-          });
-          proofExpiries.push(plannerRoutes.expiresAt(key));
-          if (route.durationMinutes > (isLateLeg ? 40 : 60)) {
-            throw Object.assign(new Error('Venues exceed the travel limit'), { blockedId: to.id });
-          }
-          legs[`${from.id}:${to.id}`] = route;
-          })());
-        }
-      }
-      if (coordinates) for (const to of verifiedVenues) checks.push((async () => {
-        const key = `origin:${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}:${to.id}:transit:60`;
-        const route = await plannerRoutes.get(key, async () => {
-          const response = await fetchWithDeadline(
-            `${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(to.id)}/transit?latitude=${coordinates.latitude}&longitude=${coordinates.longitude}&planner=1&max_minutes=60`,
-            {});
-          if (!response.ok) throw Object.assign(new Error('Current-location journey unavailable'),
-            { blockedId: response.status === 404 ? to.id : undefined });
-          const payload = await response.json() as { recommendation?: string;
-            directWalk?: { durationMinutes: number }; transitRoute?: { durationMinutes: number } };
-          const durationMinutes = payload.recommendation === 'walk'
-            ? payload.directWalk?.durationMinutes : payload.transitRoute?.durationMinutes;
-          if (!Number.isFinite(durationMinutes) || durationMinutes! < 1 || durationMinutes! > 60) {
-            throw Object.assign(new Error('Venue exceeds one hour from your location'), { blockedId: to.id });
-          }
-          return { durationMinutes: durationMinutes! };
-        });
-        proofExpiries.push(plannerRoutes.expiresAt(key));
-        if (route.durationMinutes > 60) throw Object.assign(new Error('Venue exceeds one hour'), { blockedId: to.id });
-      })());
-      await Promise.all(checks);
-      if (!active) return;
-      setGoogleProfiles(current => ({ ...current, ...Object.fromEntries(profiles.map(profile => [profile.id, profile])) }));
-      setVerified({ key: candidateKey, expires: Math.min(Date.now() + PLANNER_FACT_TTL_MS, ...proofExpiries), plan: verifiedVenues, legs });
-      setPlanCheck('ready');
-      console.info('[Panda planner]', JSON.stringify({
-        stage: 'verification', profilesMs: profilesFinishedAt - checkStartedAt,
-        journeysMs: Date.now() - profilesFinishedAt, totalMs: Date.now() - checkStartedAt,
-      }));
-    })().catch(error => { if (active) {
-      setVerified(null); setPlanCheck('error');
-      setPlanError(error?.name === 'AbortError' || error?.name === 'TimeoutError'
-        ? 'The live checks timed out. Please retry; Panda will keep your area and budget.'
-        : 'No verified plan within your budget and one-hour travel limit. Retry or choose another area.');
-      if (error.blockedId && (blockedChoices.scope !== choiceScope || blockedChoices.ids.length < 3)) {
-        setBlockedChoices(current => ({ scope: choiceScope,
-          ids: [...new Set([...(current.scope === choiceScope ? current.ids : []), error.blockedId])] }));
-      }
-    } });
-    return () => { active = false; };
-  }, [candidateKey, open, locationFocused, retryVersion]);
+    stableSelection.current = open ? selection : null;
+  }, [open, selection]);
+  const plan = planSlots.filter((venue): venue is Venue => Boolean(venue));
   const displayedLocation = locationQuery
     ? locationQuery.replace(/\b\w/g, (letter) => letter.toUpperCase())
     : 'Current location';
@@ -489,104 +365,124 @@ export function PandaPlannerSheet({
   );
 
   useEffect(() => {
-    if (!open || locationFocused) return;
-    if (!searchArea || restoredForScope || (!locationQuery && candidatePlan.length === config.stops.length && !wide)) {
+    if (!open || restoredPlan || (!locationQuery && !needsNearbyDetails)) {
       setRemoteSearchState('idle');
+      if (!open) {
+        setRemoteCandidates(null);
+        setRemoteLocation('');
+        setRemoteSearchState('idle');
+      }
       return undefined;
     }
+    if (needsNearbyDetails && !coordinates) {
+      setRemoteSearchState('error');
+      return undefined;
+    }
+    if (remoteCandidates && remoteLocation === locationQuery) return undefined;
 
     let active = true;
-    const cacheKey = `${mode}:${searchArea}:${price.length >= 3 ? 'upscale' : 'standard'}:${wide ? 'wide' : 'near'}`;
-    const cached = plannerSearches.get(cacheKey);
-    if (cached && cached.expires > Date.now()) {
-      setRemotePlan(cached.values.map(result => venueFromSearchResult(result, searchArea)));
-      setRemoteLocation(searchArea);
-      setRemoteReadyScope(choiceScope);
-      setRemoteSearchState('ready');
-      return;
-    }
+    const controller = new AbortController();
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    setRemoteCandidates(null);
+    setRemoteLocation(locationQuery);
     setRemoteSearchState('loading');
     const timer = setTimeout(() => {
-      const namedArea = locationQuery && AREA_SUGGESTIONS.some(area => area.toLowerCase() === locationQuery)
-        ? `${searchArea}, London` : searchArea;
-      let request = plannerSearchInFlight.get(cacheKey);
-      if (!request) {
-        const searchStartedAt = Date.now();
-        const params = new URLSearchParams({ planner_pool: '1', mode,
-          budget: String(price.length), stage: wide ? 'wide' : 'near',
-          area: locationQuery ? namedArea : '' });
-        if (coordinates) {
-          params.set('latitude', String(coordinates.latitude));
-          params.set('longitude', String(coordinates.longitude));
-        }
-        request = fetchWithDeadline(`${PANDA_RUNTIME_API}/api/partner/venues?${params}`,
-          { headers: { Accept: 'application/json' } }, 30000).then(async response => {
-        if (!response.ok) throw new Error('Planner venue search failed');
-        const payload = await response.json() as { results?: PlannerSearchResult[] };
-        return [...new Map((payload.results ?? []).map(result => [result.id, result])).values()];
-        }).finally(() => console.info('[Panda planner]', JSON.stringify({
-          stage: 'candidate-search', elapsedMs: Date.now() - searchStartedAt,
-        })));
-        plannerSearchInFlight.set(cacheKey, request);
-        void request.then(values => plannerSearches.set(cacheKey, { values, expires: Date.now() + 3 * 60 * 60 * 1000 }))
-          .catch(() => {}).finally(() => plannerSearchInFlight.delete(cacheKey));
-      }
-      void request.then((values) => {
+      deadline = setTimeout(() => {
+        controller.abort();
+        if (active) setRemoteSearchState('error');
+      }, 15_000);
+      void fetch(
+        `${PANDA_DISCOVERY_API}/api/panda-ai`,
+        {
+          method: 'POST',
+          signal: controller.signal,
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            venuesOnly: true,
+            discoveryMode: 'indexed-feed',
+            category: 'All',
+            // Planner needs a small nearby candidate set from the existing ID
+            // index. The 200-card floor belongs to category feeds, not Planner.
+            pageSize: 60,
+            radiusMeters: 4_800,
+            ...(locationQuery
+              ? { area: locationQuery }
+              : coordinates
+                ? { location: { lat: coordinates.latitude, lng: coordinates.longitude } }
+                : {}),
+          }),
+        },
+      )
+        .then(async (response) => {
+          const payload = (await response.json()) as { venues?: PlannerSearchResult[]; error?: string };
+          if (!response.ok) throw new Error(payload.error || 'Planner venue search failed');
+          return payload;
+        })
+        .then(async (payload) => {
           if (!active) return;
-          setRemotePlan(values.map(result => venueFromSearchResult(result, searchArea)));
-          setRemoteLocation(searchArea);
-          setRemoteReadyScope(choiceScope);
+          const candidates = payload.venues ?? [];
+          const verified = await verifyPlannerCandidates(
+            candidates.map((candidate) => venueFromSearchResult(candidate, locationQuery || 'Current location')),
+            loadPlannerProfile,
+            controller.signal,
+          );
+          if (!active || controller.signal.aborted) return;
+          setRemoteCandidates(verified);
+          setRemoteLocation(locationQuery);
           setRemoteSearchState('ready');
         })
         .catch(() => {
           if (!active) return;
-          setRemotePlan(null);
+          setRemoteCandidates(null);
           setRemoteLocation('');
-          setRemoteReadyScope('');
           setRemoteSearchState('error');
-        });
-    }, 0);
+        })
+        .finally(() => clearTimeout(deadline));
+    }, 650);
 
     return () => {
       active = false;
       clearTimeout(timer);
+      clearTimeout(deadline);
+      controller.abort();
     };
-   }, [locationQuery, searchArea, mode, open, price, locationFocused, wide, candidatePlan.length, retryVersion, Boolean(restoredForScope)]);
-
-  useEffect(() => {
-    if (open && !locationFocused && remoteSearchState === 'ready' &&
-        remoteReadyScope === choiceScope && remoteLocation === searchArea &&
-        candidatePlan.length < config.stops.length && !wide) {
-      setExpansion({ scope: choiceScope, wide: true });
-    }
-  }, [open, locationFocused, remoteSearchState, remoteReadyScope, remoteLocation, searchArea, candidateKey, wide, choiceScope]);
+  }, [locationQuery, open, needsNearbyDetails, restoredPlan, coordinates?.latitude, coordinates?.longitude]);
 
   useEffect(() => {
     if (!openRequest) return;
     if (initialMode) setMode(initialMode);
     if (initialLocation) setLocation(initialLocation);
     if (initialPrice === '££' || initialPrice === '£££' || initialPrice === '££££') setPrice(initialPrice);
-    else setPrice('££££');
-    if (initialPlanIds) {
-      setShuffle(0);
-      setSeenChoices({ scope: '', ids: [] });
-      setBlockedChoices({ scope: '', ids: [] });
-    }
+    if (initialPlanIds) setShuffle(0);
     setOpen(true);
-  }, [initialLocation, initialMode, initialPrice, initialPlanIds, initialPlanVenues, openRequest]);
+  }, [initialLocation, initialMode, initialPlanIds, initialPrice, openRequest]);
+
+  useEffect(() => {
+    const animation = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pullHint, { toValue: 7, duration: 520, useNativeDriver: true }),
+        Animated.timing(pullHint, { toValue: 0, duration: 520, useNativeDriver: true }),
+        Animated.delay(900),
+      ]),
+    );
+    animation.start();
+    return () => animation.stop();
+  }, [pullHint]);
 
   return (
     <>
-      <Pressable
-        accessibilityLabel="Open Plan my night"
-        accessibilityHint="Opens Panda's day and night planner"
-        accessibilityRole="button"
-        onPress={() => { setPrice('££££'); setOpen(true); }}
-        style={({ pressed }) => [styles.pullHandle, { backgroundColor: colors.goldDeep }, pressed && styles.pressed]}
-      >
-        <LinearGradient colors={[colors.honey, colors.goldDeep]} style={StyleSheet.absoluteFill} />
-        <Feather name="chevron-right" size={22} color="#FFFFFF" />
-      </Pressable>
+      <Animated.View style={[styles.pullHandleMotion, { transform: [{ translateX: pullHint }] }]}>
+        <Pressable
+          accessibilityLabel="Pull out Panda Planner"
+          accessibilityHint="Opens Panda's day and night planner"
+          accessibilityRole="button"
+          onPress={() => setOpen(true)}
+          style={({ pressed }) => [styles.pullHandle, { backgroundColor: colors.goldDeep }, pressed && styles.pressed]}
+        >
+          <LinearGradient colors={[colors.honey, colors.goldDeep]} style={StyleSheet.absoluteFill} />
+          <Feather name="chevrons-right" size={23} color="#FFFFFF" />
+        </Pressable>
+      </Animated.View>
 
       <Modal animationType="fade" onRequestClose={() => setOpen(false)} transparent visible={open}>
         <View style={styles.modalRoot}>
@@ -655,8 +551,7 @@ export function PandaPlannerSheet({
                 <Ionicons name="location-outline" size={17} color={colors.green700} />
                 <TextInput
                   accessibilityLabel="Planner location"
-                  onChangeText={value => { setLocation(value); setLocationFocused(true); }}
-                  onBlur={() => setLocationFocused(false)}
+                  onChangeText={setLocation}
                   onFocus={() => {
                     setLocationFocused(true);
                     if (location === 'Current location') setLocation('');
@@ -684,7 +579,7 @@ export function PandaPlannerSheet({
                 <Pressable
                   accessibilityLabel="Use current location"
                   accessibilityRole="button"
-                  onPress={() => { setLocation('Current location'); setLocationFocused(false); Keyboard.dismiss(); }}
+                  onPress={() => setLocation('Current location')}
                   style={styles.locateButton}
                 >
                   <MaterialCommunityIcons name="crosshairs-gps" size={18} color={colors.green700} />
@@ -748,10 +643,10 @@ export function PandaPlannerSheet({
             ) : null}
 
             <Text style={[styles.filterStatus, { color: colors.mutedForeground }]}>
-              {displayedLocation} · 4+ rated · Up to {price}
-              {remoteSearchState === 'loading' ? ' · Finding live places…' : ''}
-              {remoteSearchState === 'ready' ? ' · Live places' : ''}
-              {remoteSearchState === 'error' ? ' · Live search unavailable' : ''}
+              {displayedLocation} · Up to {price}
+              {remoteSearchState === 'loading' ? ' · Finding saved nearby venues…' : ''}
+              {remoteSearchState === 'ready' ? ' · From Panda’s stored ID index' : ''}
+              {remoteSearchState === 'error' ? ' · Stored lookup unavailable' : ''}
             </Text>
 
             <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -762,111 +657,107 @@ export function PandaPlannerSheet({
                 </Text>
               </View>
 
-              <Text style={[styles.venueMeta, { color: colors.green700 }]}>
-                {planCheck === 'loading' ? planProgress :
-                  planCheck === 'error' ? planError :
-                    planCheck === 'ready' ? 'Verified prices · up to one hour by walking or public transport · late leg up to 40 min' :
-                      remoteSearchState === 'loading' ? 'Searching live venues…' : seenChoices.scope === choiceScope && seenChoices.ids.length
-                        ? 'No more unseen choices match this budget and travel limit. Try another price or area.'
-                        : 'No complete plan matches this budget and area.'}
-              </Text>
-              {!plan.length && (planCheck === 'error' || remoteSearchState === 'error') ? (
-                <Pressable
-                  testID="planner-retry"
-                  accessibilityRole="button"
-                  accessibilityLabel="Retry planner with this area and budget"
-                  onPress={() => setRetryVersion(value => value + 1)}
-                  style={[styles.plannerRetry, { backgroundColor: colors.secondary }]}
-                >
-                  <Feather name="refresh-cw" size={16} color={colors.green700} />
-                  <Text style={[styles.venueMeta, { color: colors.green700 }]}>Retry planner</Text>
-                </Pressable>
-              ) : null}
-              {plan.length ? plan.map((venue, index) => {
-                const google = googleProfiles[venue.id];
-                const displayName = google?.name ?? venue.name;
-                const displayAddress = google?.address ?? venue.fullAddress;
+              {config.stops.map((stop, index) => {
+                const venue = planSlots[index];
+                const nextVenue = planSlots[index + 1];
 
                 return (
-                <View key={`${mode}-${venue.id}-${shuffle}`}>
+                <View key={`${mode}-${stop.label}-${shuffle}`}>
                   <View style={styles.stopBadge}>
                     <Text style={[styles.stopBadgeText, { color: colors.green800 }]}>
-                      {config.stops[index].icon} {config.stops[index].label}
+                      {stop.icon} {stop.label}
                     </Text>
                   </View>
-                  <Pressable
-                    accessibilityLabel={`Open ${displayName}`}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setOpen(false);
-                      onOpenVenue(venue, { plan, mode, price, location });
-                    }}
-                    style={[styles.venueCard, { backgroundColor: colors.card, borderColor: colors.border }]}
-                  >
-                    <View style={styles.photo}>
-                      <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={88} />
-                    </View>
-                    <View style={styles.venueCopy}>
-                      <Text numberOfLines={1} style={[styles.venueName, { color: colors.foreground }]}>
-                        {displayName}
-                      </Text>
-                      <Text numberOfLines={1} style={[styles.venueAddress, { color: colors.mutedForeground }]}>
-                        {displayAddress}
-                      </Text>
-                      {google ? (
-                        <>
-                          <Text numberOfLines={1} style={[styles.venueMeta, { color: colors.green700 }]}>
-                            {google.openNow === true ? 'Open' : google.openNow === false ? 'Closed' : 'Hours unavailable'}
-                            {google.rating !== null ? ` · ★${google.rating}` : ''}
-                            {google.ratingCount !== null ? ` (${google.ratingCount})` : ''}
-                            {google.price ? ` · ${google.price}` : ''}
-                            {google.primaryType ? ` · ${google.primaryType}` : ''}
+                  {venue ? (
+                    <>
+                      <Pressable
+                        accessibilityLabel={`Open ${venue.name}`}
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setOpen(false);
+                          onOpenDirections(venue, { plan, mode, price, location });
+                        }}
+                        style={[styles.venueCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                      >
+                        <View style={styles.photo}>
+                          <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={88} />
+                        </View>
+                        <View style={styles.venueCopy}>
+                          <Text numberOfLines={1} style={[styles.venueName, { color: colors.foreground }]}>
+                            {venue.name}
                           </Text>
-                          <Text style={[styles.googleSource, { color: colors.mutedForeground }]}>Google</Text>
-                        </>
-                      ) : (
-                        <Text style={[styles.venueMeta, { color: colors.mutedForeground }]}>
-                          Loading Google details…
+                          <Text numberOfLines={1} style={[styles.venueAddress, { color: colors.mutedForeground }]}>
+                            {venue.fullAddress}
+                          </Text>
+                          <Text numberOfLines={1} style={[styles.venueMeta, { color: colors.green700 }]}>
+                            {venue.detailsDeferred
+                              ? 'Hours not verified'
+                              : venue.source === 'openstreetmap'
+                                ? 'Hours not listed'
+                                : venue.openNow ? 'Open' : 'Closed'}
+                            {venue.rating ? ` · ★${venue.rating}` : ''}
+                            {venue.ratingCount ? ` (${venue.ratingCount})` : ''}
+                            {venue.price ? ` · ${venue.price}` : ''}
+                            {venue.type ? ` · ${venue.type}` : ''}
+                          </Text>
+                          <Text style={[styles.googleSource, { color: colors.mutedForeground }]}>
+                            {venue.sourceAttribution || 'Google'}
+                          </Text>
+                        </View>
+                        <Feather name="chevron-right" size={19} color={colors.goldDeep} />
+                      </Pressable>
+                      <ReserveButton
+                        venue={venue}
+                        activitySurface="planner"
+                        compact
+                        onBeforeNavigate={() => setOpen(false)}
+                        style={{ alignSelf: 'flex-start', marginTop: 10 }}
+                      />
+                      <Pressable
+                        accessibilityLabel={`Walking directions to ${venue.name}`}
+                        accessibilityRole="button"
+                        onPress={() => {
+                          setOpen(false);
+                          onOpenDirections(venue, { plan, mode, price, location });
+                        }}
+                        style={styles.walkingLink}
+                      >
+                        <Ionicons name="walk-outline" size={17} color={colors.goldDeep} />
+                        <Text style={[styles.walkingLinkText, { color: colors.goldDeep }]}>Walking directions</Text>
+                      </Pressable>
+                    </>
+                  ) : (
+                    <View style={[styles.emptySlot, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                      <Ionicons
+                        name={remoteSearchState === 'loading' ? 'time-outline' : 'search-outline'}
+                        size={20}
+                        color={colors.green700}
+                      />
+                      <View style={styles.emptySlotCopy}>
+                        <Text style={[styles.emptySlotTitle, { color: colors.foreground }]}>
+                          {remoteSearchState === 'loading'
+                            ? `Checking live ${stop.label.toLowerCase()} venues and prices…`
+                            : remoteSearchState === 'error'
+                              ? 'Live venue and price checks unavailable'
+                              : `No verified ${stop.label.toLowerCase()} match within this budget`}
                         </Text>
-                      )}
+                        <Text style={[styles.emptySlotBody, { color: colors.mutedForeground }]}>
+                          Panda checks nearby Google venues, live prices and ratings. Unknown prices are not treated as affordable.
+                        </Text>
+                      </View>
                     </View>
-                    <Feather name="chevron-right" size={19} color={colors.goldDeep} />
-                  </Pressable>
-                  <ReserveButton venue={venue} activitySurface="planner" compact
-                    onBeforeNavigate={() => setOpen(false)} style={{ alignSelf: 'flex-start', marginTop: 10 }} />
-                  <Pressable
-                    accessibilityLabel={`Walking directions to ${displayName}`}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      setOpen(false);
-                      void Linking.openURL(googleDirectionsUrl(venue, 'walking'));
-                    }}
-                    style={styles.walkingLink}
-                  >
-                    <Ionicons name="walk-outline" size={17} color={colors.goldDeep} />
-                    <Text style={[styles.walkingLinkText, { color: colors.goldDeep }]}>Walking directions</Text>
-                  </Pressable>
-                  {index < plan.length - 1 ? (
+                  )}
+                  {venue && nextVenue ? (
                     <View style={styles.connector}>
                       <View style={[styles.connectorLine, { backgroundColor: colors.goldLine }]} />
                       <Text style={[styles.connectorText, { color: colors.foreground }]}>
-                        ↓ {walkBetween(venue, plan[index + 1], verifiedLegs[`${venue.id}:${plan[index + 1].id}`])} to the next stop
+                        ↓ {walkBetween(venue, nextVenue)} to the next stop
                       </Text>
                     </View>
                   ) : null}
                 </View>
                 );
-              }) : (
-                <View style={[styles.emptyLocation, { backgroundColor: colors.card, borderColor: colors.border }]}>
-                  <Ionicons name="search-outline" size={24} color={colors.green700} />
-                  <Text style={[styles.emptyLocationTitle, { color: colors.foreground }]}>
-                    {remoteSearchState === 'loading' ? 'Finding places in this location…' : `No Panda places found in “${locationQuery}”`}
-                  </Text>
-                  <Text style={[styles.emptyLocationBody, { color: colors.mutedForeground }]}>
-                    Try a city or area such as Chelsea, Soho or Covent Garden.
-                  </Text>
-                </View>
-              )}
+              })}
 
             </ScrollView>
 
@@ -874,17 +765,7 @@ export function PandaPlannerSheet({
               <Pressable
                 accessibilityLabel="Panda Shuffle"
                 accessibilityRole="button"
-                disabled={!plan.length}
-                onPress={() => {
-                  const ids = [...new Set([...(seenChoices.scope === choiceScope ? seenChoices.ids : []),
-                    ...plan.map(venue => venue.id)])];
-                  setSeenChoices({ scope: choiceScope, ids });
-                  setShuffle(value => value + 1);
-                  const source = locationQuery && remotePlan ? remotePlan : sourceVenues;
-                  if (choosePlanStops(config.stops, source, price, 0, { origin: coordinates, excludedIds: ids }).length < config.stops.length) {
-                    setExpansion({ scope: choiceScope, wide: true });
-                  }
-                }}
+                onPress={() => setShuffle((value) => value + 1)}
                 style={[styles.shuffleButton, { backgroundColor: colors.honey }]}
               >
                 <MaterialCommunityIcons name="shuffle-variant" size={19} color={colors.honeyInk} />
@@ -896,10 +777,7 @@ export function PandaPlannerSheet({
                 disabled={!plan.length}
                 onPress={() => {
                   setOpen(false);
-                  onOpenMap(plan, mode, { price, location, routeSegments: plan.slice(0, -1).flatMap((venue, index) => {
-                    const leg = verifiedLegs[`${venue.id}:${plan[index + 1].id}`];
-                    return leg?.polyline ? [{ encoded: leg.polyline, mode: leg.mode || 'walking' }] : [];
-                  }) });
+                  onOpenMap(plan, mode, { price, location });
                 }}
                 style={[styles.mapButton, { backgroundColor: colors.green800 }, !plan.length && styles.disabledButton]}
               >
@@ -915,6 +793,12 @@ export function PandaPlannerSheet({
 }
 
 const styles = StyleSheet.create({
+  pullHandleMotion: {
+    left: 0,
+    position: 'absolute',
+    top: '43%',
+    zIndex: 32,
+  },
   pullHandle: {
     alignItems: 'flex-end',
     borderBottomRightRadius: 18,
@@ -922,13 +806,9 @@ const styles = StyleSheet.create({
     elevation: 10,
     height: 62,
     justifyContent: 'center',
-    left: 0,
     overflow: 'hidden',
     paddingRight: 6,
-    position: 'absolute',
-    top: '43%',
     width: 38,
-    zIndex: 32,
   },
   modalRoot: { flex: 1, justifyContent: 'flex-end' },
   scrim: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(5, 26, 20, 0.48)' },
@@ -954,9 +834,9 @@ const styles = StyleSheet.create({
   modeButton: { alignItems: 'center', borderRadius: 12, flex: 1, justifyContent: 'center', minHeight: 39 },
   modeDivider: { alignSelf: 'center', height: 22, width: StyleSheet.hairlineWidth },
   modeText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
-  filters: { alignItems: 'stretch', flexDirection: 'column', gap: 8, marginTop: 11 },
-  locationField: { alignItems: 'center', borderRadius: 13, borderWidth: 1, minWidth: 0, flexDirection: 'row', height: 43, paddingLeft: 10 },
-  locationInput: { flex: 1, flexShrink: 1, minWidth: 0, fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 0 },
+  filters: { alignItems: 'center', flexDirection: 'row', gap: 8, marginTop: 11 },
+  locationField: { alignItems: 'center', borderRadius: 13, borderWidth: 1, flex: 1, flexDirection: 'row', height: 43, paddingLeft: 10 },
+  locationInput: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 11, paddingHorizontal: 7, paddingVertical: 0 },
   clearLocationButton: { alignItems: 'center', height: 36, justifyContent: 'center', width: 25 },
   locateButton: { alignItems: 'center', height: 40, justifyContent: 'center', width: 34 },
   priceRow: { flexDirection: 'row', gap: 4 },
@@ -975,6 +855,10 @@ const styles = StyleSheet.create({
   emptyLocation: { alignItems: 'center', borderRadius: 16, borderWidth: 1, marginTop: 4, paddingHorizontal: 18, paddingVertical: 24 },
   emptyLocationTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, marginTop: 8, textAlign: 'center' },
   emptyLocationBody: { fontFamily: 'Inter_500Medium', fontSize: 11, lineHeight: 16, marginTop: 6, textAlign: 'center' },
+  emptySlot: { alignItems: 'center', borderRadius: 16, borderWidth: 1, flexDirection: 'row', gap: 10, minHeight: 76, padding: 13 },
+  emptySlotCopy: { flex: 1 },
+  emptySlotTitle: { fontFamily: 'Inter_700Bold', fontSize: 12, lineHeight: 17 },
+  emptySlotBody: { fontFamily: 'Inter_500Medium', fontSize: 10, lineHeight: 15, marginTop: 4 },
   stopBadge: { alignSelf: 'flex-start', marginBottom: 5, marginLeft: 5, paddingVertical: 2 },
   stopBadgeText: { fontFamily: 'Inter_700Bold', fontSize: 15 },
   venueCard: {
@@ -998,7 +882,6 @@ const styles = StyleSheet.create({
   connectorLine: { height: 1, marginRight: 8, width: 19 },
   connectorText: { fontFamily: 'Inter_600SemiBold', fontSize: 9 },
   actions: { flexDirection: 'row', gap: 9, paddingTop: 9 },
-  plannerRetry: { alignItems: 'center', alignSelf: 'flex-start', borderRadius: 12, flexDirection: 'row', gap: 8, marginBottom: 12, minHeight: 44, paddingHorizontal: 14 },
   shuffleButton: { alignItems: 'center', borderRadius: 14, flex: 1.1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 48 },
   shuffleText: { fontFamily: 'Inter_700Bold', fontSize: 12 },
   mapButton: { alignItems: 'center', borderRadius: 14, flex: 1, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 48 },

@@ -39,10 +39,10 @@ export type Venue = {
   phone: string;
   premium: boolean;
   banging: boolean;
+  promoted: boolean;
   luxurySource?: string;
   bangingTransitMinutes?: number;
   bangingVerifiedAt?: number;
-  promoted: boolean;
   photoAttributions: string[];
   photoName?: string;
   photoCount?: number;
@@ -51,12 +51,6 @@ export type Venue = {
   photoUris?: Array<{ uri: string; attribution: string }>;
   detailsDeferred?: boolean;
   discoveryCategories?: DiscoveryCategory[];
-  openingSourceName?: string;
-  openingSourceUrl?: string;
-  openingDate?: string;
-  openingReportedAt?: string;
-  openingDesignation?: string;
-  openingEvidence?: string;
 };
 
 type PremiumRotationSeed = readonly [

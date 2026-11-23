@@ -16,11 +16,10 @@ export type DiscoveryCategory =
   | 'Chicken'
   | 'Pizza'
   | 'Burgers'
-  | 'Dessert'
   | 'Coffee'
   | 'Breakfast'
-  | 'Lunch'
   | 'Brunch'
+  | 'Lunch'
   | 'Bottomless'
   | 'Pubs'
   | 'Dinner'
@@ -28,7 +27,6 @@ export type DiscoveryCategory =
   | 'Sports'
   | 'Live Music'
   | 'Nightlife'
-  | 'Clubs'
   | 'Shops'
   | 'Places of Interest';
 
@@ -63,7 +61,6 @@ const INTEREST_TYPES = new Set([
   'church', 'mosque', 'synagogue', 'hindu_temple', 'buddhist_temple', 'place_of_worship',
   'sculpture', 'memorial', 'castle',
   'amusement_center',
-  'amphitheatre',
   'amusement_park',
   'aquarium',
   'art_gallery',
@@ -86,8 +83,6 @@ const INTEREST_TYPES = new Set([
 
 const FOOD_SERVICE_TYPES = new Set([
   'bar',
-  'bar_and_grill',
-  'beer_garden',
   'breakfast_restaurant',
   'brunch_restaurant',
   'cafe',
@@ -122,10 +117,6 @@ const CUISINE_TYPES: Array<[DiscoveryCategory, string[]]> = [
   ['Burgers', ['hamburger_restaurant']],
 ];
 
-const SPORTS_TYPES = new Set(['sports_complex', 'bowling_alley', 'amusement_center', 'sports_bar']);
-const LIVE_MUSIC_TYPES = new Set(['live_music_venue', 'concert_hall', 'karaoke', 'performing_arts_theater', 'amphitheatre']);
-const NIGHTLIFE_TYPES = new Set(['night_club', 'dance_hall', 'karaoke', 'bar_and_grill']);
-
 function hasAny(types: Set<string>, candidates: Set<string>) {
   return [...types].some((type) => candidates.has(type));
 }
@@ -154,20 +145,14 @@ export function classifyGooglePlace(input: GooglePlaceCategoryInput): {
   // retail/landmark type. A restaurant inside a station or shopping centre
   // is still a restaurant; the parent place is not its category.
   if (!primaryIsHospitality && primaryIsInterest) {
-    const interestCategories: DiscoveryCategory[] = ['Places of Interest'];
-    if (hasAny(placeTypes, SPORTS_TYPES)) interestCategories.push('Sports');
-    if (hasAny(placeTypes, LIVE_MUSIC_TYPES)) interestCategories.push('Live Music');
-    return { primary: 'Place of Interest', categories: interestCategories };
+    return { primary: 'Place of Interest', categories: ['Places of Interest'] };
   }
   if (!primaryIsHospitality && primaryIsShop) {
     return { primary: 'Shop', categories: ['Shops'] };
   }
   if (!hasFoodServiceType) {
     if (hasAny(placeTypes, INTEREST_TYPES)) {
-      const interestCategories: DiscoveryCategory[] = ['Places of Interest'];
-      if (hasAny(placeTypes, SPORTS_TYPES)) interestCategories.push('Sports');
-      if (hasAny(placeTypes, LIVE_MUSIC_TYPES)) interestCategories.push('Live Music');
-      return { primary: 'Place of Interest', categories: interestCategories };
+      return { primary: 'Place of Interest', categories: ['Places of Interest'] };
     }
     if (isShop) {
       return { primary: 'Shop', categories: ['Shops'] };
@@ -177,15 +162,8 @@ export function classifyGooglePlace(input: GooglePlaceCategoryInput): {
   for (const [category, matchingTypes] of CUISINE_TYPES) {
     if (matchingTypes.some((type) => placeTypes.has(type))) categories.add(category);
   }
-  if (hasFoodServiceType && /\b(?:american|diner)\b/.test(sourceText)) categories.add('American');
-  if (hasFoodServiceType && /\b(?:lebanese|middle eastern|levantine)\b/.test(sourceText)) categories.add('Lebanese');
-  if (hasFoodServiceType && /\bthai\b/.test(sourceText)) categories.add('Thai');
 
-  if (
-    placeTypes.has('steak_house')
-    || /\b(?:steak|grill|barbecue|bbq|churrasco|roast)\b/.test(normalized)
-    || (hasFoodServiceType && /\b(?:steak\w*|grill|barbecue|bbq|churrasco|roast)\b/.test(sourceText))
-  ) {
+  if (placeTypes.has('steak_house') || /\b(?:steak|grill|barbecue|bbq|churrasco|roast)\b/.test(normalized)) {
     categories.add('Meat');
   }
   if (
@@ -195,60 +173,40 @@ export function classifyGooglePlace(input: GooglePlaceCategoryInput): {
   ) {
     categories.add('Chicken');
   }
-  if (placeTypes.has('pizza_restaurant') || /\bpizza\b/.test(normalized)
-    || (hasFoodServiceType && /\bpizza\b/.test(sourceText))) categories.add('Pizza');
-  if (placeTypes.has('hamburger_restaurant') || /\bburger\b/.test(normalized)
-    || (hasFoodServiceType && /\b(?:burger|hamburger)\b/.test(sourceText))) categories.add('Burgers');
+  if (placeTypes.has('pizza_restaurant') || /\bpizza\b/.test(normalized)) categories.add('Pizza');
+  if (placeTypes.has('hamburger_restaurant') || /\bburger\b/.test(normalized)) categories.add('Burgers');
 
   const isCoffee = placeTypes.has('cafe') || placeTypes.has('coffee_shop') || /\b(?:cafe|coffee)\b/.test(input.type.toLowerCase());
-  const isPub = placeTypes.has('pub') || placeTypes.has('beer_garden') || /\b(?:pub|gastropub)\b/.test(input.type.toLowerCase());
-  const isBar = placeTypes.has('bar') || placeTypes.has('wine_bar') || placeTypes.has('bar_and_grill') || /\b(?:bar|cocktail)\b/.test(input.type.toLowerCase());
+  const isPub = placeTypes.has('pub') || /\b(?:pub|gastropub)\b/.test(input.type.toLowerCase());
+  const isBar = placeTypes.has('bar') || placeTypes.has('wine_bar') || /\b(?:bar|cocktail)\b/.test(input.type.toLowerCase());
   const isNightlife =
-    hasAny(placeTypes, NIGHTLIFE_TYPES)
+    placeTypes.has('night_club')
+    || placeTypes.has('dance_hall')
     || placeTypes.has('event_venue')
     || placeTypes.has('performing_arts_theater');
   const isRestaurant = hasFoodServiceType && !isCoffee && !isPub && !isBar && !isNightlife;
 
   if (isCoffee) categories.add('Coffee');
-  if (isPub || (hasFoodServiceType && placeTypes.has('bar') && /\b(?:pubs?|gastropubs?|beer gardens?)\b/.test(sourceText))) categories.add('Pubs');
+  if (isPub) categories.add('Pubs');
   if (isBar) categories.add('Bar');
   if (isBar || isPub) categories.add('Drinks');
   if (
     isNightlife
-    || (hasFoodServiceType && /\b(?:nightlife|night ?clubs?|clubs?|dance halls?|live music|sports bars?|entertainment|karaoke)\b/.test(sourceText))
+    || (hasFoodServiceType && /\b(?:nightlife|clubs?|live music|sports bars?|entertainment)\b/.test(sourceText))
   ) {
     categories.add('Nightlife');
-    if (placeTypes.has('night_club') || /\b(nightclub|night club|disco)\b/.test(normalized)) categories.add('Clubs');
     categories.add('Drinks');
   }
-  if (
-    hasAny(placeTypes, LIVE_MUSIC_TYPES)
-    || input.hasMusic
-    || /\b(?:live music|music venue|concert|karaoke)\b/.test(normalized)
-    || (hasFoodServiceType && /\b(?:live music|music venue|concert|karaoke)\b/.test(sourceText))
-  ) categories.add('Live Music');
-  if (
-    hasAny(placeTypes, SPORTS_TYPES)
-    || /\b(?:sports bar|football bar)\b/.test(normalized)
-    || (hasFoodServiceType && /\b(?:sports?|football|cricket|darts|bowling)\b/.test(sourceText))
-  ) categories.add('Sports');
-  if (
-    placeTypes.has('dessert_restaurant')
-    || placeTypes.has('dessert_shop')
-    || placeTypes.has('ice_cream_shop')
-    || placeTypes.has('bakery')
-    || (/\b(?:dessert|cake|ice cream|patisserie)\b/.test(sourceText) && (hasFoodServiceType || isShop))
-  ) categories.add('Dessert');
+  if (input.hasMusic || /\b(?:live music|music venue|concert|karaoke)\b/.test(normalized)) categories.add('Live Music');
+  if (/\b(?:sports bar|football bar)\b/.test(normalized)) categories.add('Sports');
   if (
     placeTypes.has('breakfast_restaurant')
     || ((hasFoodServiceType || isCoffee) && /\b(?:breakfast|morning food)\b/.test(sourceText))
   ) {
     categories.add('Breakfast');
   }
-  if (placeTypes.has('brunch_restaurant') || (hasFoodServiceType && /\bbrunch\b/.test(sourceText))) {
-    categories.add('Brunch');
-  }
-  if (hasFoodServiceType && (/\bbottomless\b/.test(normalized) || /\bbottomless\b/.test(sourceText))) categories.add('Bottomless');
+  if (placeTypes.has('brunch_restaurant') || (hasFoodServiceType && /\bbrunch\b/.test(sourceText))) categories.add('Brunch');
+  if (hasFoodServiceType && /\bbottomless\b/.test(normalized)) categories.add('Bottomless');
   if (isRestaurant || isCoffee || isPub) categories.add('Lunch');
   if (isRestaurant || isPub || isBar) categories.add('Dinner');
 

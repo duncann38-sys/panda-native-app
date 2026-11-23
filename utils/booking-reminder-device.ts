@@ -5,17 +5,20 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { createBookingReminderScheduler, reminderFingerprint } from './booking-reminders';
 import { createProfilePreferenceStorage, parseProfilePreferences } from './profile-preferences';
+
 const KIND = 'panda-booking-reminder';
 const CHANNEL = 'panda-booking-reminders';
 const preferences = createProfilePreferenceStorage(
   { getItem: SecureStore.getItemAsync, setItem: SecureStore.setItemAsync }, AsyncStorage, true,
 );
 export const reminderKey = (value: string) => Crypto.digestStringAsync(Crypto.CryptoDigestAlgorithm.SHA256, value);
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true, shouldShowList: true, shouldPlaySound: true, shouldSetBadge: false,
   }),
 });
+
 export const bookingReminderDevice = createBookingReminderScheduler({
   key: reminderKey,
   async list() {
@@ -55,9 +58,11 @@ export const bookingReminderDevice = createBookingReminderScheduler({
     });
   },
 });
+
 export async function bookingNotificationsEnabled(uid: string) {
   return parseProfilePreferences(await preferences.read(uid)).notificationsEnabled;
 }
+
 export function listenForBookingReminders(uid: string, open: () => void) {
   let active = true;
   const handle = async (response: Notifications.NotificationResponse | null) => {

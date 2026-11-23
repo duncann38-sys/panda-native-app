@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react';
-import { ActivityIndicator, FlatList, Linking, Platform, Pressable, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View, type ViewToken } from 'react-native';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenueCard } from '@/components/VenueCard';
@@ -16,7 +16,7 @@ type Viewable = { viewableItems: ViewToken[] };
 export default function NewRestaurantsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { venues, loading, text, error, status, city, country, area, hasMore, refresh, loadNext } = useNewRestaurants();
+  const { venues, loading, text, error, status, radiusKm, area, refresh } = useNewRestaurants();
   const { isSaved, toggleSaved } = useSavedVenues();
   const top = Platform.OS === 'web' ? 67 : insets.top;
   const bottom = Platform.OS === 'web' ? 34 : insets.bottom;
@@ -45,29 +45,24 @@ export default function NewRestaurantsScreen() {
     });
   }, []);
 
-  const openSource = useCallback((venue: Venue) => {
-    if (!venue.openingSourceUrl) return;
-    void Linking.openURL(venue.openingSourceUrl).catch(() => {
-      // A source link is optional; the verified venue card remains usable.
-    });
-  }, []);
-
   const goBack = () => (router.canGoBack() ? router.back() : router.replace('/'));
   const firstLoad = loading && venues.length === 0;
-  const notReady = !loading && !error && venues.length === 0 && status !== 'ready' && status !== 'idle' && status !== 'no_results';
-  const locationLine = area || [city, country].filter(Boolean).join(', ');
+  const notReady = !loading && !error && venues.length === 0 && status !== 'ready' && status !== 'idle';
+  const radiusLine = radiusKm
+    ? `Within ${radiusKm} km${area ? ` of ${area}` : ' of you'}${radiusKm > 5 ? ' — search area widened' : ''}`
+    : area ? `Near ${area}` : null;
 
   const header = (
     <View>
-      <Text style={[styles.kicker, { color: colors.honeyInk }]}>PANDA NEW OPENINGS</Text>
-      <Text style={[styles.title, { color: colors.foreground }]}>Freshly opened, worth knowing</Text>
+      <Text style={[styles.kicker, { color: colors.honeyInk }]}>OPENTABLE NEW SELECTION</Text>
+      <Text style={[styles.title, { color: colors.foreground }]}>New on the table</Text>
       <Text style={[styles.lede, { color: colors.mutedForeground }]}>
-        Independent high-end places, newly opened and checked against live venue listings. Your location comes first.
+        OpenTable’s New selection, matched to the right Google venue. Up to 20 fresh picks each visit.
       </Text>
-      {locationLine ? (
+      {radiusLine ? (
         <View style={[styles.radius, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
           <PandaIcon name="map-pin" size={14} color={colors.goldDeep} />
-          <Text style={[styles.radiusText, { color: colors.honeyInk }]}>{locationLine}</Text>
+          <Text style={[styles.radiusText, { color: colors.honeyInk }]}>{radiusLine}</Text>
         </View>
       ) : null}
       {text && venues.length > 0 ? <Text style={[styles.note, { color: colors.mutedForeground }]}>{text}</Text> : null}
@@ -90,15 +85,15 @@ export default function NewRestaurantsScreen() {
               <View style={[styles.skelLine, { backgroundColor: colors.muted, width: '38%' }]} />
             </View>
           ))}
-          <Text style={[styles.note, { color: colors.mutedForeground, textAlign: 'center' }]}>Checking verified openings near you…</Text>
+          <Text style={[styles.note, { color: colors.mutedForeground, textAlign: 'center' }]}>Checking the New selection near you…</Text>
         </View>
       );
     }
-    const title = error ? 'We couldn’t load new openings' : notReady ? 'Verified openings aren’t ready yet' : 'Nothing new nearby just now';
+    const title = error ? 'We couldn’t load the New selection' : notReady ? 'The New selection isn’t ready yet' : 'Nothing new close by just now';
     const body = error
       ?? (notReady
-        ? text || 'Panda’s live sources haven’t confirmed an opening for this area yet. This isn’t a guess — please check back shortly.'
-        : text || 'No recent, verified high-end openings were found in this area. Try again later.');
+        ? text || 'Panda’s source for new openings hasn’t confirmed a selection for this area. This isn’t an empty search — please check back shortly.'
+        : text || 'No verified OpenTable New matches were available within 40 km. Try again later.');
     return (
       <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <PandaLogo size={42} />
@@ -119,7 +114,7 @@ export default function NewRestaurantsScreen() {
           <PandaIcon name="arrow-left" size={19} color={colors.foreground} />
         </Pressable>
         <PandaLogo size={30} />
-        <Pressable testID="new-refresh" accessibilityRole="button" accessibilityLabel="Refresh new openings" hitSlop={10}
+        <Pressable testID="new-refresh" accessibilityRole="button" accessibilityLabel="Refresh New selection" hitSlop={10}
           disabled={loading} onPress={() => void refresh()}
           style={({ pressed }) => [styles.refresh, { backgroundColor: colors.card, borderColor: colors.border }, (pressed || loading) && { opacity: 0.6 }]}>
           {loading ? <ActivityIndicator size="small" color={colors.primary} /> : <Text style={[styles.refreshText, { color: colors.primary }]}>Refresh</Text>}
@@ -133,13 +128,6 @@ export default function NewRestaurantsScreen() {
         viewabilityConfigCallbackPairs={pairs}
         contentContainerStyle={[styles.list, { paddingBottom: bottom + 28 }]}
         ItemSeparatorComponent={() => <View style={{ height: 16 }} />}
-        ListFooterComponent={hasMore ? (
-          <Pressable testID="new-next-page" accessibilityRole="button" accessibilityLabel="Show the next 15 new openings"
-            disabled={loading} onPress={() => void loadNext()}
-            style={({ pressed }) => [styles.nextPage, { backgroundColor: colors.primary }, (pressed || loading) && { opacity: 0.65 }]}>
-            {loading ? <ActivityIndicator size="small" color={colors.primaryForeground} /> : <Text style={[styles.nextPageText, { color: colors.primaryForeground }]}>Discover the next 15</Text>}
-          </Pressable>
-        ) : null}
         renderItem={({ item }) => (
           <View>
             <View style={styles.distanceRow}>
@@ -147,13 +135,6 @@ export default function NewRestaurantsScreen() {
               <Text style={[styles.distance, { color: colors.mutedForeground }]}>{item.distance} away</Text>
             </View>
             <VenueCard venue={item} saved={isSaved(item.id)} onPress={() => open(item)} onToggleSaved={() => toggleSaved(item)} />
-            {item.openingSourceUrl ? (
-              <Pressable accessibilityRole="link" accessibilityLabel={item.openingDesignation === 'panda-search-reported-new' ? 'Check Google results for ' + item.name : 'Read opening report from ' + (item.openingSourceName || 'source')}
-                onPress={() => openSource(item)} style={({ pressed }) => [styles.sourceLink, pressed && { opacity: 0.65 }]}>
-                <PandaIcon name="external-link" size={14} color={colors.primary} />
-                <Text numberOfLines={1} style={[styles.sourceLinkText, { color: colors.primary }]}>{item.openingDesignation === 'panda-search-reported-new' ? 'Google results · verify opening' : 'Opening report · ' + (item.openingSourceName || 'Read source')}</Text>
-              </Pressable>
-            ) : null}
           </View>
         )}
       />
@@ -186,8 +167,4 @@ const styles = StyleSheet.create({
   emptyBody: { fontFamily: 'Inter_400Regular', fontSize: 13, lineHeight: 19, marginTop: 8, textAlign: 'center' },
   retry: { borderRadius: 999, marginTop: 18, paddingHorizontal: 22, paddingVertical: 11 },
   retryText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
-  sourceLink: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 7, marginTop: 10, paddingHorizontal: 4, paddingVertical: 5 },
-  sourceLinkText: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
-  nextPage: { alignItems: 'center', alignSelf: 'stretch', borderRadius: 999, marginTop: 20, paddingHorizontal: 22, paddingVertical: 14 },
-  nextPageText: { fontFamily: 'Inter_700Bold', fontSize: 14, letterSpacing: 0.2 },
 });

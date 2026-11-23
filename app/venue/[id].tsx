@@ -3,11 +3,9 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { StatusBar } from 'expo-status-bar';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useMemo, useRef, useState, useEffect, useCallback } from 'react';
-import { useFocusEffect } from 'expo-router';
+import React, { useMemo, useRef, useState, useEffect } from 'react';
 import {
   ActivityIndicator,
-  AppState,
   Alert,
   Linking,
   Modal,
@@ -24,9 +22,7 @@ import {
 import type { DimensionValue, StyleProp, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon, type PandaIconName } from '@/components/PandaIcon';
-import { VenuePhoto, useVenuePhotos, type VenuePhotoItem } from '@/components/VenuePhoto';
-import { googleDirectionsUrl } from '@/utils/venue-actions';
-import { VenueGallery } from '@/components/VenueGallery';
+import { VenuePhoto, venuePhotosFor, type VenuePhotoItem } from '@/components/VenuePhoto';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { NonHospitalityActions } from '@/components/NonHospitalityActions';
 import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
@@ -35,8 +31,9 @@ import { getVenue, type Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueCardDesign } from '@/hooks/useVenueCardDesign';
 import { recordVenueActivity } from '@/utils/record-venue-activity';
+import { shouldLoadGalleryPhoto } from '@/utils/gallery-photo-loading';
 import { fullCardOpenStatus, hydrateVenueDetails } from '@/utils/venue-detail-hydration';
-import { getOfficialVenueLinks, officialPageUrl, type OfficialVenueLinks } from '@/utils/official-venue-links';
+import { isGooglePlaceVenue } from '@/utils/google-place-eligibility';
 
 type GoogleVenueProfile = {
   id: string;
@@ -61,30 +58,6 @@ type GoogleVenueProfile = {
   source: 'google_places';
 };
 
-type VenueWeather = {
-  observedAt: string;
-  condition: string;
-  temperatureC: number;
-  source: 'Google Weather';
-};
-
-type VenueWeatherState = 'idle' | 'loading' | 'ready' | 'unavailable' | 'budget-exhausted';
-
-const venueWeatherCache = new Map<string, { expiresAt: number; weather: VenueWeather }>();
-
-function weatherEmoji(condition: string) {
-  const value = condition.toLowerCase();
-  if (/snow|sleet|ice/.test(value)) return '❄️';
-  if (/rain|drizzle|shower|storm|thunder/.test(value)) return '🌧️';
-  if (/sun|clear/.test(value)) return '☀️';
-  if (/cloud|overcast|fog|mist/.test(value)) return '☁️';
-  return '🌤️';
-}
-
-function isGooglePlaceId(value: string | undefined): value is string {
-  return Boolean(value && /^[A-Za-z0-9_-]{8,256}$/.test(value));
-}
-
 type TransitStation = {
   id?: string;
   name: string;
@@ -104,7 +77,6 @@ type TransitWalk = {
 
 type TransitStep = {
   mode: 'WALK' | 'TRANSIT';
-  vehicleType?: string;
   instruction: string;
   durationMinutes: number;
   distanceMeters: number;
@@ -121,10 +93,6 @@ type TransitStep = {
 };
 
 type TransitContext = {
-  recommendation?: 'walk' | 'transit';
-  recommendationReason?: string;
-  directWalk?: TransitWalk | null;
-  timingSource?: string;
   originStation: TransitStation;
   destinationStation: TransitStation;
   originWalk: TransitWalk | null;
@@ -134,6 +102,7 @@ type TransitContext = {
     steps: TransitStep[];
     updatedAt?: string;
     polyline?: string;
+    timingSource?: 'google_estimate' | 'tfl_live' | 'unavailable';
     source: 'google_routes';
   } | null;
   venueWalk: {
@@ -144,6 +113,7 @@ type TransitContext = {
   } | null;
   source: 'google_places';
   updatedAt?: string;
+  timingSource?: 'google_estimate' | 'tfl_live' | 'unavailable';
 };
 
 type TransitStatus = 'idle' | 'loading' | 'ready' | 'permission-denied' | 'unavailable';
@@ -224,38 +194,21 @@ export default function VenueDetailScreen() {
     () => parsePlannerVenueData(String(plannerVenueData || '')),
     [plannerVenueData],
   );
-  const baseVenue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
-  const [loadedGoogleProfile, setGoogleProfile] = useState<GoogleVenueProfile | null>(null);
-  const googleProfile = loadedGoogleProfile?.id === baseVenue?.id ? loadedGoogleProfile : null;
-  const venue = useMemo(() => baseVenue ? hydrateVenueDetails(baseVenue, googleProfile) : undefined,
-    [baseVenue, googleProfile]);
+  const listingVenue = dynamicVenue ?? dynamicPlannerVenues.find((item) => item.id === id) ?? getVenue(id ?? '');
+  const [profileResult, setGoogleProfile] = useState<GoogleVenueProfile | null>(null);
+  const [profilePending, setProfilePending] = useState(false);
+  const googleProfile = profileResult?.id === listingVenue?.id ? profileResult : null;
+  const venue = useMemo(() => hydrateVenueDetails(listingVenue, googleProfile), [listingVenue, googleProfile]);
+  const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
   const openedVenueId = useRef<string | null>(null);
   useEffect(() => {
-    if (!venue?.id || openedVenueId.current === venue.id) return;
-    openedVenueId.current = venue.id;
-    recordVenueActivity('detail_open', venue);
-  }, [venue?.id, venue?.name]);
-  const plannerOpen = fromPlanner === '1' && Boolean(plannerIds);
+    if (venue && openedVenueId.current !== venue.id) {
+      openedVenueId.current = venue.id;
+      recordVenueActivity('detail_open', venue);
+    }
+  }, [venue]);
   
-  const photos = useVenuePhotos(venue, true);
-  const [officialLinks, setOfficialLinks] = useState<OfficialVenueLinks | null>(null);
-  const officialLinksRequest = useRef<Promise<OfficialVenueLinks | null> | null>(null);
-  const [openingVenuePage, setOpeningVenuePage] = useState(false);
-  const openingVenuePageRef = useRef(false);
-  useEffect(() => {
-    setOfficialLinks(null);
-    officialLinksRequest.current = null;
-    if (!venue?.id) return;
-    let active = true;
-    const request = getOfficialVenueLinks(venue.id).then(links => {
-      if (active) setOfficialLinks(links);
-      return links;
-    }).finally(() => {
-      if (active) officialLinksRequest.current = null;
-    });
-    officialLinksRequest.current = request;
-    return () => { active = false; };
-  }, [venue?.id]);
+  const photos = venue ? venuePhotosFor(venue) : [];
 
   const [heroActive, setHeroActive] = useState(0);
   const [galleryOpen, setGalleryOpen] = useState(false);
@@ -263,87 +216,6 @@ export default function VenueDetailScreen() {
   const [transitContext, setTransitContext] = useState<TransitContext | null>(null);
   const [transitStatus, setTransitStatus] = useState<TransitStatus>('idle');
   const [transitRetryKey, setTransitRetryKey] = useState(0);
-  const [venueWeather, setVenueWeather] = useState<VenueWeather | null>(null);
-  const [weatherStatus, setWeatherStatus] = useState<VenueWeatherState>('idle');
-  useEffect(() => {
-    setVenueWeather(null);
-    if (!venue?.id) {
-      setWeatherStatus('idle');
-      return;
-    }
-
-    const cached = venueWeatherCache.get(venue.id);
-    if (cached && cached.expiresAt > Date.now()) {
-      setVenueWeather(cached.weather);
-      setWeatherStatus('ready');
-      return;
-    }
-
-    const latitude = venue.latitude ?? googleProfile?.latitude;
-    const longitude = venue.longitude ?? googleProfile?.longitude;
-    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
-      setWeatherStatus('unavailable');
-      return;
-    }
-
-    let active = true;
-    const controller = new AbortController();
-    setWeatherStatus('loading');
-    void fetch(`${PANDA_RUNTIME_API}/api/panda-ai`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      signal: controller.signal,
-      body: JSON.stringify({
-        weatherOnly: true,
-        location: { lat: latitude, lng: longitude },
-      }),
-    }).then(async response => {
-      const payload = await response.json().catch(() => ({})) as {
-        error?: string;
-        weather?: VenueWeather;
-      };
-      if (!response.ok) {
-        const error = new Error(payload.error || 'weather_unavailable');
-        throw error;
-      }
-      if (!payload.weather || !Number.isFinite(payload.weather.temperatureC) || !payload.weather.condition) {
-        throw new Error('weather_unavailable');
-      }
-      return payload.weather;
-    }).then(weather => {
-      if (!active) return;
-      venueWeatherCache.set(venue.id, { expiresAt: Date.now() + 10 * 60 * 1000, weather });
-      setVenueWeather(weather);
-      setWeatherStatus('ready');
-    }).catch((error: unknown) => {
-      if (!active || (error instanceof Error && error.name === 'AbortError')) return;
-      setWeatherStatus(error instanceof Error && error.message === 'weather_daily_limit_reached'
-        ? 'budget-exhausted'
-        : 'unavailable');
-    });
-
-    return () => {
-      active = false;
-      controller.abort();
-    };
-  }, [venue?.id, venue?.latitude, venue?.longitude, googleProfile?.latitude, googleProfile?.longitude]);
-  useEffect(() => {
-    setTransitContext(null);
-    setTransitStatus('idle');
-  }, [venue?.id]);
-  useEffect(() => {
-    setHeroActive(current => Math.min(current, Math.max(0, photos.length - 1)));
-    setGalleryActive(current => Math.min(current, Math.max(0, photos.length - 1)));
-  }, [venue?.id, photos.length]);
-  useFocusEffect(useCallback(() => {
-    const timer = setInterval(() => {
-      if (AppState.currentState === 'active') setTransitRetryKey(value => value + 1);
-    }, 60000);
-    const subscription = AppState.addEventListener('change', state => {
-      if (state === 'active') setTransitRetryKey(value => value + 1);
-    });
-    return () => { clearInterval(timer); subscription.remove(); };
-  }, []));
   const [scrollViewportHeight, setScrollViewportHeight] = useState(0);
   const [scrollContentHeight, setScrollContentHeight] = useState(0);
   const detailScrollRef = useRef<ScrollView>(null);
@@ -351,8 +223,7 @@ export default function VenueDetailScreen() {
   const screenBottomInset =
     Platform.OS === 'web' ? 0 : Math.max(insets.bottom, Platform.OS === 'android' ? 24 : 0);
   const { cardColors, fonts } = useVenueCardDesign('light');
-  const paidPremium = Boolean(venue?.premium && venue?.banging);
-  const venueSurface = paidPremium ? cardColors.premiumSurface : cardColors.surface;
+  const venueSurface = cardColors.surface;
   const detailsCanScroll =
     scrollViewportHeight > 0 && scrollContentHeight > scrollViewportHeight + 2;
 
@@ -364,13 +235,14 @@ export default function VenueDetailScreen() {
 
   useEffect(() => {
     const placeId = venue?.id;
-    if (!isGooglePlaceId(placeId)) {
+    if (!placeId || !isGooglePlaceVenue(venue)) {
       setGoogleProfile(null);
       return;
     }
 
     const controller = new AbortController();
     setGoogleProfile(null);
+    setProfilePending(true);
     fetch(`${PANDA_RUNTIME_API}/api/partner/venues/${encodeURIComponent(placeId)}/profile`, {
       signal: controller.signal,
     })
@@ -378,20 +250,21 @@ export default function VenueDetailScreen() {
         if (!response.ok) throw new Error('Google venue profile unavailable');
         return response.json() as Promise<GoogleVenueProfile>;
       })
-      .then((profile) => setGoogleProfile({ ...profile,
-        highlights: Array.isArray(profile.highlights) ? profile.highlights : [],
-      }))
+      .then((profile) => setGoogleProfile(profile))
       .catch((error: unknown) => {
         if (error instanceof Error && error.name === 'AbortError') return;
         setGoogleProfile(null);
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setProfilePending(false);
       });
 
     return () => controller.abort();
-  }, [venue?.id]);
+  }, [venue?.id, venue?.source]);
 
   useEffect(() => {
     const placeId = venue?.id;
-    if (!isGooglePlaceId(placeId)) {
+    if (!placeId || !isGooglePlaceVenue(venue)) {
       setTransitContext(null);
       setTransitStatus('unavailable');
       return;
@@ -399,7 +272,8 @@ export default function VenueDetailScreen() {
 
     let active = true;
     const controller = new AbortController();
-    setTransitStatus(previous => previous === 'ready' ? 'ready' : 'loading');
+    setTransitContext(null);
+    setTransitStatus('loading');
 
     void (async () => {
       try {
@@ -433,7 +307,7 @@ export default function VenueDetailScreen() {
       active = false;
       controller.abort();
     };
-  }, [coordinates, refreshLocation, transitRetryKey, venue?.id]);
+  }, [coordinates, refreshLocation, transitRetryKey, venue?.id, venue?.source]);
 
   if (!venue) {
     return (
@@ -452,43 +326,85 @@ export default function VenueDetailScreen() {
   const displayedType = googleProfile?.primaryType || venue.type;
   const displayedOpenNow = fullCardOpenStatus(venue, googleProfile);
   const displayedAddress = googleProfile?.address || venue.fullAddress;
+  const hasDisplayedRating = Boolean(displayedRating.trim());
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
   const openWalkingDirections = () => {
     recordVenueActivity('directions_click', venue);
-    router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
-      directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'walking' } });
-  };
-  const openVenuePage = async (kind: 'menu' | 'reservation') => {
-    if (openingVenuePageRef.current) return;
-    openingVenuePageRef.current = true;
-    setOpeningVenuePage(true);
-    try {
-      const knownUrl = kind === 'menu' ? officialLinks?.menuUrl : officialLinks?.reservationUrl;
-      // Share a current lookup, or retry once on this tap when the requested
-      // link is missing. Never leave the button waiting on two serial timeouts.
-      const links = knownUrl ? officialLinks
-        : await (officialLinksRequest.current ?? getOfficialVenueLinks(venue.id, true));
-      if (links) setOfficialLinks(links);
-      const directUrl = kind === 'menu' ? links?.menuUrl : links?.reservationUrl;
-      const pageUrl = directUrl || officialPageUrl(links?.website || venue.website);
-      if (!pageUrl) {
-        recordVenueActivity(kind === 'menu' ? 'menu_click' : 'booking_click', venue);
-        Alert.alert('Verified venue link unavailable',
-          `Panda has not found an official ${kind === 'menu' ? 'menu' : 'reservation'} link for this venue. Please try again shortly or use its official website.`);
-        return;
-      }
-      router.push({ pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
-        params: { id: venue.id, venueData: JSON.stringify(venue), pageUrl, websiteFallback: directUrl ? '0' : '1' } });
-    } finally {
-      openingVenuePageRef.current = false;
-      setOpeningVenuePage(false);
+    if (venue.source === 'openstreetmap'
+      && typeof venue.latitude === 'number' && Number.isFinite(venue.latitude)
+      && typeof venue.longitude === 'number' && Number.isFinite(venue.longitude)) {
+      const destination = `${venue.latitude},${venue.longitude}`;
+      void Linking.openURL(
+        `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(destination)}&travelmode=walking`,
+      ).catch(() => Alert.alert('Directions unavailable', 'Could not open walking directions for this venue.'));
+      return;
     }
+    router.push({
+      pathname: '/map',
+      params: {
+        directionsVenueId: venue.id,
+        directionsVenueData: JSON.stringify({
+          ...venue,
+          latitude: googleProfile?.latitude ?? venue.latitude,
+          longitude: googleProfile?.longitude ?? venue.longitude,
+        }),
+        directionsReturn: 'back',
+        plannerLocation: venue.neighborhood || 'Current location',
+      },
+    });
+  };
+  const officialVenueUrl = googleProfile?.website || venue.website;
+  const openVenuePage = (kind: 'menu' | 'reservation') => {
+    router.push({
+      pathname: kind === 'menu' ? '/venue/[id]/menu' : '/venue/[id]/reservation',
+      params: {
+        id: venue.id,
+        venueData: JSON.stringify(venue),
+        pageUrl: kind === 'menu' ? officialVenueUrl : '',
+      },
+    });
   };
   const openTransitRoute = () => {
+    if (!transitContext) return;
     recordVenueActivity('directions_click', venue);
-    router.push({ pathname: '/(tabs)/map', params: { directionsVenueId: venue.id,
-      directionsVenueData: JSON.stringify(venue), directionsReturn: 'back', routeMode: 'transit' } });
+    router.push({
+      pathname: '/map',
+      params: {
+        directionsVenueId: venue.id,
+        transitOriginName: transitContext.originStation.name,
+        transitDestinationName: transitContext.destinationStation.name,
+        transitOriginCoordinates: `${transitContext.originStation.latitude},${transitContext.originStation.longitude}`,
+        transitDestinationCoordinates: `${transitContext.destinationStation.latitude},${transitContext.destinationStation.longitude}`,
+        transitOriginPolyline: transitContext.originWalk?.polyline ?? '',
+        transitPolyline: transitContext.transitRoute?.polyline ?? '',
+        transitDestinationPolyline: transitContext.venueWalk?.polyline ?? '',
+        transitOriginWalkMinutes: transitContext.originWalk?.durationMinutes.toString() ?? '',
+        transitOriginWalkDistance: transitContext.originWalk?.distanceMeters.toString() ?? '',
+        transitDurationMinutes: transitContext.transitRoute?.durationMinutes.toString() ?? '',
+        transitDistanceMeters: transitContext.transitRoute?.distanceMeters.toString() ?? '',
+        transitSteps: transitContext.transitRoute?.steps.length
+          ? JSON.stringify(transitContext.transitRoute.steps)
+          : '',
+        transitWalkMinutes: transitContext.venueWalk?.durationMinutes.toString() ?? '',
+        transitWalkDistance: transitContext.venueWalk?.distanceMeters.toString() ?? '',
+        transitUpdatedAt: transitContext.transitRoute?.updatedAt ?? transitContext.updatedAt ?? '',
+        directionsVenueData: JSON.stringify({
+          ...venue,
+          latitude: googleProfile?.latitude ?? venue.latitude,
+          longitude: googleProfile?.longitude ?? venue.longitude,
+        }),
+        plannerIds: plannerOpen ? plannerIds || '' : '',
+        plannerVenues: plannerOpen ? String(plannerVenueData || '') : '',
+        plannerLocation: plannerOpen ? plannerLocation || 'Current location' : venue.neighborhood,
+        ...(plannerOpen
+          ? {
+              plannerMode: plannerMode || 'night',
+              plannerPrice: plannerPrice || '££',
+            }
+          : {}),
+      },
+    });
   };
 
   const openGallery = () => {
@@ -519,11 +435,10 @@ export default function VenueDetailScreen() {
       pathname: '/' as const,
       params: {
         openPlanner: plannerMode || 'night',
-        plannerReturn: String(Date.now()),
         plannerIds: plannerIds || '',
         plannerVenues: String(plannerVenueData || ''),
         plannerLocation: plannerLocation || 'Current location',
-        plannerPrice: plannerPrice || '££££',
+        plannerPrice: plannerPrice || '££',
       },
     };
     if (router.canDismiss()) {
@@ -581,13 +496,24 @@ export default function VenueDetailScreen() {
               onIndexChange={setHeroActive}
               onPhotoTap={openGallery}
             />
-            <LinearGradient pointerEvents="none" colors={['transparent', cardColors.photoShade]} locations={[0.35, 1]} style={StyleSheet.absoluteFillObject} />
+            <LinearGradient
+              pointerEvents="none"
+              colors={['transparent', cardColors.photoShade]}
+              locations={[0.35, 1]}
+              style={StyleSheet.absoluteFillObject}
+            />
             <View pointerEvents="none" style={[styles.heroOverlay, styles.editorialHeroOverlay]}>
               <View style={styles.heroCaptionBlock}>
-                {photos[heroActive]?.attribution ? <View style={[styles.heroCredit, { backgroundColor: cardColors.photoCreditBackground }]}>
-                  <Text numberOfLines={2} style={[styles.heroCreditText, { fontFamily: fonts.medium, color: cardColors.photoCreditForeground }]}>{photos[heroActive].attribution}</Text>
-                </View> : null}
-                <Text numberOfLines={1} style={[styles.heroCaption, { fontFamily: fonts.display, color: cardColors.onGreen }]}>{venue.neighborhood || displayedType}</Text>
+                {photos[heroActive]?.attribution ? (
+                  <View style={[styles.heroCredit, { backgroundColor: cardColors.photoCreditBackground }]}>
+                    <Text numberOfLines={2} style={[styles.heroCreditText, { fontFamily: fonts.medium, color: cardColors.photoCreditForeground }]}>
+                      {photos[heroActive].attribution}
+                    </Text>
+                  </View>
+                ) : null}
+                <Text numberOfLines={1} style={[styles.heroCaption, { fontFamily: fonts.display, color: cardColors.onGreen }]}>
+                  {venue.neighborhood || displayedType}
+                </Text>
               </View>
               {photos.length > 1 && (
                 <View style={styles.pagination}>
@@ -622,7 +548,6 @@ export default function VenueDetailScreen() {
           {
             backgroundColor: venueSurface,
           },
-          paidPremium && { borderWidth: 1, borderColor: cardColors.gold },
         ]}
       >
         {/* This header stays pinned while the detail content scrolls behind it. */}
@@ -637,61 +562,67 @@ export default function VenueDetailScreen() {
           ]}
         >
           <View style={styles.gripContainer}>
-            <View style={[styles.grip, { backgroundColor: colors.border }]} />
+            <View style={[styles.grip, { backgroundColor: cardColors.border }]} />
           </View>
 
-          {venue.premium && venue.banging ? (
-            <View pointerEvents="none" style={[styles.paidPremiumRule, { backgroundColor: colors.gold }]} />
-          ) : null}
-          {(venue.premium || venue.promoted) && (
+          {venue.premium && (
             <View
               style={[
                 styles.premiumLabel,
                 styles.editorialPremium,
                 {
-                  backgroundColor: colors.honeySoft,
-                  borderColor: colors.honey,
+                  backgroundColor: cardColors.goldSoft,
+                  borderColor: cardColors.gold,
                   shadowColor: colors.goldDeep,
                 },
-                venue.premium && venue.banging ? [styles.paidPremiumLabel, { backgroundColor: colors.green900, borderColor: colors.gold }] : null,
               ]}
             >
-              <PandaIcon name="award" size={13} color={venue.premium && venue.banging ? colors.honey : colors.goldDeep} />
-              <Text style={[styles.premiumLabelText, { color: venue.premium && venue.banging ? colors.goldLine : colors.honeyInk }]}>{venue.premium && venue.banging ? 'Premium' : 'Promoted'}</Text>
+              <PandaIcon name="award" size={13} color={colors.goldDeep} />
+              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
             </View>
           )}
 
           <View style={styles.venueTitleRow}>
             <View style={styles.editorialHeading}>
-              <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}</Text>
-              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
-              {venue.premium && venue.banging ? <View style={[styles.paidPremiumUnderline, { backgroundColor: colors.gold }]} /> : null}
+              <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>
+                THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}
+              </Text>
+              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
             </View>
-            {!isNonHospitalityVenue(venue) && venue.price ? <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
-              <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
-            </View> : null}
+            {!isNonHospitalityVenue(venue) && venue.price ? (
+              <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
+                <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.chips}>
-            <MetaChip
-              refined fontFamily={fonts.medium}
-              icon="star"
-              label={`${displayedRating} (${displayedRatingCount})`}
-              background={cardColors.goldSoft}
-              foreground={cardColors.goldInk}
-            />
+            {hasDisplayedRating ? (
+              <MetaChip
+                refined
+                fontFamily={fonts.medium}
+                icon="star"
+                label={`${displayedRating} (${displayedRatingCount})`}
+                background={cardColors.goldSoft}
+                foreground={cardColors.goldInk}
+              />
+            ) : null}
             <MetaChip refined fontFamily={fonts.medium} label={displayedType} background={cardColors.soft} foreground={cardColors.ink} />
+            {venue.source !== 'openstreetmap' ? (
+              <MetaChip
+                refined
+                fontFamily={fonts.medium}
+                icon="clock"
+                label={displayedOpenNow === null ? (profilePending ? 'Checking hours' : 'Hours unavailable') : displayedOpenNow ? 'Open now' : 'Closed'}
+                background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
+                foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
+              />
+            ) : null}
             <MetaChip
-              refined fontFamily={fonts.medium}
-              icon="clock"
-              label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
-              background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
-              foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
-            />
-            <MetaChip
-              refined fontFamily={fonts.medium}
-              icon="map"
-              label={`${venue.distance} · ${venue.walkingTime}`}
+              refined
+              fontFamily={fonts.medium}
+              icon="walk"
+              label={venue.walkingTime}
               background={colors.muted}
               foreground={colors.green800}
             />
@@ -726,7 +657,6 @@ export default function VenueDetailScreen() {
                 {
                   backgroundColor: venueSurface,
                   borderColor: 'transparent',
-                  shadowColor: colors.green950,
                 },
               ]}
             >
@@ -736,64 +666,66 @@ export default function VenueDetailScreen() {
 
               <View style={styles.addressRow}>
                 <View style={[styles.addressIcon, styles.editorialAddressIcon, { backgroundColor: cardColors.soft }]}>
-                  <PandaIcon name="map-pin" size={18} color={colors.green700} />
+                  <PandaIcon name="map-pin" size={17} color={cardColors.greenAction} />
                 </View>
                 <View style={styles.addressTextContainer}>
                   <Text style={[styles.address, styles.editorialAddress, { color: cardColors.ink, fontFamily: fonts.bold }]}>{displayedAddress}</Text>
                 </View>
               </View>
+              {venue.sourceAttribution ? (
+                <Text
+                  accessibilityRole="link"
+                  onPress={() => void Linking.openURL('https://www.openstreetmap.org/copyright')}
+                  style={[styles.description, { color: colors.mutedForeground, marginTop: 10 }]}
+                >
+                  {venue.sourceAttribution}
+                </Text>
+              ) : null}
             </View>
 
             {isNonHospitalityVenue(venue) ? <NonHospitalityActions venue={venue} /> : <View style={styles.editorialActions}>
-              <ActionButton refined fontFamily={fonts.bold} label={openingVenuePage ? 'Finding link…' : 'View menu'} icon="globe" background={cardColors.primaryAction} foreground={cardColors.goldInk} onPress={() => openVenuePage('menu')} />
-              <ActionButton refined fontFamily={fonts.bold} label="Reserve" icon="calendar" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={() => openVenuePage('reservation')} />
-              <ActionButton refined fontFamily={fonts.bold} label="Directions" icon="navigate" background={cardColors.greenAction} foreground={cardColors.onGreen} onPress={openWalkingDirections} />
-              {venue.phone ? <ActionButton refined fontFamily={fonts.bold} label="Call" icon="phone" background={cardColors.soft} foreground={cardColors.ink} onPress={() => {
-                recordVenueActivity('call_click', venue);
-                openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
-              }} /> : null}
+              <ActionButton
+                refined
+                fontFamily={fonts.bold}
+                label="View menu"
+                icon="globe"
+                background={cardColors.primaryAction}
+                foreground={cardColors.goldInk}
+                onPress={() => openVenuePage('menu')}
+              />
+              <ActionButton
+                refined
+                fontFamily={fonts.bold}
+                label="Reserve"
+                icon="calendar"
+                background={cardColors.greenAction}
+                foreground={cardColors.onGreen}
+                onPress={() => openVenuePage('reservation')}
+              />
+              <ActionButton
+                refined
+                fontFamily={fonts.bold}
+                label="Directions"
+                icon="navigate"
+                background={cardColors.greenAction}
+                foreground={cardColors.onGreen}
+                onPress={openWalkingDirections}
+              />
+              {venue.phone ? (
+                <ActionButton
+                  refined
+                  fontFamily={fonts.bold}
+                  label="Call"
+                  icon="phone"
+                  background={cardColors.soft}
+                  foreground={cardColors.ink}
+                  onPress={() => {
+                    recordVenueActivity('call_click', venue);
+                    openExternal(`tel:${venue.phone.replace(/\s/g, '')}`);
+                  }}
+                />
+              ) : null}
             </View>}
-            {weatherStatus !== 'idle' ? (
-              <View
-                style={[
-                  styles.weatherCard,
-                  {
-                    backgroundColor: colors.secondary,
-                    borderColor: colors.border,
-                  },
-                ]}
-                accessibilityLabel={
-                  venueWeather
-                    ? `Current weather near ${venue.name}: ${venueWeather.condition}, ${Math.round(venueWeather.temperatureC)} degrees Celsius`
-                    : 'Current weather is unavailable'
-                }
-              >
-                <Text style={styles.weatherIcon}>
-                  {venueWeather ? weatherEmoji(venueWeather.condition) : '☁️'}
-                </Text>
-                <View style={styles.weatherCopy}>
-                  <Text style={[styles.weatherTemperature, { color: colors.green950 }]}>
-                    {weatherStatus === 'loading'
-                      ? 'Checking nearby weather…'
-                      : venueWeather
-                        ? `${Math.round(venueWeather.temperatureC)}°C`
-                        : 'Weather unavailable'}
-                  </Text>
-                  <Text style={[styles.weatherCondition, { color: colors.green800 }]}>
-                    {venueWeather?.condition ?? (
-                      weatherStatus === 'budget-exhausted'
-                        ? 'Today’s weather testing allowance has been used'
-                        : 'Live conditions could not be verified'
-                    )}
-                  </Text>
-                  {venueWeather ? (
-                    <Text style={[styles.weatherSource, { color: colors.mutedForeground }]}>
-                      Google Weather · Current conditions
-                    </Text>
-                  ) : null}
-                </View>
-              </View>
-            ) : null}
 
             <ConciergeTransitCard
               colors={colors}
@@ -915,7 +847,7 @@ function PlannerVenuePreview({
   width: number;
 }) {
   const [photoIndex, setPhotoIndex] = useState(0);
-  const previewWidth = Math.max(280, width - 24);
+  const previewWidth = Math.max(280, width * 0.94);
 
   return (
     <View style={[styles.plannerPreviewScreen, { backgroundColor: colors.mint100 }]}>
@@ -933,10 +865,10 @@ function PlannerVenuePreview({
             </View>
           </View>
           <View style={[styles.plannerBackdropModes, { backgroundColor: colors.card }]}>
-            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>Morning</Text>
-            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>Lunch</Text>
+            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>🌅 Morning</Text>
+            <Text style={[styles.plannerBackdropMode, { color: colors.mutedForeground }]}>🍽️ Lunch</Text>
             <Text style={[styles.plannerBackdropModeActive, { backgroundColor: colors.green800 }]}>
-              {plannerMode === 'morning' ? 'Morning' : plannerMode === 'lunch' ? 'Lunch' : 'Night'}
+              {plannerMode === 'morning' ? '🌅 Morning' : plannerMode === 'lunch' ? '🍽️ Lunch' : '🌙 Night'}
             </Text>
           </View>
           {plannerVenues.map((plannerVenue, index) => (
@@ -946,7 +878,7 @@ function PlannerVenuePreview({
               </View>
               <View style={styles.plannerBackdropStopCopy}>
                 <Text style={[styles.plannerBackdropStopLabel, { color: colors.green700 }]}>
-                  {index + 1}. {(plannerMode === 'morning' ? ['Coffee', 'Breakfast', 'Brunch'] : plannerMode === 'lunch' ? ['Lunch', 'Coffee', 'Something sweet'] : ['Dinner', 'Drinks', 'Late night'])[index] ?? `Stop ${index + 1}`}
+                  {index + 1}. {index === 0 ? 'Dinner' : index === 1 ? 'Drinks' : 'Late night'}
                 </Text>
                 <Text numberOfLines={1} style={[styles.plannerBackdropStopName, { color: colors.foreground }]}>
                   {plannerVenue.name}
@@ -967,8 +899,8 @@ function PlannerVenuePreview({
           {
             backgroundColor: '#FFFBF1',
             borderColor: colors.goldLine,
-            marginBottom: Math.max(12, insets.bottom + 8),
-            marginTop: Math.max(12, insets.top + 8),
+            marginBottom: Math.max(16, insets.bottom + 10),
+            marginTop: Math.max(18, insets.top + 12),
           },
         ]}
       >
@@ -976,38 +908,19 @@ function PlannerVenuePreview({
           {photos.length > 0 ? (
             <UniversalSwiper
               activeIndex={photoIndex}
-              height={300}
+              height={245}
               onIndexChange={setPhotoIndex}
               photos={photos}
               width={previewWidth}
             />
           ) : (
-            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={300} />
+            <VenuePhoto venue={venue} venueId={venue.id} venueName={venue.name} height={245} />
           )}
           <LinearGradient
             colors={['rgba(5,26,20,0.02)', 'rgba(5,26,20,0.62)']}
             pointerEvents="none"
             style={StyleSheet.absoluteFill}
           />
-          <View style={styles.plannerHeroBar}>
-            <Pressable
-              accessibilityLabel="Back to Planner"
-              accessibilityRole="button"
-              onPress={onBack}
-              style={styles.plannerHeroBtn}
-            >
-              <PandaIcon name="arrow-left" size={16} color="#FFFFFF" />
-              <Text style={styles.plannerHeroBtnText}>Back</Text>
-            </Pressable>
-            <Pressable
-              accessibilityLabel="Close"
-              accessibilityRole="button"
-              onPress={onBack}
-              style={styles.plannerHeroBtn}
-            >
-              <PandaIcon name="x" size={16} color="#FFFFFF" />
-            </Pressable>
-          </View>
           <View pointerEvents="none" style={styles.plannerHeroCopy}>
             <Text style={styles.plannerHeroEyebrow}>FROM YOUR PANDA PLAN</Text>
             <Text numberOfLines={2} style={styles.plannerHeroTitle}>
@@ -1036,23 +949,29 @@ function PlannerVenuePreview({
           bounces={false}
         >
           <View style={styles.plannerPreviewChips}>
-            <MetaChip
-              icon="star"
-              label={`${displayedRating} (${displayedRatingCount})`}
-              background={colors.goldSoft}
-              foreground={colors.honeyInk}
-            />
-            {!isNonHospitalityVenue(venue) ? <MetaChip
-              label={venue.price || '££'}
-              background={colors.muted}
-              foreground={colors.green800}
-            /> : null}
-            <MetaChip
-              icon="clock"
-              label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
-              background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
-              foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
-            />
+            {venue.source !== 'openstreetmap' && Boolean(displayedRating.trim()) ? (
+              <MetaChip
+                icon="star"
+                label={`${displayedRating} (${displayedRatingCount})`}
+                background={colors.goldSoft}
+                foreground={colors.honeyInk}
+              />
+            ) : null}
+            {venue.source !== 'openstreetmap' && !isNonHospitalityVenue(venue) ? (
+              <MetaChip
+                label={venue.price || '££'}
+                background={colors.muted}
+                foreground={colors.green800}
+              />
+            ) : null}
+            {venue.source !== 'openstreetmap' ? (
+              <MetaChip
+                icon="clock"
+                label={displayedOpenNow === null ? 'Hours unavailable' : displayedOpenNow ? 'Open now' : 'Closed'}
+                background={displayedOpenNow === null ? colors.muted : displayedOpenNow ? colors.openBackground : colors.closedBackground}
+                foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
+              />
+            ) : null}
           </View>
 
           <Text style={[styles.plannerPreviewType, { color: colors.green700 }]}>{displayedType}</Text>
@@ -1065,10 +984,15 @@ function PlannerVenuePreview({
             <View style={styles.plannerPreviewAddressCopy}>
               <Text style={[styles.plannerPreviewAddressText, { color: colors.foreground }]}>{displayedAddress}</Text>
               <Text style={[styles.plannerPreviewWalk, { color: colors.mutedForeground }]}>
-                {venue.distance} · {venue.walkingTime}
+                {venue.walkingTime}
               </Text>
             </View>
           </View>
+          {venue.sourceAttribution ? (
+            <Text style={[styles.plannerPreviewDescription, { color: colors.mutedForeground }]}>
+              {venue.sourceAttribution}
+            </Text>
+          ) : null}
 
           <ConciergeTransitCard
             colors={colors}
@@ -1090,8 +1014,8 @@ function PlannerVenuePreview({
             <ActionButton
               label="Reserve"
               icon="calendar"
-              background={colors.goldSoft}
-              foreground={colors.honeyInk}
+              background={colors.green800}
+              foreground={colors.primaryForeground}
               onPress={onReservation}
             />
             <ActionButton
@@ -1168,29 +1092,6 @@ function ConciergeTransitCard({
   status: TransitStatus;
 }) {
   if (status === 'idle') return null;
-  if (context?.recommendation === 'walk') {
-    return (
-      <Pressable onPress={onOpenRoute} accessibilityRole="button"
-        style={[styles.transitCard, { backgroundColor: colors.secondary, borderColor: colors.border }]}>
-        <View style={styles.transitTitleRow}>
-          <PandaIcon name="walk" size={20} color={colors.green700} />
-          <Text style={[styles.transitTitle, { color: colors.foreground }]}>
-            {context.directWalk ? 'Walking is the better option' : 'You’re very close'}
-          </Text>
-        </View>
-        <Text style={[styles.transitStatusText, { color: colors.foreground }]}>
-          {context.recommendationReason}{context.directWalk ? ` · ${context.directWalk.durationMinutes} min walk` : ''}
-        </Text>
-        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Start walking in Google Maps →</Text>
-      </Pressable>
-    );
-  }
-  const transitSteps = context?.transitRoute?.steps.filter(step => step.mode === 'TRANSIT') ?? [];
-  const vehicle = transitSteps[0]?.vehicleType ?? '';
-  const vehicleSymbol = vehicle === 'BUS' ? '🚌' : vehicle === 'FERRY' ? '⛴' : '🚆';
-  const vehicleLabel = vehicle === 'BUS' ? 'Bus' : vehicle === 'FERRY' ? 'Boat' : 'Public transport';
-  const hasFreshLive = transitSteps.some(step => step.liveDepartureTime && step.liveUpdatedAt &&
-    Date.now() - Date.parse(step.liveUpdatedAt) < 60000);
 
   const venueWalkLabel = context?.venueWalk
     ? `${context.venueWalk.durationMinutes} min walk · ${
@@ -1199,8 +1100,11 @@ function ConciergeTransitCard({
           : `${(context.venueWalk.distanceMeters / 1000).toFixed(1)} km`
       }`
     : 'Nearest rail or Underground station';
+  const timingSource = context?.transitRoute?.timingSource ?? context?.timingSource;
   const liveRouteLabel = context?.transitRoute
-    ? `${vehicleSymbol} ${vehicleLabel} · ${context.transitRoute.durationMinutes} min · ${hasFreshLive ? 'Live departure' : 'Google estimate'}`
+    ? `${context.transitRoute.durationMinutes} min by public transport · ${
+        timingSource === 'tfl_live' ? 'live TfL departure' : 'Google route estimate'
+      }`
     : null;
 
   const actionable = Boolean(context) || status === 'permission-denied' || status === 'unavailable';
@@ -1215,7 +1119,7 @@ function ConciergeTransitCard({
       accessibilityLabel={actionLabel}
       accessibilityRole={actionable ? 'button' : undefined}
       disabled={!actionable}
-      onPress={context || status === 'unavailable' ? onOpenRoute : onRetry}
+      onPress={context ? onOpenRoute : onRetry}
       style={({ pressed }) => [
         styles.transitCard,
         compact && styles.transitCardCompact,
@@ -1226,7 +1130,7 @@ function ConciergeTransitCard({
     >
       <View style={styles.transitTitleRow}>
         <PandaIcon name="map" size={15} color={colors.green700} />
-        <Text style={[styles.transitTitle, { color: colors.green800 }]}>{hasFreshLive ? 'LIVE DEPARTURES' : 'TRANSIT DIRECTIONS'}</Text>
+        <Text style={[styles.transitTitle, { color: colors.green800 }]}>PUBLIC TRANSPORT ROUTE</Text>
       </View>
 
       {status === 'loading' ? (
@@ -1250,7 +1154,7 @@ function ConciergeTransitCard({
               <Text style={styles.transitEmoji}>📍</Text>
             </View>
             <View style={styles.transitPointCopy}>
-              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>BOARD {vehicleLabel.toUpperCase()}</Text>
+              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>YOUR NEAREST STATION</Text>
               <Text style={[styles.transitPointName, { color: colors.foreground }]}>{context.originStation.name}</Text>
             </View>
           </View>
@@ -1279,13 +1183,13 @@ function ConciergeTransitCard({
       ) : (
         <>
           <Text style={[styles.transitStatusText, { color: colors.mutedForeground }]}>
-            Live departures are unavailable right now. Google Maps can still find a route.
+            Live station information is unavailable for this venue right now.
           </Text>
-          <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Open Google Maps directions</Text>
+          <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Tap to try again</Text>
         </>
       )}
       {status === 'ready' ? (
-        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Get directions in Google Maps →</Text>
+        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Get directions in Panda →</Text>
       ) : null}
     </Pressable>
   );
@@ -1318,7 +1222,66 @@ function PhotoGallery({
 
   if (!visible) return null;
 
-  return <VenueGallery photos={photos} venueName={venue.name} initialIndex={active} visible={visible} onClose={onClose} onIndexChange={onActiveChange} />;
+  return (
+    <Modal visible={visible} animationType="fade" transparent={false} onRequestClose={onClose}>
+      <StatusBar style="dark" backgroundColor={colors.ivory} translucent={false} />
+      <View style={[styles.gallery, { backgroundColor: colors.green950 }]}>
+        <UniversalSwiper
+          photos={photos}
+          activeIndex={active}
+          width={width}
+          height={height}
+          contentFit="contain"
+          backdropColor={colors.green950}
+          fixedBackdropUri={photos[0]?.uri}
+          centerForeground
+          onIndexChange={onActiveChange}
+        />
+
+        {/* Top Controls */}
+        <View
+          style={[
+            styles.galleryTop,
+            { paddingTop: Platform.OS === 'web' ? 24 : Math.max(20, insets.top) },
+          ]}
+        >
+          <BoutiqueCloseButton
+            accessibilityLabel="Close gallery"
+            onPress={onClose}
+            colors={colors}
+            testID="gallery-close"
+            containerStyle={styles.galleryCloseBtn}
+          />
+        </View>
+
+        {/* Bottom Attribution */}
+        <View
+          style={[
+            styles.galleryBottom,
+            { paddingBottom: Platform.OS === 'web' ? 32 : Math.max(32, insets.bottom + 10) },
+          ]}
+        >
+          <View style={styles.galleryBottomWrapper}>
+            <BlurView intensity={40} tint="dark" style={StyleSheet.absoluteFill} />
+            <View style={styles.galleryBottomInner}>
+              <Text
+                style={[
+                  styles.galleryVenueName,
+                  { color: venue.premium ? colors.goldLine : colors.primaryForeground },
+                ]}
+                numberOfLines={1}
+              >
+                {venue.name}
+              </Text>
+              <Text style={styles.galleryAttribution} numberOfLines={2}>
+                Photo by {photos[active]?.attribution || 'Unknown'}
+              </Text>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -1350,6 +1313,17 @@ function UniversalSwiper({
   const isWeb = Platform.OS === 'web';
   const scrollRef = useRef<ScrollView>(null);
   const lastIndex = useRef(activeIndex);
+  const [requestedPhotoUris, setRequestedPhotoUris] = useState<ReadonlySet<string>>(() => new Set());
+
+  useEffect(() => {
+    setRequestedPhotoUris(previous => {
+      const next = new Set(previous);
+      photos.forEach((photo, index) => {
+        if (shouldLoadGalleryPhoto(index, activeIndex)) next.add(photo.uri);
+      });
+      return next.size === previous.size ? previous : next;
+    });
+  }, [activeIndex, photos]);
 
   // Sync index externally on native
   useEffect(() => {
@@ -1359,14 +1333,16 @@ function UniversalSwiper({
     }
   }, [activeIndex, width, isWeb]);
 
-  const renderPhoto = (photo: VenuePhotoItem, index: number) => (
+  const renderPhoto = (photo: VenuePhotoItem, index: number) => {
+    const loadPhoto = shouldLoadGalleryPhoto(index, activeIndex) || requestedPhotoUris.has(photo.uri);
+    return (
     <Pressable
       accessibilityLabel={`Photo ${index + 1}`}
       key={`${photo.uri}-${index}`}
       style={{ width, height }}
       onPress={onPhotoTap}
     >
-      {contentFit === 'contain' && backdropColor ? (
+      {loadPhoto && contentFit === 'contain' && backdropColor ? (
         <>
           <Image
             source={{ uri: fixedBackdropUri ?? photo.uri }}
@@ -1381,7 +1357,7 @@ function UniversalSwiper({
           />
         </>
       ) : null}
-      {centerForeground ? (
+      {loadPhoto ? centerForeground ? (
         <View pointerEvents="none" style={styles.galleryForegroundFrame}>
           <Image
             source={{ uri: photo.uri }}
@@ -1401,9 +1377,10 @@ function UniversalSwiper({
           pointerEvents="none"
           style={StyleSheet.absoluteFill}
         />
-      )}
+      ) : null}
     </Pressable>
-  );
+    );
+  };
 
   if (isWeb) {
     const pan = useRef(new Animated.Value(-activeIndex * width)).current;
@@ -1552,7 +1529,7 @@ function ActionButton({
         pressed && styles.pressed,
       ]}
     >
-      <PandaIcon name={icon} size={19} color={foreground} />
+      <PandaIcon name={icon} size={refined ? 17 : 19} color={foreground} />
       <Text style={[styles.actionText, refined && styles.editorialActionText, { color: foreground }, fontFamily ? { fontFamily } : undefined]}>{label}</Text>
     </Pressable>
   );
@@ -1701,42 +1678,17 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     borderWidth: 1,
     elevation: 18,
-    flex: 1,
-    maxHeight: 820,
+    height: '72%',
+    maxHeight: 640,
     overflow: 'hidden',
     shadowColor: '#062E22',
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.24,
     shadowRadius: 26,
-    width: '100%',
-  },
-  plannerHeroBar: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    left: 12,
-    position: 'absolute',
-    right: 12,
-    top: 12,
-    zIndex: 5,
-  },
-  plannerHeroBtn: {
-    alignItems: 'center',
-    backgroundColor: 'rgba(5,26,20,0.55)',
-    borderRadius: 999,
-    flexDirection: 'row',
-    gap: 6,
-    minHeight: 38,
-    minWidth: 38,
-    justifyContent: 'center',
-    paddingHorizontal: 12,
-  },
-  plannerHeroBtnText: {
-    color: '#FFFFFF',
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 13,
+    width: '94%',
   },
   plannerPreviewHero: {
-    height: 300,
+    height: 190,
     overflow: 'hidden',
     position: 'relative',
   },
@@ -1749,14 +1701,14 @@ const styles = StyleSheet.create({
   plannerHeroEyebrow: {
     color: '#F5D98C',
     fontFamily: 'Inter_700Bold',
-    fontSize: 10,
+    fontSize: 8,
     letterSpacing: 1.2,
   },
   plannerHeroTitle: {
     color: '#FFFFFF',
     fontFamily: 'Inter_700Bold',
-    fontSize: 26,
-    letterSpacing: -0.5,
+    fontSize: 22,
+    letterSpacing: -0.4,
     marginTop: 4,
   },
   plannerPreviewPagination: {
@@ -1775,9 +1727,9 @@ const styles = StyleSheet.create({
     width: 17,
   },
   plannerPreviewContent: {
-    paddingBottom: 28,
-    paddingHorizontal: 20,
-    paddingTop: 18,
+    paddingBottom: 18,
+    paddingHorizontal: 18,
+    paddingTop: 15,
   },
   plannerPreviewChips: {
     flexDirection: 'row',
@@ -1786,13 +1738,13 @@ const styles = StyleSheet.create({
   },
   plannerPreviewType: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 13,
-    marginTop: 15,
+    fontSize: 11,
+    marginTop: 13,
   },
   plannerPreviewDescription: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 12,
+    lineHeight: 18,
     marginTop: 6,
   },
   plannerPreviewAddress: {
@@ -1809,12 +1761,12 @@ const styles = StyleSheet.create({
   },
   plannerPreviewAddressText: {
     fontFamily: 'Inter_600SemiBold',
-    fontSize: 13,
-    lineHeight: 19,
+    fontSize: 11,
+    lineHeight: 16,
   },
   plannerPreviewWalk: {
     fontFamily: 'Inter_500Medium',
-    fontSize: 12,
+    fontSize: 10,
     marginTop: 5,
   },
   plannerPreviewActions: {
@@ -1992,14 +1944,14 @@ const styles = StyleSheet.create({
     minHeight: 0,
   },
   pinnedHeader: {
-    borderTopLeftRadius: 29,
-    borderTopRightRadius: 29,
+    borderTopLeftRadius: 25,
+    borderTopRightRadius: 25,
     borderBottomWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: 21,
     paddingTop: 11,
     paddingBottom: 12,
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.055,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.06,
     shadowRadius: 14,
     elevation: 2,
     zIndex: 3,
@@ -2068,11 +2020,11 @@ const styles = StyleSheet.create({
   },
   gripContainer: {
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
   grip: {
-    width: 40,
-    height: 5,
+    width: 38,
+    height: 4,
     borderRadius: 3,
     opacity: 0.6,
   },
@@ -2112,35 +2064,31 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 12,
   },
-  venueTitle: {
-    flexShrink: 0,
-    includeFontPadding: true,
-    marginBottom: 0,
-  },
   editorialHeading: { flex: 1, minWidth: 0 },
-  editorialKicker: { fontSize: 9, lineHeight: 13, letterSpacing: 1.8, marginBottom: 7 },
-  editorialTitle: { fontSize: 30, lineHeight: 39, fontWeight: '700', letterSpacing: -0.7 },
-  editorialPrice: { borderRadius: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: '#D7C8A7', paddingHorizontal: 11, paddingVertical: 9, marginTop: 3 },
-  editorialPriceText: { fontSize: 12, letterSpacing: 0.5 },
-  paidPremiumRule: { position: 'absolute', top: 0, left: 30, right: 30, borderBottomLeftRadius: 3, borderBottomRightRadius: 3, height: 3, opacity: 0.9 },
-  paidPremiumLabel: { borderWidth: 1, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.22, shadowRadius: 6, elevation: 3 },
-  paidPremiumUnderline: { width: 34, height: 2, borderRadius: 2, marginTop: 6 },
-  editorialPremium: { marginTop: 0, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  editorialKicker: { fontSize: 8, letterSpacing: 1.2, marginBottom: 6 },
+  editorialTitle: { fontSize: 30, lineHeight: 34, fontWeight: '400', letterSpacing: -0.45 },
+  editorialPrice: { borderRadius: 999, paddingHorizontal: 10, paddingVertical: 7, marginTop: 2 },
+  editorialPriceText: { fontSize: 11 },
+  editorialPremium: { marginTop: 0, paddingHorizontal: 8, paddingVertical: 4 },
   editorialHeroOverlay: { left: 17, right: 18, bottom: 42, alignItems: 'flex-end', gap: 12 },
   heroCaptionBlock: { flex: 1, minWidth: 0, gap: 8, alignItems: 'flex-start' },
   heroCredit: { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 4, maxWidth: '100%' },
   heroCreditText: { fontSize: 8 },
   heroCaption: { fontSize: 16, lineHeight: 20 },
-  editorialChip: { minHeight: 30, paddingHorizontal: 9, paddingVertical: 6, gap: 5, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(23,59,48,0.09)' },
-  editorialChipText: { fontSize: 11, lineHeight: 16 },
+  editorialChip: { minHeight: 29, paddingHorizontal: 8, paddingVertical: 5, gap: 4 },
+  editorialChipText: { fontSize: 11 },
   editorialContext: { borderWidth: 0, paddingHorizontal: 0, paddingVertical: 12, shadowOpacity: 0, elevation: 0 },
-  editorialDescription: { fontSize: 19, lineHeight: 27, marginBottom: 16 },
-  editorialAddressIcon: { width: 38, height: 38, borderRadius: 13 },
-  editorialAddress: { fontSize: 12.5, lineHeight: 19, fontWeight: '400' },
-  editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6, marginBottom: 18 },
-  editorialAction: { borderRadius: 15, minHeight: 49, gap: 8, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(104,81,39,0.14)' },
-  editorialActionText: { fontSize: 12.5, fontWeight: '700', letterSpacing: 0.1 },
+  editorialDescription: { fontSize: 18, lineHeight: 24, marginBottom: 13 },
+  editorialAddressIcon: { width: 34, height: 34, borderRadius: 17 },
+  editorialAddress: { fontSize: 12, lineHeight: 18, fontWeight: '400' },
+  editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 4, marginBottom: 16 },
+  editorialAction: { borderRadius: 11, minHeight: 46, gap: 7, paddingHorizontal: 8 },
+  editorialActionText: { fontSize: 12, fontWeight: '400' },
   editorialClose: { borderRadius: 20, width: 40, height: 40 },
+  venueTitle: {
+    flex: 1,
+    marginBottom: 0,
+  },
   chips: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -2174,38 +2122,6 @@ const styles = StyleSheet.create({
     shadowRadius: 12,
     elevation: 2,
     marginBottom: 6,
-  },
-  weatherCard: {
-    alignItems: 'center',
-    borderRadius: 18,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 12,
-    marginBottom: 10,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-  },
-  weatherIcon: {
-    fontSize: 30,
-    lineHeight: 36,
-  },
-  weatherCopy: {
-    flex: 1,
-  },
-  weatherTemperature: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 17,
-  },
-  weatherCondition: {
-    fontFamily: 'Inter_600SemiBold',
-    fontSize: 13,
-    marginTop: 2,
-  },
-  weatherSource: {
-    fontFamily: 'Inter_500Medium',
-    fontSize: 10,
-    letterSpacing: 0.4,
-    marginTop: 3,
   },
   conciergeStack: {
     marginBottom: 0,

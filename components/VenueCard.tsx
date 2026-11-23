@@ -1,5 +1,4 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
@@ -8,7 +7,6 @@ import { VenuePhoto } from '@/components/VenuePhoto';
 import { ReserveButton } from '@/components/ReserveButton';
 import { NonHospitalityCard } from '@/components/NonHospitalityCard';
 import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
-import { venueCardPalette } from '@/constants/venue-card-design';
 
 type VenueCardProps = {
   venue: Venue;
@@ -17,8 +15,7 @@ type VenueCardProps = {
   onToggleSaved: () => void;
   compact?: boolean;
   featured?: boolean;
-  presentation?: 'banging';
-  onPhotoInteraction?: (active: boolean) => void;
+  activitySurface?: 'banging';
 };
 
 export function VenueCard({
@@ -28,16 +25,11 @@ export function VenueCard({
   onToggleSaved,
   compact = false,
   featured = false,
-  presentation,
-  onPhotoInteraction,
+  activitySurface,
 }: VenueCardProps) {
   const colors = useColors();
-  if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={presentation === 'banging' ? 'banging' : undefined} />;
-  const editorial = presentation === 'banging';
+  if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={activitySurface} />;
   const premiumCard = venue.premium;
-  const tierLabel = venue.premium ? (editorial && venue.banging ? 'Premium' : 'Promoted') : null;
-  const premiumBanging = editorial && !!venue.premium;
-  const onGreen = !!premiumCard && (!editorial || premiumBanging);
   const premiumFeatured = featured && venue.premium;
 
   return (
@@ -47,12 +39,10 @@ export function VenueCard({
       style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: premiumBanging ? colors.green900 : editorial ? venueCardPalette.row : premiumCard ? colors.green800 : colors.card,
-          borderColor: premiumBanging ? venueCardPalette.gold : editorial ? venueCardPalette.border : premiumCard || featured ? colors.goldLine : colors.border,
+          backgroundColor: premiumCard ? colors.green800 : colors.card,
+          borderColor: premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
         },
         pressed && styles.pressed,
-        editorial && styles.editorialCard,
-        premiumBanging && styles.premiumBangingCard,
         premiumFeatured && styles.featuredCard,
         compact && styles.compactCard,
       ]}
@@ -62,21 +52,12 @@ export function VenueCard({
           venue={venue}
           venueId={venue.id}
           venueName={venue.name}
-          height={editorial ? 108 : compact ? 100 : premiumFeatured ? 148 : 136}
-          showControls={editorial}
-          onInteractionChange={onPhotoInteraction}
+          height={compact ? 100 : premiumFeatured ? 148 : 136}
         />
-        {editorial ? (
-          <LinearGradient
-            colors={['transparent', 'rgba(20,12,2,0.72)']}
-            pointerEvents="none"
-            style={styles.editorialShade}
-          />
-        ) : null}
-        {tierLabel ? (
-          <View style={[styles.premiumBadge, premiumBanging ? styles.premiumBadgeStrong : null, { backgroundColor: premiumBanging ? colors.honey : colors.goldSoft, borderColor: premiumBanging ? colors.green950 : colors.goldLine }]}>
-            <Text style={[styles.premiumStar, { color: premiumBanging ? colors.green950 : colors.goldDeep }]}>✦</Text>
-            <Text style={[styles.premiumText, premiumBanging ? styles.premiumTextStrong : null, { color: premiumBanging ? colors.green950 : colors.honeyInk }]}>{tierLabel}</Text>
+        {venue.premium ? (
+          <View style={[styles.premiumBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
+            <Text style={[styles.premiumStar, { color: colors.goldDeep }]}>✦</Text>
+            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
           </View>
         ) : null}
         <View style={styles.topRow}>
@@ -85,7 +66,7 @@ export function VenueCard({
             accessibilityLabel={saved ? `Remove ${venue.name} from saved venues` : `Save ${venue.name}`}
             accessibilityRole="button"
             hitSlop={10}
-            onPress={() => { recordVenueActivity('save_click', venue, presentation === 'banging' ? 'banging' : undefined); onToggleSaved(); }}
+            onPress={() => { recordVenueActivity('save_click', venue, activitySurface); onToggleSaved(); }}
             style={({ pressed }) => [styles.heartButton, pressed && styles.iconPressed]}
           >
             <Ionicons
@@ -100,7 +81,7 @@ export function VenueCard({
             testID={`view-photos-${venue.id}`}
             accessibilityLabel={`View albums of ${venue.name}`}
             accessibilityRole="button"
-            onPress={() => { recordVenueActivity('photo_click', venue, presentation === 'banging' ? 'banging' : undefined); onPress(); }}
+            onPress={() => { recordVenueActivity('photo_click', venue, activitySurface); onPress(); }}
             style={({ pressed }) => [
               styles.photoAction,
               { backgroundColor: colors.photoOverlay },
@@ -118,7 +99,6 @@ export function VenueCard({
           compact && styles.compactBody,
           premiumFeatured && styles.featuredBody,
           compact && premiumFeatured && styles.compactFeaturedBody,
-          editorial && styles.editorialBody,
         ]}
       >
         <Text
@@ -127,55 +107,67 @@ export function VenueCard({
           style={[
             styles.name,
             compact && styles.compactName,
-            editorial && styles.editorialName,
-            { color: onGreen ? colors.primaryForeground : colors.foreground },
+            { color: premiumCard ? colors.primaryForeground : colors.foreground },
           ]}
         >
           {venue.name}
         </Text>
         <View style={[styles.metaRow, compact && styles.compactMetaRow]}>
-          <View style={[styles.metaItem, compact && styles.compactMetaItem]}>
-            <Ionicons name="star" size={compact ? 12 : 14} color={colors.honey} />
-            <Text
-              style={[
-                styles.metaText,
-                compact && styles.compactMetaText,
-                { color: onGreen ? colors.primaryForeground : colors.foreground },
-              ]}
-            >
-              {venue.rating}
-            </Text>
-          </View>
-          {venue.price ? (
-            <>
-              <Text style={[styles.dot, compact && styles.compactDot, { color: onGreen ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+          {venue.rating ? (
+            <View style={[styles.metaItem, compact && styles.compactMetaItem]}>
+              <Ionicons name="star" size={compact ? 12 : 14} color={colors.honey} />
               <Text
                 style={[
                   styles.metaText,
                   compact && styles.compactMetaText,
-                  { color: onGreen ? colors.mint300 : colors.mutedForeground },
+                  { color: premiumCard ? colors.primaryForeground : colors.foreground },
+                ]}
+              >
+                {venue.rating}
+              </Text>
+            </View>
+          ) : null}
+          {venue.price ? (
+            <>
+              <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+              <Text
+                style={[
+                  styles.metaText,
+                  compact && styles.compactMetaText,
+                  { color: premiumCard ? colors.mint300 : colors.mutedForeground },
                 ]}
               >
                 {venue.price}
               </Text>
             </>
           ) : null}
-          <Text style={[styles.dot, compact && styles.compactDot, { color: onGreen ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+          <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
           <Text
             style={[
               styles.metaText,
               compact && styles.compactMetaText,
-              { color: onGreen ? colors.mint300 : colors.mutedForeground },
+              { color: premiumCard ? colors.mint300 : colors.mutedForeground },
             ]}
           >
             {venue.walkingTime}
           </Text>
         </View>
-        <Text style={[styles.openText, { color: venue.cached || venue.detailsDeferred ? colors.mutedForeground : onGreen ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
-          {venue.cached || venue.detailsDeferred ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
+        <Text style={[styles.openText, { color: venue.source === 'openstreetmap' || venue.cached ? colors.mutedForeground : premiumCard ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
+          {venue.source === 'openstreetmap'
+            ? 'Hours not listed'
+            : venue.cached ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
         </Text>
-        <ReserveButton venue={venue} activitySurface={editorial ? 'banging' : 'discovery'}
-          tone={premiumCard ? 'soft' : 'solid'} compact={compact} style={{ alignSelf: 'stretch', marginTop: 10 }} />
+        {venue.sourceAttribution ? (
+          <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 3 }}>
+            {venue.sourceAttribution}
+          </Text>
+        ) : null}
+        <ReserveButton
+          venue={venue}
+          activitySurface={activitySurface}
+          tone={premiumCard ? 'soft' : 'solid'}
+          style={[styles.reserveButton, compact && styles.compactReserveButton]}
+        />
       </View>
     </Pressable>
   );
@@ -197,22 +189,6 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     elevation: 8,
     shadowOpacity: 0.24,
-  },
-  premiumBangingCard: {
-    borderWidth: 1.5,
-    elevation: 3,
-    shadowColor: '#033B2B',
-    shadowOpacity: 0.18,
-  },
-  editorialCard: {
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 2,
-  },
-  editorialBody: {
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: 'rgba(181,148,86,0.22)',
   },
   compactCard: {
     borderRadius: 18,
@@ -241,13 +217,6 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
   },
-  editorialShade: {
-    bottom: 0,
-    height: 70,
-    left: 0,
-    position: 'absolute',
-    right: 0,
-  },
   premiumBadge: {
     alignItems: 'center',
     borderRadius: 999,
@@ -260,16 +229,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 10,
     zIndex: 12,
-  },
-  premiumBadgeStrong: {
-    borderWidth: 1,
-    gap: 4,
-    paddingHorizontal: 7,
-    paddingVertical: 3.5,
-  },
-  premiumTextStrong: {
-    fontSize: 9,
-    letterSpacing: 0.9,
   },
   premiumStar: {
     fontSize: 10,
@@ -305,13 +264,6 @@ const styles = StyleSheet.create({
   compactName: {
     fontSize: 15.5,
     lineHeight: 19,
-  },
-  editorialName: {
-    fontFamily: 'Inter_700Bold',
-    fontWeight: '700',
-    fontSize: 16,
-    lineHeight: 21,
-    letterSpacing: -0.25,
   },
   metaRow: {
     alignItems: 'center',
@@ -364,6 +316,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     right: 9,
     zIndex: 20,
+  },
+  reserveButton: {
+    alignSelf: 'stretch',
+    marginTop: 11,
+  },
+  compactReserveButton: {
+    borderRadius: 11,
+    marginTop: 8,
+    paddingHorizontal: 8,
   },
   photoActionText: {
     fontFamily: 'Inter_600SemiBold',

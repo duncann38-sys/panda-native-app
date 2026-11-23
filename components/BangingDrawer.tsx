@@ -25,14 +25,12 @@ import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
 export function BangingDrawer({
   venues,
-  status,
   isSaved,
   onToggleSaved,
   onPress,
   onOpenChange,
 }: {
   venues: Venue[];
-  status?: string;
   isSaved: (id: string) => boolean;
   onToggleSaved: (venue: Venue) => void;
   onPress: (venue: Venue) => void;
@@ -45,13 +43,11 @@ export function BangingDrawer({
   const measurementKey = `${width}:${fontScale}`;
   const [measurements, setMeasurements] = useState({ key: measurementKey, card: 0, header: 64 });
   const measured = measurements.key === measurementKey ? measurements : { card: 0, header: 64 };
-  const geometry = bangingDrawerLayout(measured.header, measured.card);
+  const geometry = bangingDrawerLayout(measured.header, measured.card, 48);
   const closedOffset = geometry.closedOffset;
   const [open, setOpen] = useState(false);
   const bangingImpressions = useVenueImpressions('banging', open);
   const bangingViewabilityPairs = useRef([bangingImpressions.presentationPair, bangingImpressions]).current;
-  const [carouselVisible, setCarouselVisible] = useState(false);
-  const [photoInteracting, setPhotoInteracting] = useState(false);
   const translateY = useRef(new Animated.Value(closedOffset)).current;
   const settledOffset = useRef(closedOffset);
   const gestureStartOffset = useRef(closedOffset);
@@ -73,8 +69,17 @@ export function BangingDrawer({
     });
   };
   const [activeIndex, setActiveIndex] = useState(0);
-  // The parent owns daily selection and timed ordering; do not reorder it here.
-  const bangingVenues = venues.filter(venue => venue.banging);
+  const normalVenues = venues.filter((venue) => venue.banging && !venue.premium);
+  const premiumVenues = venues.filter((venue) => venue.banging && venue.premium);
+  const bangingVenues = normalVenues.reduce<Venue[]>((ordered, venue, index) => {
+    ordered.push(venue);
+    const nextPosition = index + 1;
+    if (nextPosition % 4 === 0 && premiumVenues[nextPosition / 4 - 1]) {
+      ordered.push(premiumVenues[nextPosition / 4 - 1]);
+    }
+    return ordered;
+  }, []);
+  premiumVenues.slice(Math.ceil(normalVenues.length / 4)).forEach((venue) => bangingVenues.push(venue));
   useVenueResultAppearances(bangingVenues, 'banging', open, 'banging');
   const cardWidth = Math.min(194, Math.max(174, width - 156));
   const cardGap = 10;
@@ -87,17 +92,13 @@ export function BangingDrawer({
       settledOffset.current = nextOffset;
       setOpen(nextOpen);
       onOpenChange?.(nextOpen);
-      if (nextOpen) setCarouselVisible(true);
-      setPhotoInteracting(false);
       Animated.spring(translateY, {
         damping: 22,
         mass: 0.8,
         stiffness: 230,
         toValue: nextOffset,
         useNativeDriver: true,
-      }).start(({ finished }) => {
-        if (finished && !nextOpen) setCarouselVisible(false);
-      });
+      }).start();
     },
     [translateY, onOpenChange, closedOffset],
   );
@@ -181,24 +182,20 @@ export function BangingDrawer({
               <MaterialCommunityIcons name="fire" size={open ? 19 : 15} color={colors.honey} />
               <View style={[styles.liveDot, { backgroundColor: colors.gold }]} />
             </View>
-            {open ? <Text style={[styles.spotCount, { color: colors.goldDeep }]}>
-              {bangingVenues.length ? `${bangingVenues.length} curated cards` : status || 'Finding luxury venues…'}
-            </Text> : null}
+            <Text style={[styles.spotCount, !open && styles.closedSpotCount, { color: colors.goldDeep }]}>
+              {bangingVenues.length} curated spots
+            </Text>
           </View>
           <Feather name={open ? 'chevron-down' : 'chevron-up'} size={open ? 22 : 18} color={colors.goldDeep} />
         </View>
       </Pressable>
       <View style={[styles.carouselViewport, { height: geometry.carouselHeight }]}>
-        {carouselVisible ? <FlatList
+        <FlatList
           viewabilityConfigCallbackPairs={bangingViewabilityPairs}
           data={bangingVenues}
           horizontal
-          nestedScrollEnabled
-          scrollEnabled={!photoInteracting}
-          initialScrollIndex={bangingVenues.length ? Math.min(activeIndex, bangingVenues.length - 1) : undefined}
-          getItemLayout={(_, index) => ({ length: cardWidth + cardGap, offset: (cardWidth + cardGap) * index, index })}
           decelerationRate="fast"
-          keyExtractor={(venue, index) => `${venue.id}:${index}`}
+          keyExtractor={(venue) => venue.id}
           snapToInterval={cardWidth + cardGap}
           snapToAlignment="start"
           showsHorizontalScrollIndicator={false}
@@ -212,18 +209,17 @@ export function BangingDrawer({
           renderItem={({ item: venue, index }) => (
             <View onLayout={event => measure('card', event.nativeEvent.layout.height)} style={[styles.cardSlot, { alignSelf: 'flex-start', marginRight: cardGap, width: cardWidth }]}>
               <VenueCard
+                activitySurface="banging"
                 venue={venue}
                 saved={isSaved(venue.id)}
                 onToggleSaved={() => onToggleSaved(venue)}
                 onPress={() => onPress(withVenueActivityContext(venue, 'banging'))}
                 compact
-                presentation="banging"
-                onPhotoInteraction={setPhotoInteracting}
                 featured={index === activeIndex}
               />
             </View>
           )}
-        /> : null}
+        />
         <LinearGradient
           colors={[drawerSurface, 'transparent']}
           pointerEvents="none"
@@ -298,13 +294,11 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 22,
-    lineHeight: 26,
-    letterSpacing: -0.65,
+    fontSize: 19,
+    letterSpacing: -0.3,
   },
   closedTitle: {
-    fontSize: 18,
-    lineHeight: 22,
+    fontSize: 17,
   },
   liveDot: {
     borderRadius: 999,
@@ -314,7 +308,6 @@ const styles = StyleSheet.create({
   spotCount: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
-    lineHeight: 12,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },

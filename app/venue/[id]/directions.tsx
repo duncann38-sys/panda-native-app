@@ -2,15 +2,17 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { createElement } from 'react';
 import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { WebView } from 'react-native-webview';
 import { getVenue } from '@/data/venues';
 import { PandaIcon } from '@/components/PandaIcon';
+import NativeGoogleMap from '@/components/NativeGoogleMap';
+import { useLiveVenues } from '@/context/live-venues';
 import { useColors } from '@/hooks/useColors';
 
 export default function VenueDirectionsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { coordinates } = useLiveVenues();
   const { id } = useLocalSearchParams<{ id: string }>();
   const venue = getVenue(id ?? '');
 
@@ -31,8 +33,7 @@ export default function VenueDirectionsScreen() {
   }
 
   const encodedAddress = encodeURIComponent(venue.fullAddress);
-  const webMapQuery = `https://www.google.com/maps?q=${encodedAddress}&z=16&output=embed`;
-  const nativeMapQuery = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  const webMapQuery = `https://maps.google.com/maps?q=${encodedAddress}&z=16&output=embed`;
   const goBackToVenue = () => {
     if (router.canGoBack()) {
       router.back();
@@ -59,13 +60,13 @@ export default function VenueDirectionsScreen() {
             },
           })
         : (
-          <WebView
-            source={{ uri: nativeMapQuery }}
-            originWhitelist={['https://*']}
-            javaScriptEnabled
-            domStorageEnabled
-            setSupportMultipleWindows={false}
-            style={StyleSheet.absoluteFill}
+          <NativeGoogleMap
+            backgroundColor={colors.secondary}
+            venues={[venue]}
+            selectedVenue={venue}
+            routeVenues={[venue]}
+            onSelectVenue={() => {}}
+            userCoordinates={coordinates}
           />
         )}
 
@@ -135,6 +136,22 @@ export default function VenueDirectionsScreen() {
           </View>
         </View>
         <Text style={[styles.address, { color: colors.mutedForeground }]}>{venue.fullAddress}</Text>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Explore walking directions to ${venue.name} in Panda`}
+          onPress={() => router.push({
+            pathname: '/map',
+            params: {
+              directionsVenueId: venue.id,
+              directionsVenueData: JSON.stringify(venue),
+              directionsReturn: 'back',
+            },
+          })}
+          style={[styles.returnButton, { backgroundColor: colors.honey }]}
+        >
+          <PandaIcon name="navigate" size={17} color={colors.honeyInk} />
+          <Text style={[styles.returnButtonText, { color: colors.honeyInk }]}>Explore in Panda</Text>
+        </Pressable>
         <Pressable
           accessibilityRole="button"
           accessibilityLabel={`Back to ${venue.name}`}

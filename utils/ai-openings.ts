@@ -10,12 +10,6 @@ export const EMPTY_OPENING_ROTATION_STATE: OpeningRotationState = {
 };
 
 const MAX_REMEMBERED_OPENINGS = 120;
-const OPENING_LOOKBACK_MONTHS = 3;
-
-function openingWindowStart(now: number): number {
-  const current = new Date(now);
-  return Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - OPENING_LOOKBACK_MONTHS, 1, 12, 0, 0);
-}
 
 function validPlaceId(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0 && value.length <= 255 && !/\s/.test(value);
@@ -25,7 +19,7 @@ export function isNewOpeningPrompt(text: string): boolean {
   return /\b(?:new restaurants?|new openings?|new & buzzing|new and buzzing|recently opened)\b/i.test(text);
 }
 
-/** A card is shown only for a recent, dated opening with a publisher source or an explicit Google verification link. */
+/** A new-opening card needs dated external evidence, not just an AI description. */
 export function hasDatedOpeningEvidence(venue: {
   id?: string;
   openingSourceName?: string;
@@ -34,23 +28,32 @@ export function hasDatedOpeningEvidence(venue: {
   openingDate?: string;
   openingDesignation?: string;
 }, now = Date.now()): boolean {
-  if (!venue.id || !/^ChI[\w-]+$/.test(venue.id)
-    || !['panda-verified-new', 'panda-search-reported-new'].includes(venue.openingDesignation ?? '')
-    || !venue.openingSourceName?.trim()) return false;
+  if (!venue.id || !/^ChI[\w-]+$/.test(venue.id) || !venue.openingSourceName?.trim()) return false;
   const reportedAt = Date.parse(venue.openingReportedAt ?? '');
-  if (!Number.isFinite(reportedAt) || reportedAt > now || now - reportedAt > 8 * 86_400_000) return false;
+  if (!Number.isFinite(reportedAt) || reportedAt > now) return false;
+  // OpenTable's editorial New designation is not a claim that a venue opened
+  // this calendar month. Keep the older dated-evidence contract for other sources.
+  if (venue.openingDesignation === 'opentable-new') {
+    if (venue.openingSourceName !== 'OpenTable' || now - reportedAt > 30 * 86_400_000) return false;
+    try {
+      const url = new URL(venue.openingSourceUrl ?? '');
+      return url.protocol === 'https:' && !url.username && !url.password
+        && ['www.opentable.co.uk', 'www.opentable.com', 'opentable.co.uk', 'opentable.com'].includes(url.hostname)
+        && /^\/lists\/[^/]+$/.test(url.pathname) && !url.search && !url.hash;
+    } catch { return false; }
+  }
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(now));
+  const value = (type: string) => parts.find((part) => part.type === type)?.value;
+  const today = `${value('year')}-${value('month')}-${value('day')}`;
   const opened = venue.openingDate ?? '';
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(opened)) return false;
-  const openedAt = Date.parse(opened + 'T12:00:00Z');
-  if (!Number.isFinite(openedAt) || openedAt > now || openedAt < openingWindowStart(now)
-    || new Date(openedAt).toISOString().slice(0, 10) !== opened) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(opened) || !Number.isFinite(Date.parse(opened))
+    || new Date(opened).toISOString().slice(0, 10) !== opened
+    || opened.slice(0, 7) !== today.slice(0, 7) || opened > today) return false;
   try {
     const url = new URL(venue.openingSourceUrl ?? '');
-    if (url.protocol !== 'https:' || !url.hostname || url.username || url.password) return false;
-    if (venue.openingDesignation === 'panda-search-reported-new') {
-      return url.hostname === 'www.google.com' && url.pathname === '/search' && Boolean(url.searchParams.get('q'));
-    }
-    return !/(^|\.)google\.[a-z.]+$/i.test(url.hostname);
+    return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;
   } catch {
     return false;
   }

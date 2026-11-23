@@ -1,10 +1,12 @@
-import { generalVenueActionUrl, safeVenuePhone, safeVenueUrl, type ReservationLinks } from './official-venue-links';
+import { generalVenueActionUrl, safeVenuePhone, safeVenueUrl, type OfficialVenueLinks } from './official-venue-links';
 import { isGooglePlaceVenue } from './google-place-eligibility';
 
 export type ReservationTarget =
   | { provider: 'opentable' | 'venue' | 'website' | 'phone' | 'maps'; url: string; reason: null; provenance?: 'opentable_directory' }
   | { provider: 'unavailable'; url: null; reason: 'lookup_failed' | 'no_direct_link' | 'invalid_link' };
 
+// Only classify existing, venue-verified links. Never construct a restaurant
+// URL from a venue name, Google Place ID, partner number or sandbox Directory.
 const OPENTABLE_DOMAINS = [
   'opentable.com', 'opentable.co.uk', 'opentable.ca', 'opentable.com.au',
   'opentable.com.mx', 'opentable.de', 'opentable.es', 'opentable.fr',
@@ -12,9 +14,13 @@ const OPENTABLE_DOMAINS = [
   'opentable.sg', 'opentable.ae', 'opentable.nl',
 ];
 
+function openTableHost(hostname: string): boolean {
+  return OPENTABLE_DOMAINS.some((domain) => hostname === domain || hostname.endsWith(`.${domain}`));
+}
+
 export type ReservationVenueContact = { id?: string; name?: string; website?: unknown; phone?: unknown };
 
-export function getReservationContacts(links: ReservationLinks | null, venue: ReservationVenueContact = {}) {
+export function getReservationContacts(links: OfficialVenueLinks | null, venue: ReservationVenueContact = {}) {
   const trusted = links?.source === 'official_website' && (!links.placeId || !venue.id || links.placeId === venue.id) ? links : null;
   return {
     website: safeVenueUrl(trusted?.website) ?? safeVenueUrl(venue.website),
@@ -25,7 +31,7 @@ export function getReservationContacts(links: ReservationLinks | null, venue: Re
   };
 }
 
-export function getReservationTarget(links: ReservationLinks | null, venue: ReservationVenueContact = {}): ReservationTarget {
+export function getReservationTarget(links: OfficialVenueLinks | null, venue: ReservationVenueContact = {}): ReservationTarget {
   const trusted = links?.placeId && venue.id && links.placeId !== venue.id ? null : links;
   const booking = verifiedBookingTarget(trusted, venue.id ?? trusted?.placeId);
   if (booking.provider !== 'unavailable') return booking;
@@ -36,19 +42,19 @@ export function getReservationTarget(links: ReservationLinks | null, venue: Rese
   return booking;
 }
 
-function verifiedBookingTarget(links: ReservationLinks | null, placeId?: string): ReservationTarget {
+function verifiedBookingTarget(links: OfficialVenueLinks | null, placeId?: string): ReservationTarget {
   if (!links || links.source !== 'official_website' || links.lookupStatus === 'unavailable') {
     return { provider: 'unavailable', url: null, reason: 'lookup_failed' };
   }
   if (links.lookupStatus !== 'verified' || !links.reservationUrl) {
     return { provider: 'unavailable', url: null, reason: 'no_direct_link' };
   }
-  const value = safeVenueUrl(generalVenueActionUrl(links.reservationUrl, 'reservation'));
+  const value = generalVenueActionUrl(links.reservationUrl, 'reservation');
   if (!value || value === safeVenueUrl(links.website)) {
     return { provider: 'unavailable', url: null, reason: 'invalid_link' };
   }
   const url = new URL(value);
-  if (OPENTABLE_DOMAINS.some(domain => url.hostname === domain || url.hostname.endsWith(`.${domain}`))) {
+  if (openTableHost(url.hostname)) {
     if (links.reservationSource === 'opentable_directory') {
       const match = links.openTableMatch;
       if (!match || (placeId && match.placeId !== placeId) || match.environment !== 'production' || !Number.isFinite(match.expiresAt)
@@ -70,6 +76,7 @@ function verifiedBookingTarget(links: ReservationLinks | null, placeId?: string)
     return { provider: 'opentable', url: value, reason: null,
       ...(links.reservationSource === 'opentable_directory' ? { provenance: 'opentable_directory' as const } : {}) };
   }
+  // A lookalike domain must never be presented as an OpenTable integration.
   if (url.hostname.includes('opentable') || links.reservationSource === 'opentable_directory') {
     return { provider: 'unavailable', url: null, reason: 'invalid_link' };
   }

@@ -113,7 +113,7 @@ export default function CreditScreen() {
           </View>
           <Text style={[styles.balance, { color: colors.primaryForeground, fontSize: 28 }]}>Coming Soon</Text>
           <Text style={[styles.balanceBody, { color: colors.mint300 }]}>
-            We’ll let you know when Panda Credit is available.
+            No live card or credit balance is available yet.
           </Text>
         </View>
       </View>

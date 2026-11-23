@@ -3,7 +3,6 @@ import { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
-import { PandaIcon } from './PandaIcon';
 
 export type WalkingStep = {
   instruction: string;
@@ -13,9 +12,6 @@ export type WalkingStep = {
 };
 
 export type TransitStep = {
-  vehicleType?: string;
-  intermediateStops?: Array<{ name: string }>;
-  stopCount?: number;
   mode: 'WALK' | 'TRANSIT';
   instruction: string;
   durationMinutes: number;
@@ -65,6 +61,9 @@ type Props = {
   transitRefreshing: boolean;
   transitError?: string | null;
   onReroute: () => void;
+  routeWatchEnabled: boolean;
+  routeWatchStatus: string | null;
+  onRouteWatchToggle: () => void;
 };
 
 function distance(value: number | string | null | undefined): string | null {
@@ -150,6 +149,9 @@ export default function PandaRouteSheet({
   transitRefreshing,
   transitError,
   onReroute,
+  routeWatchEnabled,
+  routeWatchStatus,
+  onRouteWatchToggle,
 }: Props) {
   const colors = useColors();
   const { height } = useWindowDimensions();
@@ -298,6 +300,47 @@ export default function PandaRouteSheet({
           </Pressable>
         </View>
       ) : null}
+      {showingTransit ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={routeWatchEnabled ? 'Stop watching this route' : 'Notify me if this route changes'}
+          accessibilityState={{ selected: routeWatchEnabled }}
+          testID="route-watch-toggle"
+          onPress={onRouteWatchToggle}
+          style={[
+            styles.watchRouteButton,
+            {
+              backgroundColor: routeWatchEnabled ? colors.green800 : colors.secondary,
+              borderColor: routeWatchEnabled ? colors.green800 : colors.border,
+            },
+          ]}
+        >
+          <Ionicons
+            name={routeWatchEnabled ? 'notifications' : 'notifications-outline'}
+            size={17}
+            color={routeWatchEnabled ? colors.primaryForeground : colors.green800}
+          />
+          <View style={styles.watchRouteCopy}>
+            <Text style={[styles.watchRouteTitle, { color: routeWatchEnabled ? colors.primaryForeground : colors.green900 }]}>
+              {routeWatchEnabled ? 'Watching this route' : 'Notify me if it changes'}
+            </Text>
+            <Text style={[styles.watchRouteSubtitle, { color: routeWatchEnabled ? colors.mint300 : colors.mutedForeground }]}>
+              Google reroutes · TfL Tube status in London
+              {'\n'}Checks each minute while Panda is open
+            </Text>
+          </View>
+          <Ionicons
+            name={routeWatchEnabled ? 'checkmark-circle' : 'chevron-forward'}
+            size={18}
+            color={routeWatchEnabled ? colors.mint300 : colors.green700}
+          />
+        </Pressable>
+      ) : null}
+      {routeWatchStatus ? (
+        <Text accessibilityLiveRegion="polite" style={[styles.watchRouteStatus, { color: colors.goldDeep }]}>
+          {routeWatchStatus}
+        </Text>
+      ) : null}
 
       <ScrollView
         style={styles.detailsScroll}
@@ -307,10 +350,6 @@ export default function PandaRouteSheet({
       >
       {showingTransit && transitRoute ? (
         <>
-          <Pressable onPress={onStartNavigation} accessibilityRole="button" accessibilityLabel="Continue transit in Google Maps"
-            style={[styles.startNavigation, { backgroundColor: colors.green800, marginBottom: 14 }]}>
-            <Text style={[styles.startNavigationText, { color: colors.primaryForeground }]}>Continue transit in Google Maps</Text>
-          </Pressable>
           <View style={[styles.points, { borderBottomColor: colors.border }]}>
             <RoutePoint label="BOARD AT" name={transitRoute.originName} />
             <RoutePoint label="GET OFF AT" name={transitRoute.destinationName} end />
@@ -359,28 +398,17 @@ export default function PandaRouteSheet({
                 // Predictions are only labelled live while the feed's own timestamp is fresh.
                 <View key={`${index}-${step.mode}-${step.instruction}`} style={styles.leg}>
                   <View style={[styles.legIcon, { backgroundColor: step.mode === 'TRANSIT' ? colors.goldSoft : colors.secondary }]}>
-                    <PandaIcon
-                      name={step.mode === 'TRANSIT' ? step.vehicleType === 'BUS' ? 'bus' : step.vehicleType === 'FERRY' ? 'boat' : 'train' : 'walk'}
+                    <Ionicons
+                      name={step.mode === 'TRANSIT' ? 'train-outline' : 'walk-outline'}
                       size={17}
                       color={step.mode === 'TRANSIT' ? colors.goldDeep : colors.green800}
                     />
                   </View>
                   <View style={[styles.legCopy, index < transitRoute.steps.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border }]}>
                     <Text style={[styles.legKicker, { color: step.mode === 'TRANSIT' ? colors.goldDeep : colors.green700 }]}>
-                      {step.mode === 'TRANSIT' ? `${step.vehicleType === 'BUS' ? 'BUS' : step.vehicleType === 'FERRY' ? 'BOAT' : 'TRAIN'} · ${step.lineName || 'PUBLIC TRANSPORT'}` : 'WALK'}
+                      {step.mode === 'TRANSIT' ? step.lineName || 'PUBLIC TRANSPORT' : 'WALK'}
                     </Text>
                     <Text style={[styles.legTitle, { color: colors.foreground }]}>{step.instruction}</Text>
-                    {step.mode === 'TRANSIT' ? <>
-                      <Text style={[styles.legDetail, { color: colors.foreground }]}>
-                        {transitRoute.steps.slice(0, index).some(previous => previous.mode === 'TRANSIT') ? 'Change at' : 'Board at'} {step.departureStop}
-                        {' · Get off at '}{step.arrivalStop}
-                      </Text>
-                      {step.intermediateStops?.length ? <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>
-                        Stops: {step.intermediateStops.map(stop => stop.name).join(' → ')}
-                      </Text> : step.stopCount ? <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>
-                        {step.stopCount} stops · Full stop list in Google Maps
-                      </Text> : null}
-                    </> : null}
                     {step.mode === 'TRANSIT' && step.headsign ? (
                       <Text style={[styles.legDetail, { color: colors.mutedForeground }]}>Towards {step.headsign}</Text>
                     ) : null}
@@ -543,12 +571,13 @@ export default function PandaRouteSheet({
               accessibilityRole="button"
               accessibilityLabel="Start walking navigation"
               testID="navigation-start"
+              disabled={!hasWalkingSteps}
               onPress={onStartNavigation}
-              style={[styles.startNavigation, { backgroundColor: colors.green800 }]}
+              style={[styles.startNavigation, { backgroundColor: colors.green800, opacity: hasWalkingSteps ? 1 : 0.55 }]}
             >
               <Ionicons name="navigate-outline" size={18} color={colors.primaryForeground} />
               <Text style={[styles.startNavigationText, { color: colors.primaryForeground }]}>
-                Start walking in Google Maps
+                {hasWalkingSteps ? 'Start navigation' : 'Step guidance unavailable'}
               </Text>
             </Pressable>
           )}
@@ -598,6 +627,11 @@ const styles = StyleSheet.create({
   quickestSubtitle: { fontSize: 10, lineHeight: 14, marginTop: 2 },
   refreshButton: { minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, borderRadius: 10 },
   refreshText: { fontSize: 11, fontWeight: '700' },
+  watchRouteButton: { alignItems: 'center', borderWidth: 1, borderRadius: 14, flexDirection: 'row', gap: 10, marginBottom: 10, minHeight: 55, paddingHorizontal: 12 },
+  watchRouteCopy: { flex: 1, gap: 2 },
+  watchRouteTitle: { fontSize: 12, fontWeight: '800' },
+  watchRouteSubtitle: { fontSize: 10, lineHeight: 14 },
+  watchRouteStatus: { fontSize: 10, lineHeight: 15, marginBottom: 7, paddingHorizontal: 2 },
   detailsScroll: { flexShrink: 1 },
   detailsContent: { paddingBottom: 4 },
   points: { marginHorizontal: 2, borderBottomWidth: 1, paddingBottom: 2 },

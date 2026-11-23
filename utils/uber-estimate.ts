@@ -5,28 +5,47 @@ export type UberEstimateInput = {
   driveDurationMinutes?: number | null;
   venueName: string;
   now?: Date;
+  timeZone?: string;
 };
 
 export type UberEstimate = {
   minutes: number;
   minFare: number;
   maxFare: number;
-  peakTime: boolean;
-  planningBufferGbp: number;
-  peakBufferGbp: number;
+  peakSurcharge: number;
   label: string;
   deepLink: string;
 };
 
-function isValidCoordinate(value: number | null | undefined, min: number, max: number) {
-  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
+export function isUberRideRequest(text: string): boolean {
+  return /\b(?:uber|taxi|cab)\b/i.test(String(text || ''))
+    && /\b(?:to|home|ride|journey|fare|price|estimate|get|book|order|call|take)\b/i.test(String(text || ''));
 }
 
-export function isLocalPeakTime(now: Date = new Date()) {
-  if (!(now instanceof Date) || !Number.isFinite(now.getTime())) return false;
-  const day = now.getDay();
-  const hour = now.getHours();
-  return day >= 1 && day <= 5 && ((hour >= 7 && hour < 10) || (hour >= 16 && hour < 19));
+export function isUberHomeRequest(text: string): boolean {
+  return isUberRideRequest(text) && /\bhome\b/i.test(String(text || ''));
+}
+
+function isPeakPickupTime(now: Date, timeZone?: string): boolean {
+  try {
+    const zone = timeZone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London';
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: zone,
+      weekday: 'short',
+      hour: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(now);
+    const weekday = parts.find((part) => part.type === 'weekday')?.value ?? '';
+    const hour = Number(parts.find((part) => part.type === 'hour')?.value);
+    if (!Number.isFinite(hour) || weekday === 'Sat' || weekday === 'Sun') return false;
+    return (hour >= 7 && hour < 10) || (hour >= 16 && hour < 19);
+  } catch {
+    return false;
+  }
+}
+
+function isValidCoordinate(value: number | null | undefined, min: number, max: number) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= min && value <= max;
 }
 
 /**
@@ -34,7 +53,7 @@ export function isLocalPeakTime(now: Date = new Date()) {
  * supplied driving duration). This is not a live Uber fare or route quote.
  */
 export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null {
-  const { latitude, longitude, distanceMeters, driveDurationMinutes, venueName, now = new Date() } = input;
+  const { latitude, longitude, distanceMeters, driveDurationMinutes, venueName } = input;
   if (
     !isValidCoordinate(latitude, -90, 90)
     || !isValidCoordinate(longitude, -180, 180)
@@ -59,15 +78,11 @@ export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null
   const minutes = Math.max(3, suppliedDriveTime ?? Math.round(3 + distanceKm * 3));
 
   // Broad local bands are deliberately indicative; Uber's live fare can differ.
+  const peakSurcharge = isPeakPickupTime(input.now ?? new Date(), input.timeZone) ? 5 : 0;
   const baseMinFare = Math.max(4, Math.floor(3.5 + distanceKm * 1.25 + minutes * 0.16));
   const baseMaxFare = Math.max(baseMinFare + 2, Math.ceil(5.25 + distanceKm * 1.85 + minutes * 0.27));
-  // Preserve the existing £5 planning buffer and add a separate £5 only during
-  // local weekday commute peaks. Neither buffer is an Uber fee or live surge quote.
-  const planningBufferGbp = 5;
-  const peakTime = isLocalPeakTime(now);
-  const peakBufferGbp = peakTime ? 5 : 0;
-  const minFare = baseMinFare + planningBufferGbp + peakBufferGbp;
-  const maxFare = baseMaxFare + planningBufferGbp + peakBufferGbp;
+  const minFare = baseMinFare + peakSurcharge;
+  const maxFare = baseMaxFare + peakSurcharge;
   const safeName = venueName.trim() || 'Panda venue';
   const deepLink = [
     'https://m.uber.com/ul/?action=setPickup&pickup=my_location',
@@ -80,9 +95,7 @@ export function buildUberEstimate(input: UberEstimateInput): UberEstimate | null
     minutes,
     minFare,
     maxFare,
-    peakTime,
-    planningBufferGbp,
-    peakBufferGbp,
+    peakSurcharge,
     label: `~${minutes} mins • £${minFare}–£${maxFare}`,
     deepLink,
   };

@@ -8,18 +8,25 @@ import { withVenueActivityContext } from '@/utils/record-venue-activity';
 import type { VenueActivitySurface } from '@/utils/venue-activity';
 
 export const RESERVE_SURFACES: readonly VenueActivitySurface[] = ['discovery', 'banging', 'panda_ai', 'map', 'planner', 'saved'];
+
 export function isReserveSurface(value: unknown): value is VenueActivitySurface {
   return typeof value === 'string' && (RESERVE_SURFACES as readonly string[]).includes(value);
 }
+
 export type ReserveButtonProps = {
   venue: Venue;
   activitySurface?: VenueActivitySurface;
   compact?: boolean;
+  /** 'solid' = Panda green; 'soft' = mint for use on dark/premium surfaces. */
   tone?: 'solid' | 'soft';
   style?: StyleProp<ViewStyle>;
   onBeforeNavigate?: () => void;
 };
-// Navigation only: never fetch reservation details while rendering cards.
+
+/**
+ * Quick Reserve CTA. Navigates straight to /venue/[id]/reservation carrying the
+ * venue (with retained activity context) and the validated surface. Never fetches.
+ */
 export function ReserveButton({ venue, activitySurface, compact = false, tone = 'solid', style, onBeforeNavigate }: ReserveButtonProps) {
   const colors = useColors();
   const router = useRouter();
@@ -27,6 +34,7 @@ export function ReserveButton({ venue, activitySurface, compact = false, tone = 
   const surface = isReserveSurface(activitySurface) ? activitySurface : undefined;
   const bg = tone === 'soft' ? colors.mint100 : colors.green800;
   const fg = tone === 'soft' ? colors.green900 : colors.primaryForeground;
+
   const onPress = (event: GestureResponderEvent) => {
     event?.stopPropagation?.();
     if (!venue?.id) return;
@@ -34,18 +42,35 @@ export function ReserveButton({ venue, activitySurface, compact = false, tone = 
     onBeforeNavigate?.();
     router.push({
       pathname: '/venue/[id]/reservation',
-      params: { id: venue.id, venueData: JSON.stringify(payload), ...(surface ? { activitySurface: surface } : {}) },
+      params: {
+        id: venue.id,
+        venueData: JSON.stringify(payload),
+        ...(surface ? { activitySurface: surface } : {}),
+      },
     });
   };
+
   return (
-    <Pressable testID={`reserve-${venue.id}`} accessibilityRole="button" accessibilityLabel={`Reserve at ${venue.name}`}
-      hitSlop={compact ? 6 : 0} onPress={onPress}
-      style={({ pressed }) => [styles.button, compact && styles.compact, { backgroundColor: bg }, pressed && styles.pressed, style]}>
+    <Pressable
+      testID={`reserve-${venue.id}`}
+      accessibilityRole="button"
+      accessibilityLabel={`Reserve at ${venue.name}`}
+      hitSlop={compact ? 6 : 0}
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.button,
+        compact && styles.compact,
+        { backgroundColor: bg },
+        pressed && styles.pressed,
+        style,
+      ]}
+    >
       <PandaIcon name="calendar" size={compact ? 13 : 15} color={fg} />
       <Text style={[styles.text, compact && styles.compactText, { color: fg }]}>Reserve</Text>
     </Pressable>
   );
 }
+
 const styles = StyleSheet.create({
   button: { alignItems: 'center', borderRadius: 12, flexDirection: 'row', gap: 7, justifyContent: 'center', minHeight: 44, paddingHorizontal: 14 },
   compact: { borderRadius: 999, gap: 5, minHeight: 32, paddingHorizontal: 11 },
