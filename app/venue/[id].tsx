@@ -22,6 +22,7 @@ import {
 import type { DimensionValue, StyleProp, ViewStyle } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PandaIcon, type PandaIconName } from '@/components/PandaIcon';
+import { VenueWeatherCard } from '@/components/VenueWeatherCard';
 import { VenuePhoto, venuePhotosFor, type VenuePhotoItem } from '@/components/VenuePhoto';
 import { PANDA_RUNTIME_API } from '@/constants/services';
 import { NonHospitalityActions } from '@/components/NonHospitalityActions';
@@ -587,7 +588,7 @@ export default function VenueDetailScreen() {
               <Text numberOfLines={1} style={[styles.editorialKicker, { fontFamily: fonts.bold, color: cardColors.muted }]}>
                 THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}
               </Text>
-              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+              <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
             </View>
             {!isNonHospitalityVenue(venue) && venue.price ? (
               <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
@@ -726,6 +727,12 @@ export default function VenueDetailScreen() {
                 />
               ) : null}
             </View>}
+
+            {isGooglePlaceVenue(venue) ? (
+              <VenueWeatherCard
+                placeId={venue.id}
+              />
+            ) : null}
 
             <ConciergeTransitCard
               colors={colors}

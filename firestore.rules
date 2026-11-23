@@ -50,7 +50,7 @@ service cloud.firestore {
       }
 
       match /saved_venues/{venueId} {
-        allow read: if isOwner(uid) || isFriend(uid);
+        allow read: if isOwner(uid);
         allow create, update: if isOwner(uid)
           && request.resource.data.keys().hasOnly(['placeId', 'name', 'category', 'neighborhood', 'formattedAddress', 'latitude', 'longitude', 'photoUri', 'venueData', 'status', 'savedAt', 'updatedAt'])
           && request.resource.data.placeId == venueId
@@ -170,7 +170,15 @@ service cloud.firestore {
             && (!('source' in request.resource.data.venue) || request.resource.data.venue.source in ['google_places', 'openstreetmap'])
           ))
           && request.resource.data.keys().hasOnly(['senderUid', 'type', 'text', 'venue', 'bookingId', 'createdAt']);
-        allow update, delete: if false;
+        allow update: if isThreadParticipant(threadId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deletedForUids'])
+          && request.resource.data.deletedForUids is list
+          && request.resource.data.deletedForUids.hasAny([request.auth.uid])
+          && request.resource.data.deletedForUids.hasAll(resource.data.get('deletedForUids', []))
+          && !resource.data.get('deletedForUids', []).hasAny([request.auth.uid])
+          && request.resource.data.deletedForUids.size() == resource.data.get('deletedForUids', []).size() + 1
+          && request.resource.data.deletedForUids.size() <= get(/databases/$(database)/documents/threads/$(threadId)).data.participantUids.size();
+        allow delete: if false;
       }
     }
 

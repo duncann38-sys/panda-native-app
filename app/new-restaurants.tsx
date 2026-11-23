@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react';
-import { ActivityIndicator, FlatList, Platform, Pressable, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { ActivityIndicator, FlatList, Linking, Platform, Pressable, StyleSheet, Text, View, type ViewToken } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenueCard } from '@/components/VenueCard';
@@ -54,10 +55,10 @@ export default function NewRestaurantsScreen() {
 
   const header = (
     <View>
-      <Text style={[styles.kicker, { color: colors.honeyInk }]}>OPENTABLE NEW SELECTION</Text>
-      <Text style={[styles.title, { color: colors.foreground }]}>New on the table</Text>
+      <Text style={[styles.kicker, { color: colors.honeyInk }]}>PANDA OPENING WATCH</Text>
+      <Text style={[styles.title, { color: colors.foreground }]}>New openings near you</Text>
       <Text style={[styles.lede, { color: colors.mutedForeground }]}>
-        OpenTable’s New selection, matched to the right Google venue. Up to 20 fresh picks each visit.
+        Panda checks recent opening dates against named sources, then matches each place to its Google venue.
       </Text>
       {radiusLine ? (
         <View style={[styles.radius, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
@@ -85,15 +86,15 @@ export default function NewRestaurantsScreen() {
               <View style={[styles.skelLine, { backgroundColor: colors.muted, width: '38%' }]} />
             </View>
           ))}
-          <Text style={[styles.note, { color: colors.mutedForeground, textAlign: 'center' }]}>Checking the New selection near you…</Text>
+          <Text style={[styles.note, { color: colors.mutedForeground, textAlign: 'center' }]}>Checking recent openings near you…</Text>
         </View>
       );
     }
-    const title = error ? 'We couldn’t load the New selection' : notReady ? 'The New selection isn’t ready yet' : 'Nothing new close by just now';
+    const title = error ? 'We couldn’t load new openings' : notReady ? 'Opening checks aren’t ready yet' : 'No verified openings nearby';
     const body = error
       ?? (notReady
-        ? text || 'Panda’s source for new openings hasn’t confirmed a selection for this area. This isn’t an empty search — please check back shortly.'
-        : text || 'No verified OpenTable New matches were available within 40 km. Try again later.');
+        ? text || 'Panda’s source for recent openings has not confirmed this area yet. Please try again shortly.'
+        : text || 'No dated, source-linked openings were verified in the last three months. Try a wider area or refresh.');
     return (
       <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <PandaLogo size={42} />
@@ -135,6 +136,22 @@ export default function NewRestaurantsScreen() {
               <Text style={[styles.distance, { color: colors.mutedForeground }]}>{item.distance} away</Text>
             </View>
             <VenueCard venue={item} saved={isSaved(item.id)} onPress={() => open(item)} onToggleSaved={() => toggleSaved(item)} />
+            {item.openingSourceName && item.openingSourceUrl ? (
+              <Pressable
+                accessibilityRole="link"
+                accessibilityLabel={`Open opening source from ${item.openingSourceName}`}
+                onPress={() => void Linking.openURL(item.openingSourceUrl!).catch(() => {})}
+                style={[styles.sourceLink, { backgroundColor: colors.card, borderColor: colors.border }]}
+              >
+                <Ionicons name="open-outline" size={13} color={colors.green800} />
+                <Text style={[styles.sourceLinkText, { color: colors.green800 }]}>
+                  Source: {item.openingSourceName}
+                  {item.openingDate
+                    ? ` · Opened ${new Date(`${item.openingDate}T12:00:00`).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                    : ''}
+                </Text>
+              </Pressable>
+            ) : null}
           </View>
         )}
       />
@@ -159,6 +176,8 @@ const styles = StyleSheet.create({
   inlineErrorText: { fontFamily: 'Inter_500Medium', fontSize: 12 },
   distanceRow: { alignItems: 'center', flexDirection: 'row', gap: 5, marginBottom: 7, marginTop: 6 },
   distance: { fontFamily: 'Inter_600SemiBold', fontSize: 12, letterSpacing: 0.2 },
+  sourceLink: { alignItems: 'center', alignSelf: 'flex-start', borderColor: '#D4DFD4', borderRadius: 999, borderWidth: 1, flexDirection: 'row', gap: 6, marginTop: 8, paddingHorizontal: 11, paddingVertical: 7 },
+  sourceLinkText: { fontFamily: 'Inter_600SemiBold', fontSize: 10 },
   skeleton: { borderRadius: 22, borderWidth: 1, marginTop: 22, overflow: 'hidden', paddingBottom: 16 },
   skelPhoto: { height: 136, marginBottom: 14 },
   skelLine: { borderRadius: 6, height: 12, marginHorizontal: 13, marginTop: 8 },

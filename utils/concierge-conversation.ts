@@ -29,6 +29,25 @@ export function buildPandaPersonalInstruction(name: string | null | undefined, m
   ].filter(Boolean).join('\n\n');
 }
 
+export function localDateReply(
+  text: string,
+  now = new Date(),
+  timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Europe/London',
+): string | null {
+  const clean = text.trim().replace(/[’]/g, "'");
+  if (!/^(?:(?:what|which) day is it(?: today)?|what(?:'s| is) (?:the )?(?:date|day)(?: today)?|what day and date is it(?: today)?|today's date|what is today)[?!. ]*$/i.test(clean)) {
+    return null;
+  }
+  const formatted = new Intl.DateTimeFormat('en-GB', {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    timeZone,
+  }).format(now);
+  return `Today is ${formatted}.`;
+}
+
 export function presentConciergeReplyText(text: string): string {
   return text
     .replace(/\b(?:the )?forecast from MET Norway shows\b/gi, 'The forecast shows')

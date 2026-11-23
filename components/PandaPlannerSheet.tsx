@@ -145,7 +145,7 @@ function plannerCategory(category: string): Venue['category'] {
   return 'Restaurant';
 }
 
-function venueFromSearchResult(
+export function venueFromSearchResult(
   result: PlannerSearchResult,
   location: string,
 ): Venue {

@@ -1,16 +1,6 @@
 {
   "indexes": [
     {
-      "collectionGroup": "guests",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        {
-          "fieldPath": "uid",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "friend_requests",
       "queryScope": "COLLECTION",
       "fields": [

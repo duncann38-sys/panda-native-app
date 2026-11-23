@@ -297,6 +297,8 @@ export default function MapScreen() {
   const [googleSearchVenues, setGoogleSearchVenues] = useState<Venue[]>([]);
   const [googleSearchLoading, setGoogleSearchLoading] = useState(false);
   const [googleSearchError, setGoogleSearchError] = useState<string | null>(null);
+  const [googleSearchCompletedQuery, setGoogleSearchCompletedQuery] = useState('');
+  const [searchSubmitPending, setSearchSubmitPending] = useState(false);
   const [selectedGoogleVenue, setSelectedGoogleVenue] = useState<Venue | null>(null);
   const mapVenues = useMemo(() => {
     if (plannerActive) return plannerVenues;
@@ -830,11 +832,13 @@ export default function MapScreen() {
       setGoogleSearchVenues([]);
       setGoogleSearchLoading(false);
       setGoogleSearchError(null);
+      setGoogleSearchCompletedQuery(query);
       return;
     }
     const controller = new AbortController();
     setGoogleSearchVenues([]);
     setGoogleSearchError(null);
+    setGoogleSearchCompletedQuery('');
     setGoogleSearchLoading(true);
     const timer = setTimeout(() => {
       void (async () => {
@@ -870,7 +874,10 @@ export default function MapScreen() {
             setGoogleSearchError(error instanceof Error ? error.message : 'Google place search is unavailable right now.');
           }
         } finally {
-          if (!controller.signal.aborted) setGoogleSearchLoading(false);
+          if (!controller.signal.aborted) {
+            setGoogleSearchLoading(false);
+            setGoogleSearchCompletedQuery(query);
+          }
         }
       })();
     }, 450);
@@ -970,7 +977,10 @@ export default function MapScreen() {
     clearRouteParams();
     setSearchFocused(false);
     setResultsRailVisible(clearSearch);
-    if (clearSearch) setSearchQuery('');
+    if (clearSearch) {
+      setSearchSubmitPending(false);
+      setSearchQuery('');
+    }
     Keyboard.dismiss();
     const railSource = clearSearch
       ? isLocalVenue ? baseMapVenues.slice(0, 12) : [venue, ...baseMapVenues].slice(0, 12)
@@ -988,8 +998,28 @@ export default function MapScreen() {
   };
 
   const handleSearchSubmit = () => {
-    if (filteredVenues[0]) selectVenue(filteredVenues[0], true);
+    Keyboard.dismiss();
+    if (filteredVenues[0]) {
+      selectVenue(filteredVenues[0], true);
+      return;
+    }
+    if (searchQuery.trim().length >= 2) {
+      setSearchSubmitPending(true);
+      setSearchFocused(true);
+    }
   };
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!searchSubmitPending || googleSearchLoading || googleSearchCompletedQuery !== query) return;
+    const firstResult = filteredVenues[0];
+    setSearchSubmitPending(false);
+    if (firstResult) {
+      selectVenue(firstResult, true);
+    } else {
+      setGoogleSearchError(current => current || 'No Google places matched that search. Try adding a city or area.');
+    }
+  }, [filteredVenues, googleSearchCompletedQuery, googleSearchLoading, searchQuery, searchSubmitPending, selectVenue]);
 
   const openDirections = (venue: Venue) => {
     recordVenueActivity('directions_click', venue);
@@ -1089,7 +1119,10 @@ export default function MapScreen() {
             testID="map-search"
             accessibilityLabel="Search places on map"
             autoCapitalize="none"
-            onChangeText={setSearchQuery}
+            onChangeText={(value) => {
+              setSearchSubmitPending(false);
+              setSearchQuery(value);
+            }}
             onFocus={() => setSearchFocused(true)}
             onSubmitEditing={handleSearchSubmit}
             placeholder="Search places, food or areas"

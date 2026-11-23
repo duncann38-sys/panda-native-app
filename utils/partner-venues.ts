@@ -1,7 +1,7 @@
-import { PANDA_PRODUCTION_API } from '@/constants/services';
+import { PANDA_PARTNER_ACTIVITY_API, PANDA_PRODUCTION_API } from '@/constants/services';
 import type { Venue } from '@/data/venues';
-import { distanceBetween } from './venue-actions';
-import { bangingClock } from './banging-rotation';
+import { distanceBetween } from '@/utils/venue-actions';
+import { bangingClock } from '@/utils/banging-rotation';
 
 type Placement = { name: string; place_id: string; tier: 'banging' | 'discovery' };
 type Profile = {
@@ -13,14 +13,12 @@ type Profile = {
   photoNames?: Array<{ name: string; attribution: string }>;
 };
 const profileCache = new Map<string, { expires: number; profile: Profile }>();
-const sessionSeed = Math.floor(Math.random() * 1000000);
-let activeTiers: Record<string, Placement['tier']> = {};
-export function getPartnerTier(placeId: string) { return activeTiers[placeId]; }
+const sessionSeed = Math.floor(Math.random() * 1_000_000);
 
 function cohort(pool: Placement[]) {
   if (pool.length <= 10) return pool;
   const clock = bangingClock();
-  const day = Math.floor(Date.parse(`${clock.day}T12:00:00Z`) / 86400000);
+  const day = Math.floor(Date.parse(`${clock.day}T12:00:00Z`) / 86_400_000);
   const group = (sessionSeed + day * 6 + clock.slot) % Math.ceil(pool.length / 10);
   return Array.from({ length: 10 }, (_, index) => pool[(group * 10 + index) % pool.length]);
 }
@@ -29,30 +27,33 @@ export async function loadPartnerVenues(
   origin: { latitude: number; longitude: number },
   signal: AbortSignal,
 ) {
-  const response = await fetch('https://panda-partners-api.vercel.app/api/public/sponsored-venues', { signal });
+  const response = await fetch(`${PANDA_PARTNER_ACTIVITY_API}/api/public/sponsored-venues`, { signal });
   if (!response.ok) throw new Error('Current partner placements unavailable');
   const body = await response.json() as { venues?: Placement[] };
   const placements = (body.venues ?? []).filter(placement => placement.place_id &&
     !placement.place_id.startsWith('place-') &&
     ['banging', 'discovery'].includes(placement.tier));
   const tiers = Object.fromEntries(placements.map(placement => [placement.place_id, placement.tier]));
-  activeTiers = tiers;
   const locallyRanked = placements.slice().sort((a, b) => {
     const first = profileCache.get(a.place_id)?.profile;
     const second = profileCache.get(b.place_id)?.profile;
     return (first ? distanceBetween(origin, first) ?? Infinity : Infinity) -
       (second ? distanceBetween(origin, second) ?? Infinity : Infinity);
   });
-  const selected = [...cohort(locallyRanked.filter(item => item.tier === 'banging')),
-    ...cohort(locallyRanked.filter(item => item.tier === 'discovery'))];
+  const selected = [
+    ...cohort(locallyRanked.filter(item => item.tier === 'banging')),
+    ...cohort(locallyRanked.filter(item => item.tier === 'discovery')),
+  ];
   const venues: Venue[] = [];
-  // Resolve a bounded cohort, never every paid venue, with at most three requests at once.
   for (let offset = 0; offset < selected.length && !signal.aborted; offset += 3) {
     await Promise.all(selected.slice(offset, offset + 3).map(async placement => {
       try {
         let profile = profileCache.get(placement.place_id)?.profile;
         if (!profile || (profileCache.get(placement.place_id)?.expires ?? 0) <= Date.now()) {
-          const result = await fetch(`${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placement.place_id)}/profile`, { signal });
+          const result = await fetch(
+            `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placement.place_id)}/profile`,
+            { signal },
+          );
           if (!result.ok) return;
           profile = await result.json() as Profile;
           profileCache.set(placement.place_id, { expires: Date.now() + 3 * 60 * 60 * 1000, profile });
@@ -61,23 +62,45 @@ export async function loadPartnerVenues(
           !Number.isFinite(profile.longitude)) return;
         const distance = distanceBetween(origin, profile);
         if (distance === null) return;
-        const category = /pub/i.test(profile.primaryType) ? 'Pub' : /bar|nightclub/i.test(profile.primaryType)
-          ? 'Bar' : /cafe|coffee|bakery/i.test(profile.primaryType) ? 'Coffee' : 'Restaurant';
+        const category: Venue['category'] = /pub/i.test(profile.primaryType) ? 'Pub'
+          : /bar|nightclub/i.test(profile.primaryType) ? 'Bar'
+            : /cafe|coffee|bakery/i.test(profile.primaryType) ? 'Coffee' : 'Restaurant';
+        const photos = profile.photoNames ?? [];
         venues.push({
-          id: profile.id, name: profile.name, neighborhood: profile.address,
-          category, type: profile.primaryType, distance: `${(distance / 1000).toFixed(1)} km away`,
-          distanceMeters: distance, walkingTime: 'Walking directions',
-          rating: profile.rating?.toFixed(1) || '', ratingCount: profile.ratingCount || 0,
-          price: profile.price || '', description: profile.primaryType, hours: profile.todayHours || 'Hours unavailable',
-          feature: profile.highlights?.[0]?.label || profile.primaryType, fullAddress: profile.address,
-          openNow: profile.openNow === true, website: profile.website || '',
-          mapsUri: profile.googleMapsUrl, phone: profile.phone || '',
-          latitude: profile.latitude!, longitude: profile.longitude!,
-          promoted: true, banging: placement.tier === 'banging', premium: placement.tier === 'banging',
-          photoNames: profile.photoNames, photoName: profile.photoNames?.[0]?.name,
-          photoCount: profile.photoNames?.length, photoAttributions: profile.photoNames?.map(photo => photo.attribution) || [],
+          id: profile.id,
+          name: profile.name,
+          neighborhood: profile.address,
+          category,
+          type: profile.primaryType,
+          distance: `${(distance / 1000).toFixed(1)} km away`,
+          distanceMeters: distance,
+          walkingTime: 'Walking directions',
+          rating: profile.rating?.toFixed(1) || '',
+          ratingCount: profile.ratingCount || 0,
+          price: profile.price || '',
+          description: profile.primaryType,
+          hours: profile.todayHours || 'Hours unavailable',
+          feature: profile.highlights?.[0]?.label || profile.primaryType,
+          fullAddress: profile.address,
+          openNow: profile.openNow === true,
+          website: profile.website || '',
+          mapsUri: profile.googleMapsUrl,
+          phone: profile.phone || '',
+          latitude: profile.latitude!,
+          longitude: profile.longitude!,
+          source: 'google_places',
+          sourceAttribution: 'Google Places',
+          promoted: true,
+          banging: placement.tier === 'banging',
+          premium: placement.tier === 'banging',
+          photoNames: photos,
+          photoName: photos[0]?.name,
+          photoCount: photos.length,
+          photoAttributions: photos.map(photo => photo.attribution),
         });
-      } catch (error) { if (signal.aborted) throw error; }
+      } catch (error) {
+        if (signal.aborted) throw error;
+      }
     }));
   }
   return { tiers, venues };

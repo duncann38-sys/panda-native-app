@@ -9,6 +9,7 @@ import {
   Alert,
   Linking,
   Modal,
+  Keyboard,
   Platform,
   Pressable,
   ScrollView,
@@ -35,6 +36,7 @@ import {
 import {
   cancelPandaTable,
   createPandaTable,
+  deletePandaMessagesForUser,
   ensurePandaMeProfile,
   markPandaThreadRead,
   respondToPandaInvite,
@@ -171,10 +173,13 @@ export default function PandaMeScreen() {
   const [searchingFriends, setSearchingFriends] = useState(false);
   const [savingHome, setSavingHome] = useState(false);
   const [activeThread, setActiveThread] = useState<PandaThread | null>(null);
+  const [messageSelectionMode, setMessageSelectionMode] = useState(false);
+  const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const handledMessageNotification = useRef('');
   const [messages, setMessages] = useState<PandaMessage[]>([]);
   const [messageInput, setMessageInput] = useState('');
   const [sendingMessage, setSendingMessage] = useState(false);
+  const messageScrollRef = useRef<ScrollView>(null);
   const [venueName, setVenueName] = useState('');
   const [selectedVenue, setSelectedVenue] = useState<Venue | null>(null);
   const venueNameRef = useRef('');
@@ -489,6 +494,7 @@ export default function PandaMeScreen() {
     });
   };
   const saveHomeAddress = async () => {
+    Keyboard.dismiss();
     if (!homeInput.trim()) {
       setHomeSaveStatus('Enter a home address before saving.');
       return;
@@ -544,6 +550,7 @@ export default function PandaMeScreen() {
 
   const searchFriends = async () => {
     if (!account || searchInput.trim().length < 2) return;
+    Keyboard.dismiss();
     setSearchingFriends(true);
     try {
       setFriendResults(await searchPandaProfiles(searchInput, account.uid));
@@ -616,6 +623,8 @@ export default function PandaMeScreen() {
       }
     }
     setActiveThread(thread);
+    setSelectedMessageIds([]);
+    setMessageSelectionMode(false);
     setFriendOpen(false);
     setMessagesOpen(true);
   };
@@ -631,6 +640,41 @@ export default function PandaMeScreen() {
     } finally {
       setSendingMessage(false);
     }
+  };
+
+  const toggleMessageSelection = (messageId: string) => {
+    setMessageSelectionMode(true);
+    setSelectedMessageIds(current => current.includes(messageId)
+      ? current.filter(id => id !== messageId)
+      : [...current, messageId]);
+  };
+
+  const deleteSelectedMessages = () => {
+    if (!account || !activeThread || !selectedMessageIds.length) return;
+    const messageIds = [...selectedMessageIds];
+    Alert.alert(
+      'Delete for you?',
+      'These messages will be hidden only from your account. Other people in the conversation will keep them.',
+      [
+        { text: 'Keep messages', style: 'cancel' },
+        {
+          text: `Delete ${messageIds.length === 1 ? 'message' : `${messageIds.length} messages`}`,
+          style: 'destructive',
+          onPress: () => {
+            void deletePandaMessagesForUser(activeThread.id, messageIds, account.uid)
+              .then(() => {
+                setMessages(current => current.filter(message => !messageIds.includes(message.id)));
+                setSelectedMessageIds([]);
+                setMessageSelectionMode(false);
+              })
+              .catch((error: unknown) => Alert.alert(
+                'Could not delete messages',
+                error instanceof Error ? error.message : 'Please try again.',
+              ));
+          },
+        },
+      ],
+    );
   };
 
   const openNewTable = (preset?: (typeof savedVenues)[number]) => {
@@ -685,7 +729,8 @@ export default function PandaMeScreen() {
   };
 
   const submitTable = async () => {
-    const resolvedVenueName = venueNameRef.current.trim() || venueName.trim();
+    const resolvedVenueName = venueName.trim() || venueNameRef.current.trim() || selectedVenue?.name?.trim() || '';
+    Keyboard.dismiss();
     if (!profile) {
       setTableValidationError('Your Panda profile is still connecting. Please try again in a moment.');
       return;
@@ -806,14 +851,49 @@ export default function PandaMeScreen() {
     };
     setMessagesOpen(false);
     router.push({
-      pathname: '/(tabs)/map',
+      pathname: '/venue/[id]',
       params: {
-        directionsVenueId: venue.placeId,
-        directionsVenueData: JSON.stringify(routeVenue),
-        directionsReturn: 'back',
-        returnTo: 'panda-me',
-        routeMode: 'walking',
+        id: venue.placeId,
+        venueData: JSON.stringify(routeVenue),
       },
+    });
+  };
+
+  const openTableVenue = (table: PandaTable) => {
+    const id = table.venuePlaceId || `panda-table-${table.id}`;
+    const address = table.venueAddress || [table.venueName, table.neighborhood].filter(Boolean).join(', ');
+    const venue: Venue = {
+      id,
+      name: table.venueName,
+      neighborhood: table.neighborhood || 'Nearby',
+      category: 'Restaurant',
+      type: 'Restaurant',
+      distance: 'Nearby',
+      walkingTime: '',
+      rating: '',
+      ratingCount: 0,
+      price: '',
+      distanceMeters: 0,
+      description: '',
+      hours: '',
+      feature: '',
+      fullAddress: address,
+      latitude: table.venueLat ?? undefined,
+      longitude: table.venueLng ?? undefined,
+      source: 'google_places',
+      openNow: false,
+      website: '',
+      mapsUri: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}${table.venuePlaceId ? `&query_place_id=${encodeURIComponent(table.venuePlaceId)}` : ''}`,
+      phone: '',
+      premium: false,
+      banging: false,
+      promoted: false,
+      photoAttributions: [],
+      photoUris: table.venuePhoto ? [{ uri: table.venuePhoto, attribution: table.venueName }] : [],
+    };
+    router.push({
+      pathname: '/venue/[id]',
+      params: { id, venueData: JSON.stringify(venue) },
     });
   };
 
@@ -873,13 +953,7 @@ export default function PandaMeScreen() {
 
   return (
     <View style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={[
-          styles.scrollContent,
-          { paddingTop: Math.max(insets.top, 12) + 10, paddingBottom: 132 },
-        ]}
-        showsVerticalScrollIndicator={false}
-      >
+      <View style={[styles.pinnedHeader, { paddingTop: Math.max(insets.top, 12) + 10 }]}>
         <View style={styles.topLine}>
           <Text style={styles.eyebrow}>THE PANDA CLUB</Text>
           <Pressable
@@ -894,19 +968,6 @@ export default function PandaMeScreen() {
             {unread ? <View style={styles.unreadDot} /> : null}
           </Pressable>
         </View>
-        {permissionNotice ? (
-          <View style={styles.permissionNotice}>
-            <Ionicons name="lock-closed-outline" size={16} color={colors.goldDeep} />
-            <Text style={styles.permissionNoticeText}>{permissionNotice}</Text>
-            <Pressable
-              accessibilityLabel="Dismiss Panda Me sync notice"
-              onPress={() => setPermissionNotice('')}
-              style={styles.permissionNoticeClose}
-            >
-              <Ionicons name="close" size={16} color={colors.green800} />
-            </Pressable>
-          </View>
-        ) : null}
         <View style={styles.profileRow}>
           <ProfileAvatar
             size={62}
@@ -928,6 +989,29 @@ export default function PandaMeScreen() {
             <Text style={styles.addFriendText}>Add</Text>
           </Pressable>
         </View>
+      </View>
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: 14, paddingBottom: 132 },
+        ]}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+      >
+        {permissionNotice ? (
+          <View style={styles.permissionNotice}>
+            <Ionicons name="lock-closed-outline" size={16} color={colors.goldDeep} />
+            <Text style={styles.permissionNoticeText}>{permissionNotice}</Text>
+            <Pressable
+              accessibilityLabel="Dismiss Panda Me sync notice"
+              onPress={() => setPermissionNotice('')}
+              style={styles.permissionNoticeClose}
+            >
+              <Ionicons name="close" size={16} color={colors.green800} />
+            </Pressable>
+          </View>
+        ) : null}
         <View style={styles.homeCard}>
           <View style={styles.homeIcon}>
             <Ionicons name="home-outline" size={20} color={colors.goldDeep} />
@@ -1026,9 +1110,14 @@ export default function PandaMeScreen() {
                 [table.venueName, table.neighborhood].filter(Boolean).join(', ');
               return (
                 <View key={table.id} style={styles.planCard}>
-                  <View style={styles.planHeader}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`Open restaurant details for ${table.venueName}`}
+                    onPress={() => openTableVenue(table)}
+                    style={styles.planHeader}
+                  >
                     <View style={styles.planIcon}>
-                      <Ionicons name="calendar-outline" size={19} color={colors.green800} />
+                      <Ionicons name="restaurant-outline" size={19} color={colors.green800} />
                     </View>
                     <View style={styles.planCopy}>
                       <Text style={styles.planVenue}>{table.venueName}</Text>
@@ -1040,7 +1129,8 @@ export default function PandaMeScreen() {
                         {isGuest ? 'Invited by a friend' : 'Hosted by you'}
                       </Text>
                     </View>
-                  </View>
+                    <Ionicons name="arrow-forward" size={16} color={colors.green800} />
+                  </Pressable>
                   <View style={styles.planButtons}>
                     {isGuest && guestStatuses[table.id] === 'invited' ? (
                       <>
@@ -1214,6 +1304,11 @@ export default function PandaMeScreen() {
                       activitySurface="saved"
                       saved
                       onToggleSaved={() => toggleSaved(venue)}
+                      onPlan={() => openNewTable(venue)}
+                      onShare={() => {
+                        setVenueToShare(venue);
+                        setFriendOpen(true);
+                      }}
                       onPress={() => router.push({
                         pathname: '/venue/[id]',
                         params: {
@@ -1225,27 +1320,6 @@ export default function PandaMeScreen() {
                         },
                       })}
                     />
-                    <View style={styles.savedActions}>
-                      <Pressable
-                        accessibilityLabel={`Plan a table at ${venue.name}`}
-                        onPress={() => openNewTable(venue)}
-                        style={styles.savedPlanButton}
-                      >
-                        <Ionicons name="calendar-outline" size={13} color={colors.green950} />
-                        <Text style={styles.savedPlanText}>Plan</Text>
-                      </Pressable>
-                      <Pressable
-                        accessibilityLabel={`Share ${venue.name} with friends`}
-                        onPress={() => {
-                          setVenueToShare(venue);
-                          setFriendOpen(true);
-                        }}
-                        style={styles.shareButton}
-                      >
-                        <Ionicons name="paper-plane-outline" size={13} color={colors.green900} />
-                        <Text style={styles.shareText}>Share</Text>
-                      </Pressable>
-                    </View>
                   </View>
                 ))}
               {failedSavedIds.length ? (
@@ -1329,7 +1403,7 @@ export default function PandaMeScreen() {
       >
         <View style={styles.modalScrim}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.sheetWrap}
           >
             <View style={styles.sheet}>
@@ -1348,6 +1422,11 @@ export default function PandaMeScreen() {
                 style={styles.input}
                 autoCapitalize="words"
                 returnKeyType="done"
+                blurOnSubmit
+                onSubmitEditing={() => {
+                  Keyboard.dismiss();
+                  void saveHomeAddress();
+                }}
               />
               <Pressable
                 disabled={savingHome}
@@ -1376,7 +1455,7 @@ export default function PandaMeScreen() {
       >
         <View style={styles.modalScrim}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.sheetWrap}
           >
             <View style={[styles.sheet, styles.tallSheet]}>
@@ -1406,7 +1485,12 @@ export default function PandaMeScreen() {
                   placeholderTextColor={colors.mutedForeground}
                   style={[styles.input, styles.searchInput]}
                   autoCapitalize="none"
-                  onSubmitEditing={searchFriends}
+                  returnKeyType="search"
+                  blurOnSubmit
+                  onSubmitEditing={() => {
+                    Keyboard.dismiss();
+                    void searchFriends();
+                  }}
                 />
                 <Pressable onPress={searchFriends} style={styles.searchButton}>
                   {searchingFriends ? (
@@ -1468,7 +1552,7 @@ export default function PandaMeScreen() {
       >
         <View style={styles.modalScrim}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.sheetWrap}
           >
             <View style={[styles.sheet, styles.tallSheet]}>
@@ -1488,7 +1572,11 @@ export default function PandaMeScreen() {
                   <Ionicons name="close" size={20} color={colors.green900} />
                 </Pressable>
               </View>
-              <ScrollView style={styles.formScroll} keyboardShouldPersistTaps="handled">
+              <ScrollView
+                style={styles.formScroll}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              >
                 <Text style={styles.inputLabel}>VENUE</Text>
                 <TextInput
                   ref={venueInputRef}
@@ -1505,6 +1593,11 @@ export default function PandaMeScreen() {
                   style={styles.input}
                   accessibilityLabel="Venue name"
                   returnKeyType="done"
+                  blurOnSubmit
+                  onSubmitEditing={() => {
+                    Keyboard.dismiss();
+                    venueInputRef.current?.blur();
+                  }}
                 />
                 <Text style={styles.inputLabel}>AREA</Text>
                 <TextInput
@@ -1688,11 +1781,13 @@ export default function PandaMeScreen() {
         onRequestClose={() => {
           setMessagesOpen(false);
           setActiveThread(null);
+          setSelectedMessageIds([]);
+          setMessageSelectionMode(false);
         }}
       >
         <View style={styles.modalScrim}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
             style={styles.sheetWrap}
           >
             <View style={[styles.sheet, styles.messageSheet]}>
@@ -1710,30 +1805,88 @@ export default function PandaMeScreen() {
                       : 'Your conversations'}
                   </Text>
                 </View>
-                <Pressable
-                  onPress={() => {
-                    setMessagesOpen(false);
-                    setActiveThread(null);
-                  }}
-                  style={styles.closeButton}
-                >
-                  <Ionicons name="close" size={20} color={colors.green900} />
-                </Pressable>
+                <View style={styles.messageHeaderActions}>
+                  {activeThread ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={messageSelectionMode ? 'Cancel message selection' : 'Select messages'}
+                      onPress={() => {
+                        setMessageSelectionMode(current => !current);
+                        setSelectedMessageIds([]);
+                      }}
+                      style={styles.messageSelectButton}
+                    >
+                      <Text style={styles.messageSelectText}>{messageSelectionMode ? 'Cancel' : 'Select'}</Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to Panda Me"
+                    onPress={() => {
+                      setMessagesOpen(false);
+                      setActiveThread(null);
+                      setSelectedMessageIds([]);
+                      setMessageSelectionMode(false);
+                    }}
+                    style={styles.closeButton}
+                  >
+                    <Ionicons name="close" size={20} color={colors.green900} />
+                  </Pressable>
+                </View>
               </View>
               {activeThread ? (
                 <>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Back to conversations"
+                    onPress={() => {
+                      setActiveThread(null);
+                      setSelectedMessageIds([]);
+                      setMessageSelectionMode(false);
+                    }}
+                    style={styles.backToConversations}
+                  >
+                    <Ionicons name="arrow-back" size={14} color={colors.green800} />
+                    <Text style={styles.backToConversationsText}>Back to conversations</Text>
+                  </Pressable>
+                  {messageSelectionMode ? (
+                    <View style={styles.selectionToolbar}>
+                      <Text style={styles.selectionCount}>{selectedMessageIds.length} selected</Text>
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityState={{ disabled: selectedMessageIds.length === 0 }}
+                        disabled={selectedMessageIds.length === 0}
+                        onPress={deleteSelectedMessages}
+                        style={[styles.deleteMessagesButton, selectedMessageIds.length === 0 && styles.disabled]}
+                      >
+                        <Ionicons name="trash-outline" size={14} color={colors.ivory} />
+                        <Text style={styles.deleteMessagesText}>Delete for me</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                   <ScrollView
+                    ref={messageScrollRef}
                     style={styles.messageList}
                     contentContainerStyle={styles.messageListContent}
+                    keyboardShouldPersistTaps="handled"
+                    keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                    onContentSizeChange={() => messageScrollRef.current?.scrollToEnd({ animated: true })}
                   >
-                    {messages.map((message) => (
-                      <View
+                    {messages.filter(message => !message.deletedForUids?.includes(account?.uid || '')).map((message) => (
+                      <Pressable
                         key={message.id}
+                        onPress={() => {
+                          if (messageSelectionMode) toggleMessageSelection(message.id);
+                        }}
+                        onLongPress={() => toggleMessageSelection(message.id)}
+                        delayLongPress={350}
                         style={[
                           styles.messageBubble,
                           message.senderUid === account?.uid
                             ? styles.messageOwn
                             : styles.messageOther,
+                          message.type === 'venue' && styles.messageBubbleWide,
+                          selectedMessageIds.includes(message.id) && styles.messageSelected,
                         ]}
                       >
                         <Text
@@ -1750,7 +1903,7 @@ export default function PandaMeScreen() {
                                 : '')}
                         </Text>
                         {message.type === 'venue' && message.venue ? (
-                          <View style={styles.sharedVenueCard}>
+                          <View pointerEvents={messageSelectionMode ? 'none' : 'auto'} style={styles.sharedVenueCard}>
                             {message.venue.photoUri ? (
                               <Image
                                 source={{ uri: message.venue.photoUri }}
@@ -1781,16 +1934,18 @@ export default function PandaMeScreen() {
                           </View>
                         ) : null}
                         {message.type === 'table_invite' ? (
-                          <Pressable
-                            onPress={() => {
-                              setMessagesOpen(false);
-                              router.push('/(tabs)/panda-me');
-                            }}
-                          >
-                            <Text style={styles.messageLink}>See plan in Panda Me</Text>
-                          </Pressable>
+                          <View pointerEvents={messageSelectionMode ? 'none' : 'auto'}>
+                            <Pressable
+                              onPress={() => {
+                                setMessagesOpen(false);
+                                router.push('/(tabs)/panda-me');
+                              }}
+                            >
+                              <Text style={styles.messageLink}>See plan in Panda Me</Text>
+                            </Pressable>
+                          </View>
                         ) : null}
-                      </View>
+                      </Pressable>
                     ))}
                   </ScrollView>
                   <View style={styles.composeRow}>
@@ -1801,7 +1956,12 @@ export default function PandaMeScreen() {
                       maxLength={4000}
                       placeholderTextColor={colors.mutedForeground}
                       style={[styles.input, styles.composeInput]}
-                      onSubmitEditing={submitMessage}
+                      returnKeyType="send"
+                      blurOnSubmit
+                      onSubmitEditing={() => {
+                        Keyboard.dismiss();
+                        void submitMessage();
+                      }}
                     />
                     <Pressable
                       onPress={submitMessage}
@@ -1817,7 +1977,11 @@ export default function PandaMeScreen() {
                   </View>
                 </>
               ) : (
-                <ScrollView style={styles.messageList}>
+                <ScrollView
+                  style={styles.messageList}
+                  keyboardShouldPersistTaps="handled"
+                  keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+                >
                   {threads.length ? (
                     threads.map((thread) => {
                       const other = thread.participantProfiles?.find(
@@ -1826,7 +1990,11 @@ export default function PandaMeScreen() {
                       return (
                         <Pressable
                           key={thread.id}
-                          onPress={() => setActiveThread(thread)}
+                          onPress={() => {
+                            setActiveThread(thread);
+                            setSelectedMessageIds([]);
+                            setMessageSelectionMode(false);
+                          }}
                           style={styles.threadRow}
                         >
                           <ProfileAvatar
@@ -1868,6 +2036,15 @@ export default function PandaMeScreen() {
 function createStyles(c: ReturnType<typeof useColors>) {
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: c.background },
+    pinnedHeader: {
+      flexShrink: 0,
+      gap: 13,
+      paddingHorizontal: 18,
+      paddingBottom: 12,
+      borderBottomColor: c.border,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      backgroundColor: c.background,
+    },
     scrollContent: { paddingHorizontal: 18, gap: 20 },
     topLine: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
     eyebrow: {
@@ -2399,7 +2576,7 @@ function createStyles(c: ReturnType<typeof useColors>) {
       paddingTop: 10,
     },
     tallSheet: { height: '86%' },
-    messageSheet: { height: '78%' },
+    messageSheet: { height: '92%' },
     sheetHandle: {
       alignSelf: 'center',
       backgroundColor: c.border,
@@ -2545,6 +2722,39 @@ function createStyles(c: ReturnType<typeof useColors>) {
     guestChipTextSelected: { color: c.ivory },
     messageList: { flex: 1, marginTop: 12 },
     messageListContent: { gap: 9, paddingVertical: 8 },
+    messageHeaderActions: { alignItems: 'center', flexDirection: 'row', gap: 7 },
+    messageSelectButton: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderRadius: 11,
+      justifyContent: 'center',
+      minHeight: 34,
+      paddingHorizontal: 10,
+    },
+    messageSelectText: { color: c.green800, fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+    backToConversations: { alignItems: 'center', alignSelf: 'flex-start', flexDirection: 'row', gap: 5, marginTop: 8, paddingVertical: 4 },
+    backToConversationsText: { color: c.green800, fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+    selectionToolbar: {
+      alignItems: 'center',
+      backgroundColor: c.secondary,
+      borderRadius: 12,
+      flexDirection: 'row',
+      justifyContent: 'space-between',
+      marginTop: 8,
+      paddingHorizontal: 11,
+      paddingVertical: 7,
+    },
+    selectionCount: { color: c.green900, fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+    deleteMessagesButton: {
+      alignItems: 'center',
+      backgroundColor: c.destructive,
+      borderRadius: 9,
+      flexDirection: 'row',
+      gap: 5,
+      paddingHorizontal: 10,
+      paddingVertical: 7,
+    },
+    deleteMessagesText: { color: c.ivory, fontFamily: 'Inter_600SemiBold', fontSize: 10 },
     threadRow: {
       alignItems: 'center',
       borderBottomColor: c.border,
@@ -2560,6 +2770,8 @@ function createStyles(c: ReturnType<typeof useColors>) {
       maxWidth: '84%',
       padding: 11,
     },
+    messageBubbleWide: { maxWidth: '100%', width: '100%' },
+    messageSelected: { borderColor: c.gold, borderWidth: 2 },
     messageOwn: { alignSelf: 'flex-end', backgroundColor: c.green800 },
     messageOther: { borderColor: c.border, borderWidth: 1 },
     messageText: {

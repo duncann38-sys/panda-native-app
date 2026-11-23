@@ -28,7 +28,7 @@ import { BangingDrawer } from '@/components/BangingDrawer';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
 import { FilterDropdown } from '@/components/FilterDropdown';
-import { PandaPlannerSheet, type PlannerMode } from '@/components/PandaPlannerSheet';
+import { PandaPlannerSheet, type PlannerMode, venueFromSearchResult } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
 import { SuggestionRow } from '@/components/SuggestionRow';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
@@ -46,9 +46,14 @@ import {
   hasMoreLiveSearch,
   liveDiscoverySearchQuery,
   liveSearchRequest,
+  LIVE_DISCOVERY_EXPANSION_RINGS_KM,
   type LiveSearchCursor,
 } from '@/utils/live-discovery-search';
 import { recordVenueActivity, withVenueActivityContext } from '@/utils/record-venue-activity';
+import { loadPartnerVenues } from '@/utils/partner-venues';
+import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
+import { bangingClock, isOrganicBangingVenue, rotateBanging } from '@/utils/banging-rotation';
+import { getBangingAreaResults } from '@/utils/banging-area-search';
 
 type TopCategory = 'All' | DiscoveryCategory;
 
@@ -78,7 +83,6 @@ const categories: Array<{
   { label: 'Burgers', emoji: '🍔', terms: ['burger'] },
   { label: 'Coffee', emoji: '☕', terms: ['coffee', 'cafe', 'café'] },
   { label: 'Breakfast', emoji: '🍳', terms: ['breakfast'] },
-  { label: 'Brunch', emoji: '🍳', terms: ['brunch'] },
   { label: 'Lunch', emoji: '🥗', terms: ['lunch'] },
   { label: 'Bottomless', emoji: '🍾', terms: ['bottomless'] },
   { label: 'Dinner', emoji: '🍽️', terms: ['dinner', 'restaurant'] },
@@ -89,6 +93,8 @@ const categories: Array<{
   { label: 'Shops', emoji: '🛍️', terms: [] },
   { label: 'Places of Interest', emoji: '🏛️', terms: [] },
 ];
+
+const MAX_LOCAL_PARTNER_DISTANCE_METERS = Math.max(...LIVE_DISCOVERY_EXPANSION_RINGS_KM) * 1000;
 
 type LiveVenueResult = {
   id: string;
@@ -524,6 +530,18 @@ export default function DiscoverScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
+  const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
+  const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
+  const [bangingStatus, setBangingStatus] = useState('Finding luxury venues…');
+  const [bangingRefreshTick, setBangingRefreshTick] = useState(0);
+  const bangingOrigin = useRef('');
+  const [bangingPremiumJourneys, setBangingPremiumJourneys] = useState<Record<string, {
+    bangingTransitMinutes: number; bangingVerifiedAt: number;
+  }>>({});
+  const [rotationWindow, setRotationWindow] = useState(() => {
+    const clock = bangingClock();
+    return `${clock.day}:${clock.slot}`;
+  });
   const [liveDiscoveryFailure, setLiveDiscoveryFailure] = useState<LiveDiscoveryFailureCode | null>(null);
   const [cachedNearbyAt, setCachedNearbyAt] = useState<number | null>(null);
   const [categoryLoading, setCategoryLoading] = useState<DiscoveryCategory | null>(null);
@@ -962,6 +980,81 @@ export default function DiscoverScreen() {
     }
   }, [cachedNearbyAt, locationStatus, setLiveArea, setLiveVenues]);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      const clock = bangingClock();
+      setRotationWindow(`${clock.day}:${clock.slot}`);
+      setBangingRefreshTick(value => value + 1);
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!coordinates) return;
+    const controller = new AbortController();
+    void loadPartnerVenues(coordinates, controller.signal)
+      .then(setPartners)
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          console.warn('[Panda discovery] Partner placements unavailable:', error);
+        }
+      });
+    return () => controller.abort();
+  }, [coordinates?.latitude, coordinates?.longitude, rotationWindow]);
+
+  useEffect(() => {
+    if (!coordinates) {
+      setBangingStatus('Turn on location to find nearby Banging spots.');
+      return;
+    }
+    let active = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+    const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
+    if (bangingOrigin.current !== originKey) {
+      bangingOrigin.current = originKey;
+      setBangingSupplement([]);
+      setBangingPremiumJourneys({});
+      setBangingStatus('Finding luxury venues…');
+    }
+    const premiumIds = partners.venues
+      .filter(venue => venue.banging && venue.premium)
+      .map(venue => venue.id);
+    void getBangingAreaResults(coordinates, premiumIds).then(body => {
+      if (!active) return;
+      setBangingPremiumJourneys(body.premiumJourneys);
+      const additional = body.results.flatMap(result => {
+        const venue = venueFromSearchResult(result, 'Nearby');
+        const meters = distanceBetween(coordinates, venue);
+        if (meters === null) return [];
+        return [{
+          ...venue,
+          neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
+          luxurySource: result.luxurySource,
+          bangingTransitMinutes: result.bangingTransitMinutes,
+          bangingVerifiedAt: result.bangingVerifiedAt,
+          distanceMeters: meters,
+          distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
+          walkingTime: `${result.bangingTransitMinutes} min by public transport`,
+          promoted: false,
+          premium: false,
+          banging: true,
+        }];
+      }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
+        && Number.isFinite(venue.distanceMeters) && Boolean(venue.photoNames?.length));
+      setBangingSupplement(additional);
+      setBangingStatus(body.complete ? '' : 'Limited verified luxury choices in this area');
+    }).catch((error: unknown) => {
+      if (!active) return;
+      console.warn('[Panda Banging] Wider lookup unavailable:', error);
+      setBangingStatus('Luxury selection temporarily unavailable · retrying shortly');
+      retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
+    });
+    return () => {
+      active = false;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
+  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, partners.tiers, rotationWindow, bangingRefreshTick]);
+
   const orderedCategories = useMemo(() => {
     return orderDiscoveryCategories(categories, categoryDayPart);
   }, [categoryDayPart]);
@@ -969,9 +1062,21 @@ export default function DiscoverScreen() {
   const hasDeferredListings = liveVenues.some(venue => venue.detailsDeferred === true);
   const filteredVenues = useMemo(() => {
     const pageIds = feedVenueIds.current.get(category);
-    const categoryPageVenues = pageIds
+    const livePageVenues = pageIds
       ? liveVenues.filter((venue) => pageIds.has(venue.id))
       : liveVenues;
+    const partnerPageVenues = partners.venues.filter(venue => {
+      if (!Number.isFinite(venue.distanceMeters)
+        || Number(venue.distanceMeters) > MAX_LOCAL_PARTNER_DISTANCE_METERS) return false;
+      if (category === 'All') return !['Shop', 'Place of Interest'].includes(venue.category);
+      const classification = classifyGooglePlace({
+        name: venue.name,
+        type: venue.type,
+        primaryType: venue.type,
+      });
+      return classification.categories.includes(category);
+    });
+    const categoryPageVenues = mergeIndexedVenuePages(livePageVenues, partnerPageVenues);
     const result = categoryPageVenues.filter((venue) => {
       const matchesCategory =
         category === 'All'
@@ -980,12 +1085,25 @@ export default function DiscoverScreen() {
       const matchesPrice = hasDeferredListings || priceFilter === 'Any price' || poundPrice(venue.price) === priceFilter;
       return matchesCategory && matchesPrice;
     });
-    return result.sort((a, b) =>
+    return interleavePromotions(result.sort((a, b) =>
       hasDeferredListings || sortBy === 'Nearest'
         ? Number(a.distanceMeters) - Number(b.distanceMeters)
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
-    );
-  }, [category, liveVenues, priceFilter, sortBy, hasDeferredListings]);
+    ));
+  }, [category, liveVenues, partners.venues, priceFilter, sortBy, hasDeferredListings]);
+
+  const bangingVenues = useMemo(() => rotateBanging([
+    ...partners.venues.filter(venue => venue.banging).map(venue => ({
+      ...venue,
+      ...bangingPremiumJourneys[venue.id],
+    })),
+    ...bangingSupplement.filter(venue => !partners.tiers[venue.id]).map(venue => ({
+      ...venue,
+      promoted: false,
+      premium: false,
+      banging: true,
+    })),
+  ]), [partners, bangingSupplement, bangingPremiumJourneys, rotationWindow, bangingRefreshTick]);
   useVenueResultAppearances(filteredVenues, 'discovery', !bangingIsOpen,
     `${discoveryGeneration.current}:${category}:${priceFilter}:${sortBy}`);
 
@@ -1341,10 +1459,18 @@ export default function DiscoverScreen() {
       />
       <BangingDrawer
         onOpenChange={setBangingIsOpen}
-        venues={venues}
+        venues={bangingVenues}
+        status={bangingStatus}
         isSaved={isSaved}
         onToggleSaved={toggleSaved}
-        onPress={(venue) => router.push(`/venue/${venue.id}`)}
+        onPress={(venue) => router.push({
+          pathname: '/venue/[id]',
+          params: {
+            id: venue.id,
+            venueData: JSON.stringify(withVenueActivityContext(venue, 'banging')),
+            plannerLocation: liveArea,
+          },
+        })}
       />
       <PandaPlannerSheet
         initialLocation={plannerLocation}

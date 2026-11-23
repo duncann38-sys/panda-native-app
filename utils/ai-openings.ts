@@ -31,26 +31,19 @@ export function hasDatedOpeningEvidence(venue: {
   if (!venue.id || !/^ChI[\w-]+$/.test(venue.id) || !venue.openingSourceName?.trim()) return false;
   const reportedAt = Date.parse(venue.openingReportedAt ?? '');
   if (!Number.isFinite(reportedAt) || reportedAt > now) return false;
-  // OpenTable's editorial New designation is not a claim that a venue opened
-  // this calendar month. Keep the older dated-evidence contract for other sources.
-  if (venue.openingDesignation === 'opentable-new') {
-    if (venue.openingSourceName !== 'OpenTable' || now - reportedAt > 30 * 86_400_000) return false;
-    try {
-      const url = new URL(venue.openingSourceUrl ?? '');
-      return url.protocol === 'https:' && !url.username && !url.password
-        && ['www.opentable.co.uk', 'www.opentable.com', 'opentable.co.uk', 'opentable.com'].includes(url.hostname)
-        && /^\/lists\/[^/]+$/.test(url.pathname) && !url.search && !url.hash;
-    } catch { return false; }
-  }
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
   }).formatToParts(new Date(now));
   const value = (type: string) => parts.find((part) => part.type === type)?.value;
   const today = `${value('year')}-${value('month')}-${value('day')}`;
+  const earliest = new Date(`${today}T00:00:00.000Z`);
+  earliest.setUTCDate(1);
+  earliest.setUTCMonth(earliest.getUTCMonth() - 3);
+  const earliestDate = earliest.toISOString().slice(0, 10);
   const opened = venue.openingDate ?? '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(opened) || !Number.isFinite(Date.parse(opened))
     || new Date(opened).toISOString().slice(0, 10) !== opened
-    || opened.slice(0, 7) !== today.slice(0, 7) || opened > today) return false;
+    || opened < earliestDate || opened > today) return false;
   try {
     const url = new URL(venue.openingSourceUrl ?? '');
     return url.protocol === 'https:' && Boolean(url.hostname) && !url.username && !url.password;

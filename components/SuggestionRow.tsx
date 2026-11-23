@@ -1,4 +1,5 @@
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import Animated, { ReduceMotion, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { VenuePhoto } from '@/components/VenuePhoto';
@@ -16,12 +17,16 @@ export function SuggestionRow({
   onPress,
   onToggleSaved,
   activitySurface = 'discovery',
+  onPlan,
+  onShare,
 }: {
   venue: Venue;
   saved: boolean;
   onPress: () => void;
   onToggleSaved: () => void;
   activitySurface?: 'discovery' | 'saved';
+  onPlan?: () => void;
+  onShare?: () => void;
 }) {
   const colors = useColors();
   const { cardColors, fonts } = useVenueCardDesign();
@@ -75,9 +80,25 @@ export function SuggestionRow({
               <Text style={[styles.promotedLabelText, { color: cardColors.goldInk, fontFamily: fonts.bold }]}>PANDA PREMIUM</Text>
             </View>
           )}
-          <Text numberOfLines={2} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.display }]}>{venue.name}</Text>
+          <Text numberOfLines={2} style={[styles.name, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
           {cardMeta ? <Text numberOfLines={1} style={[styles.meta, { color: cardColors.muted, fontFamily: fonts.medium }]}>{cardMeta}</Text> : null}
           <ReserveButton venue={venue} activitySurface={activitySurface} compact style={styles.reserve} />
+          {onPlan || onShare ? (
+            <View style={styles.cardActions}>
+              {onPlan ? (
+                <Pressable accessibilityRole="button" accessibilityLabel={`Plan a table at ${venue.name}`} onPress={onPlan} style={[styles.cardAction, { backgroundColor: cardColors.goldSoft }]}>
+                  <Ionicons name="calendar-outline" size={13} color={cardColors.goldInk} />
+                  <Text style={[styles.cardActionText, { color: cardColors.goldInk, fontFamily: fonts.bold }]}>Plan</Text>
+                </Pressable>
+              ) : null}
+              {onShare ? (
+                <Pressable accessibilityRole="button" accessibilityLabel={`Share ${venue.name} with friends`} onPress={onShare} style={[styles.cardAction, { backgroundColor: cardColors.soft }]}>
+                  <Ionicons name="paper-plane-outline" size={13} color={cardColors.ink} />
+                  <Text style={[styles.cardActionText, { color: cardColors.ink, fontFamily: fonts.bold }]}>Share</Text>
+                </Pressable>
+              ) : null}
+            </View>
+          ) : null}
         </View>
       </Pressable>
       <View style={styles.rail}>
@@ -144,6 +165,9 @@ const styles = StyleSheet.create({
   promotedLabelText: { fontSize: 7, letterSpacing: 0.65 },
   meta: { fontSize: 10, marginTop: 5 },
   reserve: { alignSelf: 'flex-start', marginTop: 7 },
+  cardActions: { flexDirection: 'row', gap: 7, marginTop: 6 },
+  cardAction: { alignItems: 'center', borderRadius: 9, flexDirection: 'row', gap: 4, justifyContent: 'center', minHeight: 28, minWidth: 64, paddingHorizontal: 9 },
+  cardActionText: { fontSize: 9 },
   rail: { alignItems: 'center', justifyContent: 'space-between', alignSelf: 'stretch', minWidth: 44 },
   rating: { flexDirection: 'row', alignItems: 'center', gap: 3, paddingTop: 2 },
   ratingText: { fontSize: 10 },

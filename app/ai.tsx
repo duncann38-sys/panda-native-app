@@ -29,7 +29,7 @@ import { PANDA_PRODUCTION_API, PANDA_RUNTIME_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
 import { useAuth } from '@/context/auth';
 import { conciergeGreeting, shownConciergeVenueIds } from '@/utils/concierge-session';
-import { buildPandaPersonalInstruction, isGeneralLifeConversation, isPubOnlyConciergeRequest, presentConciergeReplyText, wantsOpenVenues, openVenueSelection, NO_OPEN_VENUES_REPLY } from '@/utils/concierge-conversation';
+import { buildPandaPersonalInstruction, isGeneralLifeConversation, isPubOnlyConciergeRequest, localDateReply, presentConciergeReplyText, wantsOpenVenues, openVenueSelection, NO_OPEN_VENUES_REPLY } from '@/utils/concierge-conversation';
 import { isVerifiedTransitStation } from '@/utils/verified-transit-station';
 import { conciergeChatPolish } from '@/utils/concierge-chat-polish';
 import { useSandboxReservations } from '@/hooks/useSandboxReservations';
@@ -92,6 +92,7 @@ type AiVenue = {
   openingSourceUrl?: string;
   openingReportedAt?: string;
   openingDate?: string;
+  openingEvidence?: string;
 };
 
 type GoogleAiVenueProfile = {
@@ -640,6 +641,17 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
     const trimmed = text.trim();
     if (!trimmed || primaryPendingRef.current) return;
     if (booking.isBusy) return;
+    const todayReply = localDateReply(trimmed);
+    if (todayReply) {
+      setDraft('');
+      inputRef.current?.blur();
+      setMessages((current) => [
+        ...current,
+        { role: 'user', text: trimmed },
+        { role: 'model', text: todayReply },
+      ]);
+      return;
+    }
     if (isUberHomeRequest(trimmed)) {
       await sendUberHome(trimmed);
       return;
@@ -894,7 +906,6 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
       const eligibleVenues = (data.venues ?? []).filter((venue) =>
         Boolean(venue.id && venue.name)
         && (!pubOnly || classifyGooglePlace({ name: venue.name || '', type: venue.type || '' }).primary === 'Pub')
-        && (!openingSearch || (Boolean(venue.photoName) && Number(venue.photoCount) >= 1))
         && (!isNearbyShortcut(trimmed) || (Number.isFinite(venue.distanceMeters)
           && Number(venue.distanceMeters) >= 0 && Number(venue.distanceMeters) <= 5000))
         && (!openingSearch || (data.newOpeningsSearch === true && hasDatedOpeningEvidence(venue))),
@@ -920,7 +931,7 @@ export function PandaAiScreen({ embedded = false }: { embedded?: boolean }) {
         : openingSearch && !initialVenues.length
         ? data.newOpeningsSearch === true && data.text?.trim()
           ? data.text.trim()
-          : 'OpenTable’s verified New selection isn’t connected for this search yet. I won’t substitute ordinary restaurant results.'
+          : 'Panda’s source-linked opening feed isn’t ready for this search yet. I won’t substitute ordinary restaurant results.'
         : data.text?.trim() || 'I’m not sure I caught that. Try asking for a place, mood, or time of day.';
       if (referencedVenue) {
         activeAiVenueRef.current = referencedVenue;

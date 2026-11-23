@@ -29,8 +29,10 @@ export function BangingDrawer({
   onToggleSaved,
   onPress,
   onOpenChange,
+  status,
 }: {
   venues: Venue[];
+  status?: string;
   isSaved: (id: string) => boolean;
   onToggleSaved: (venue: Venue) => void;
   onPress: (venue: Venue) => void;
@@ -69,17 +71,8 @@ export function BangingDrawer({
     });
   };
   const [activeIndex, setActiveIndex] = useState(0);
-  const normalVenues = venues.filter((venue) => venue.banging && !venue.premium);
-  const premiumVenues = venues.filter((venue) => venue.banging && venue.premium);
-  const bangingVenues = normalVenues.reduce<Venue[]>((ordered, venue, index) => {
-    ordered.push(venue);
-    const nextPosition = index + 1;
-    if (nextPosition % 4 === 0 && premiumVenues[nextPosition / 4 - 1]) {
-      ordered.push(premiumVenues[nextPosition / 4 - 1]);
-    }
-    return ordered;
-  }, []);
-  premiumVenues.slice(Math.ceil(normalVenues.length / 4)).forEach((venue) => bangingVenues.push(venue));
+  // Selection and paid-card spacing are owned by discovery, as in the working APK 90 feed.
+  const bangingVenues = venues.filter((venue) => venue.banging);
   useVenueResultAppearances(bangingVenues, 'banging', open, 'banging');
   const cardWidth = Math.min(194, Math.max(174, width - 156));
   const cardGap = 10;
@@ -183,14 +176,14 @@ export function BangingDrawer({
               <View style={[styles.liveDot, { backgroundColor: colors.gold }]} />
             </View>
             <Text style={[styles.spotCount, !open && styles.closedSpotCount, { color: colors.goldDeep }]}>
-              {bangingVenues.length} curated spots
+              {bangingVenues.length ? `${bangingVenues.length} curated spots` : status || 'No verified spots yet'}
             </Text>
           </View>
           <Feather name={open ? 'chevron-down' : 'chevron-up'} size={open ? 22 : 18} color={colors.goldDeep} />
         </View>
       </Pressable>
       <View style={[styles.carouselViewport, { height: geometry.carouselHeight }]}>
-        <FlatList
+        {bangingVenues.length ? <FlatList
           viewabilityConfigCallbackPairs={bangingViewabilityPairs}
           data={bangingVenues}
           horizontal
@@ -215,11 +208,18 @@ export function BangingDrawer({
                 onToggleSaved={() => onToggleSaved(venue)}
                 onPress={() => onPress(withVenueActivityContext(venue, 'banging'))}
                 compact
+                presentation="banging"
                 featured={index === activeIndex}
               />
             </View>
           )}
-        />
+        /> : (
+          <View style={styles.emptyState}>
+            <Text style={[styles.emptyStateText, { color: colors.mutedForeground }]}>
+              {status || 'Verified Banging picks will appear here when available.'}
+            </Text>
+          </View>
+        )}
         <LinearGradient
           colors={[drawerSurface, 'transparent']}
           pointerEvents="none"
@@ -335,5 +335,17 @@ const styles = StyleSheet.create({
   },
   cardSlot: {
     paddingVertical: 2,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 86,
+    paddingHorizontal: 24,
+  },
+  emptyStateText: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 11,
+    lineHeight: 16,
+    textAlign: 'center',
   },
 });

@@ -1,6 +1,7 @@
 import { getApps } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
 import {
+  arrayUnion,
   arrayRemove,
   deleteDoc,
   collection,
@@ -121,6 +122,7 @@ export type PandaMessage = {
   text?: string;
   venue?: PandaSharedVenue;
   bookingId?: string;
+  deletedForUids?: string[];
   createdAt?: unknown;
 };
 export type PandaPromotion = {
@@ -690,6 +692,20 @@ export function subscribePandaMessages(
       callback(snapshot.docs.map((item) => ({ id: item.id, ...item.data() }) as PandaMessage)),
     onError,
   );
+}
+
+/** Hide selected messages from this account only; other participants keep their copies. */
+export async function deletePandaMessagesForUser(threadId: string, messageIds: string[], uid: string) {
+  const ids = [...new Set(messageIds.filter(id => typeof id === 'string' && id.length > 0))].slice(0, 450);
+  if (!ids.length || !uid || !threadId) return;
+  const db = getPandaMeDb();
+  const batch = writeBatch(db);
+  ids.forEach(messageId => {
+    batch.update(doc(db, 'threads', threadId, 'messages', messageId), {
+      deletedForUids: arrayUnion(uid),
+    });
+  });
+  await batch.commit();
 }
 
 export async function sendPandaMessage(

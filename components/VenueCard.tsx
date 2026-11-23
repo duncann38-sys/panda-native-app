@@ -16,6 +16,7 @@ type VenueCardProps = {
   compact?: boolean;
   featured?: boolean;
   activitySurface?: 'banging';
+  presentation?: 'banging';
 };
 
 export function VenueCard({
@@ -26,11 +27,17 @@ export function VenueCard({
   compact = false,
   featured = false,
   activitySurface,
+  presentation,
 }: VenueCardProps) {
   const colors = useColors();
+  const editorial = presentation === 'banging';
   if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={activitySurface} />;
   const premiumCard = venue.premium;
   const premiumFeatured = featured && venue.premium;
+  const tierLabel = venue.premium
+    ? (editorial ? (venue.banging ? 'Premium' : 'Promoted') : 'PANDA PREMIUM')
+    : null;
+  const premiumBanging = editorial && !!venue.premium;
 
   return (
     <Pressable
@@ -39,10 +46,12 @@ export function VenueCard({
       style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: premiumCard ? colors.green800 : colors.card,
-          borderColor: premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
+          backgroundColor: premiumBanging ? colors.green900 : premiumCard ? colors.green800 : colors.card,
+          borderColor: editorial ? premiumBanging ? colors.goldLine : colors.border : premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
         },
         pressed && styles.pressed,
+        editorial && styles.editorialCard,
+        premiumBanging && styles.premiumBangingCard,
         premiumFeatured && styles.featuredCard,
         compact && styles.compactCard,
       ]}
@@ -54,10 +63,10 @@ export function VenueCard({
           venueName={venue.name}
           height={compact ? 100 : premiumFeatured ? 148 : 136}
         />
-        {venue.premium ? (
+        {tierLabel ? (
           <View style={[styles.premiumBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
             <Text style={[styles.premiumStar, { color: colors.goldDeep }]}>✦</Text>
-            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
+            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>{tierLabel}</Text>
           </View>
         ) : null}
         <View style={styles.topRow}>
@@ -99,6 +108,7 @@ export function VenueCard({
           compact && styles.compactBody,
           premiumFeatured && styles.featuredBody,
           compact && premiumFeatured && styles.compactFeaturedBody,
+          editorial && styles.editorialBody,
         ]}
       >
         <Text
@@ -107,7 +117,8 @@ export function VenueCard({
           style={[
             styles.name,
             compact && styles.compactName,
-            { color: premiumCard ? colors.primaryForeground : colors.foreground },
+            editorial && styles.editorialName,
+            { color: premiumBanging || (!editorial && premiumCard) ? colors.primaryForeground : colors.foreground },
           ]}
         >
           {venue.name}
@@ -190,6 +201,18 @@ const styles = StyleSheet.create({
     elevation: 8,
     shadowOpacity: 0.24,
   },
+  editorialCard: {
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    elevation: 2,
+  },
+  premiumBangingCard: {
+    borderWidth: 1.5,
+    elevation: 3,
+    shadowColor: '#033B2B',
+    shadowOpacity: 0.18,
+  },
   compactCard: {
     borderRadius: 18,
   },
@@ -254,6 +277,10 @@ const styles = StyleSheet.create({
     minHeight: 84,
     paddingBottom: 10,
   },
+  editorialBody: {
+    borderTopColor: 'rgba(181,148,86,0.22)',
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
   name: {
     fontFamily: 'serif',
     fontSize: 18,
@@ -264,6 +291,13 @@ const styles = StyleSheet.create({
   compactName: {
     fontSize: 15.5,
     lineHeight: 19,
+  },
+  editorialName: {
+    fontFamily: 'Inter_700Bold',
+    fontWeight: '700',
+    fontSize: 16,
+    lineHeight: 21,
+    letterSpacing: -0.25,
   },
   metaRow: {
     alignItems: 'center',
