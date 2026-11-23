@@ -196,6 +196,7 @@ type LiveDiscoveryState = 'loading' | 'ready' | 'permission-denied' | 'error';
 type LiveDiscoveryFailureCode =
   | 'LOCATION-DENIED'
   | 'LOCATION-UNAVAILABLE'
+  | 'CLIENT-RATE-LIMIT'
   | 'API-RATE-LIMIT'
   | 'API-FORBIDDEN'
   | 'API-NETWORK'
@@ -217,7 +218,7 @@ type DiscoveryPage = {
   failure?: DiscoveryPageFailure;
 };
 const DISCOVERY_REQUEST_WINDOW_MS = 60_000;
-const DISCOVERY_REQUESTS_PER_WINDOW = 24;
+const DISCOVERY_REQUESTS_PER_WINDOW = 10;
 const CACHE_REUSE_DISTANCE_METERS = 2_000;
 const DISCOVERY_CACHE_TTL_MS = 30 * 60 * 1000;
 const NEARBY_CACHE_KEY = 'panda-live-nearby-v1';
@@ -281,7 +282,7 @@ async function fetchLiveSearchPage(
   signal?: AbortSignal,
 ): Promise<DiscoveryPage> {
   if (signal?.aborted) return { venues: [] };
-  if (!reserveRequest()) return { venues: [], failure: { code: 'API-RATE-LIMIT' } };
+  if (!reserveRequest()) return { venues: [], failure: { code: 'CLIENT-RATE-LIMIT' } };
   const startedAt = Date.now();
   try {
     const response = await fetchWithTimeout(
@@ -1333,10 +1334,6 @@ export default function DiscoverScreen() {
               saved={isSaved(item.id)}
               onToggleSaved={() => toggleSaved(item)}
               onPress={() => {
-                if (!liveVenues.some((venue) => venue.id === item.id)) {
-                  router.push(`/venue/${item.id}`);
-                  return;
-                }
                 router.push({
                   pathname: '/venue/[id]',
                   params: {
@@ -1370,7 +1367,11 @@ export default function DiscoverScreen() {
                   Live venues did not load · {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
                 </Text>
                 <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}>
-                  Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.
+                  {liveDiscoveryFailure === 'CLIENT-RATE-LIMIT'
+                    ? 'Panda has paused extra searches to stay within the service limit. Wait a moment, then retry.'
+                    : liveDiscoveryFailure === 'API-RATE-LIMIT'
+                      ? 'The live venue service asked this request to slow down. Wait a minute, then retry.'
+                      : 'Panda is not showing the built-in London catalogue. Tap Retry to request genuinely nearby places again.'}
                 </Text>
                 <Text style={[styles.emptyDiagnostic, { color: colors.mutedForeground }]}>
                   Diagnostic: {liveDiscoveryFailure ?? 'UNKNOWN-STATE'}
@@ -1394,6 +1395,14 @@ export default function DiscoverScreen() {
                 <Text style={[styles.emptyTitle, { color: colors.foreground }]}>
                   This category could not load · {feedPageFailure}
                 </Text>
+                {feedPageFailure === 'CLIENT-RATE-LIMIT' || feedPageFailure === 'API-RATE-LIMIT' ? (
+                  <Text style={[styles.emptyBody, { color: colors.mutedForeground }]}
+>
+                    {feedPageFailure === 'CLIENT-RATE-LIMIT'
+                      ? 'Panda has paused extra searches to stay within the service limit. Wait a moment, then retry.'
+                      : 'The live venue service asked this request to slow down. Wait a minute, then retry.'}
+                  </Text>
+                ) : null}
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => void loadExpandedCategory(category)}
