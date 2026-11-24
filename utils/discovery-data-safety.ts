@@ -129,14 +129,19 @@ function safeDiscoveryCategories(value: unknown): DiscoveryCategory[] {
   );
 }
 
-export function normalizeDiscoveryVenue(value: unknown): Venue | null {
+function normalizeVenue(value: unknown, allowMissingLocation: boolean): Venue | null {
   const item = record(value);
   if (!item) return null;
   const id = text(item.id);
   const name = text(item.name);
   const coordinate = normalizeMapCoordinate(item);
   const distanceMeters = finiteNumberOrUndefined(item.distanceMeters);
-  if (!id || !name || !coordinate || distanceMeters === undefined || distanceMeters < 0) return null;
+  if (
+    !id
+    || !name
+    || (!allowMissingLocation && !coordinate)
+    || (!allowMissingLocation && (distanceMeters === undefined || distanceMeters < 0))
+  ) return null;
 
   const categoryValue = text(item.category) as VenueCategory;
   const category = VENUE_CATEGORIES.has(categoryValue) ? categoryValue : 'Restaurant';
@@ -164,13 +169,12 @@ export function normalizeDiscoveryVenue(value: unknown): Venue | null {
     rating: ratingValue,
     ratingCount: Math.max(0, finiteNumberOrUndefined(item.ratingCount) ?? 0),
     price: text(item.price),
-    distanceMeters,
+    distanceMeters: distanceMeters !== undefined && distanceMeters >= 0 ? distanceMeters : 0,
     description: text(item.description),
     hours: text(item.hours),
     feature: text(item.feature),
-    fullAddress: text(item.fullAddress) || text(item.address) || name,
-    latitude: coordinate.latitude,
-    longitude: coordinate.longitude,
+    fullAddress: text(item.fullAddress) || text(item.address) || (allowMissingLocation ? '' : name),
+    ...(coordinate ? { latitude: coordinate.latitude, longitude: coordinate.longitude } : {}),
     source,
     sourceAttribution: text(item.sourceAttribution) || undefined,
     openNow: item.openNow === true,
@@ -203,6 +207,25 @@ export function normalizeDiscoveryVenue(value: unknown): Venue | null {
     openingDesignation: text(item.openingDesignation) || undefined,
     openingEvidence: text(item.openingEvidence) || undefined,
   };
+}
+
+export function normalizeDiscoveryVenue(value: unknown): Venue | null {
+  return normalizeVenue(value, false);
+}
+
+export function normalizeBangingVenueList(value: unknown): Venue[] {
+  if (!Array.isArray(value)) return [];
+  const venues: Venue[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.slice(0, 500)) {
+    const item = record(candidate);
+    if (item?.banging !== true) continue;
+    const venue = normalizeVenue(item, true);
+    if (!venue || seen.has(venue.id)) continue;
+    seen.add(venue.id);
+    venues.push(venue);
+  }
+  return venues;
 }
 
 export function normalizeDiscoveryVenueList(value: unknown): Venue[] {

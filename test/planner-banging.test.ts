@@ -45,8 +45,13 @@ assert.equal(new Set(first.filter(venue => !venue.premium).map(venue => venue.id
 const twoPaid = deck([...pool, ...paid.slice(0, 2)], new Date('2026-10-10T00:00:00Z'));
 assert.equal(twoPaid.length, 50);
 twoPaid.forEach((venue, index) => assert.equal(venue.premium, (index + 1) % 5 === 0));
+const routeMissingDeck = deck([
+  ...pool,
+  ...paid.map(venue => ({ ...venue, bangingTransitMinutes: undefined, bangingVerifiedAt: undefined })),
+], new Date('2026-10-10T00:00:00Z'));
+routeMissingDeck.forEach((venue, index) => assert.equal(venue.premium, (index + 1) % 5 === 0));
 assert.equal(deck([...pool, ...paid.map(venue => ({ ...venue, bangingTransitMinutes: 121 }))],
-  new Date('2026-10-10T00:00:00Z')) .some(venue => venue.premium), false);
+  new Date('2026-10-10T00:00:00Z')) .filter(venue => venue.premium).length, 10);
 assert.equal(deck([fixture('ordinary expensive', 'Restaurant', '££££', { luxurySource: '' })],
   new Date('2026-10-10T00:00:00Z')).length, 0);
 assert.equal(rotateBanging(pool.map(venue => ({ ...venue, bangingVerifiedAt: 0 }))).length, 0);

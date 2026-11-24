@@ -1043,7 +1043,7 @@ export default function DiscoverScreen() {
           banging: true,
         }];
       }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
-        && Number.isFinite(venue.distanceMeters) && Boolean(venue.photoNames?.length));
+        && Number.isFinite(venue.distanceMeters));
       setBangingSupplement(additional);
       setBangingStatus(body.complete ? '' : 'Limited verified luxury choices in this area');
     }).catch((error: unknown) => {
