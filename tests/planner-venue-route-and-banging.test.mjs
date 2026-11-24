@@ -16,10 +16,11 @@ test('Planner opens the exact tapped venue, even when it is not already in the p
   assert.match(handler, /plannerVenues:\s*JSON\.stringify\(context\.plan\)/);
 });
 
-test('Banging restores APK 90 header and photo treatment without changing compact card height', () => {
+test('Banging keeps the APK 90 header and reserves the compact preview photo height', () => {
   assert.match(drawer, /fontSize: 22,\s*lineHeight: 26/);
   assert.match(drawer, /fontSize: 18,\s*lineHeight: 22/);
-  assert.match(card, /height=\{compact \? 100/);
+  assert.match(card, /height=\{compactPreview \? VENUE_PREVIEW_PHOTO_HEIGHT/);
+  assert.match(card, /previewCard:\s*\{\s*height:\s*VENUE_PREVIEW_CARD_HEIGHT/);
   assert.match(card, /LinearGradient/);
   assert.match(card, /styles\.editorialShade/);
 });

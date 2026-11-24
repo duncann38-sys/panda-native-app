@@ -1,11 +1,11 @@
-name: Panda 102 - Restore venue detail card from APK 87
+name: Panda 103 - Uniform venue preview cards
 on:
   push:
     branches:
       - panda-apk-100-venue-detail-restoration
 jobs:
   build_android_preview:
-    name: Panda 102 Restaurant Detail Android APK
+    name: Panda 103 Venue Preview Android APK
     type: build
     params:
       platform: android

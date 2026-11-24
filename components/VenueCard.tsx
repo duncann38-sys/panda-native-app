@@ -9,6 +9,7 @@ import { ReserveButton } from '@/components/ReserveButton';
 import { NonHospitalityCard } from '@/components/NonHospitalityCard';
 import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
 import { venueCardPalette } from '@/constants/venue-card-design';
+import { VENUE_PREVIEW_CARD_HEIGHT, VENUE_PREVIEW_PHOTO_HEIGHT } from '@/constants/venue-preview-layout';
 
 type VenueCardProps = {
   venue: Venue;
@@ -17,7 +18,7 @@ type VenueCardProps = {
   onToggleSaved: () => void;
   compact?: boolean;
   featured?: boolean;
-  activitySurface?: 'banging';
+  activitySurface?: 'banging' | 'discovery';
   presentation?: 'banging';
 };
 
@@ -33,7 +34,10 @@ export function VenueCard({
 }: VenueCardProps) {
   const colors = useColors();
   const editorial = presentation === 'banging';
-  if (isNonHospitalityVenue(venue)) return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={activitySurface} />;
+  const compactPreview = compact && editorial;
+  if (isNonHospitalityVenue(venue) && !compactPreview) {
+    return <NonHospitalityCard venue={venue} saved={saved} onPress={onPress} onToggleSaved={onToggleSaved} compact={compact} activitySurface={activitySurface} />;
+  }
   const premiumCard = venue.premium;
   const premiumFeatured = featured && venue.premium;
   const tierLabel = venue.premium
@@ -56,6 +60,7 @@ export function VenueCard({
         premiumBanging && styles.premiumBangingCard,
         premiumFeatured && styles.featuredCard,
         compact && styles.compactCard,
+        compactPreview && styles.previewCard,
       ]}
     >
       <View style={styles.photo}>
@@ -63,9 +68,11 @@ export function VenueCard({
           venue={venue}
           venueId={venue.id}
           venueName={venue.name}
-          height={compact ? 100 : premiumFeatured ? 148 : 136}
+          height={compactPreview ? VENUE_PREVIEW_PHOTO_HEIGHT : compact ? 100 : premiumFeatured ? 148 : 136}
+          transition={compactPreview ? 0 : undefined}
+          placeholderMode={compactPreview ? 'clean' : 'initial'}
         />
-        {editorial ? (
+        {editorial && !compactPreview ? (
           <LinearGradient
             colors={['transparent', 'rgba(20,12,2,0.72)']}
             pointerEvents="none"
@@ -105,7 +112,7 @@ export function VenueCard({
             />
           </Pressable>
         </View>
-        {premiumCard ? (
+        {premiumCard && !compactPreview ? (
           <Pressable
             testID={`view-photos-${venue.id}`}
             accessibilityLabel={`View albums of ${venue.name}`}
@@ -129,37 +136,91 @@ export function VenueCard({
           premiumFeatured && styles.featuredBody,
           compact && premiumFeatured && styles.compactFeaturedBody,
           editorial && styles.editorialBody,
+          compactPreview && styles.previewBody,
         ]}
       >
-        <Text
-          numberOfLines={compact ? 2 : undefined}
-          ellipsizeMode="tail"
-          style={[
-            styles.name,
-            compact && styles.compactName,
-            editorial && styles.editorialName,
-            { color: premiumBanging || (!editorial && premiumCard) ? colors.primaryForeground : colors.foreground },
-          ]}
-        >
-          {venue.name}
-        </Text>
-        <View style={[styles.metaRow, compact && styles.compactMetaRow]}>
-          {venue.rating ? (
-            <View style={[styles.metaItem, compact && styles.compactMetaItem]}>
-              <Ionicons name="star" size={compact ? 12 : 14} color={colors.honey} />
+        {compactPreview ? (
+          <>
+            <View style={styles.previewCopy}>
               <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
                 style={[
-                  styles.metaText,
-                  compact && styles.compactMetaText,
-                  { color: premiumCard ? colors.primaryForeground : colors.foreground },
+                  styles.editorialName,
+                  styles.previewName,
+                  { color: premiumBanging ? colors.primaryForeground : colors.foreground },
                 ]}
               >
-                {venue.rating}
+                {venue.name}
+              </Text>
+              <Text
+                numberOfLines={1}
+                ellipsizeMode="tail"
+                style={[
+                  styles.previewStatus,
+                  { color: premiumBanging
+                    ? colors.mint300
+                    : venue.source === 'openstreetmap' || venue.cached
+                      ? colors.mutedForeground
+                      : venue.openNow ? colors.openForeground : colors.closedForeground },
+                ]}
+              >
+                {venue.source === 'openstreetmap'
+                  ? 'Hours unverified'
+                  : venue.cached ? 'Hours unverified' : venue.openNow ? 'Open' : 'Closed'}
+                {(venue.walkingTime || venue.distance) ? ` • ${venue.walkingTime || venue.distance}` : ''}
               </Text>
             </View>
-          ) : null}
-          {venue.price ? (
-            <>
+            <ReserveButton
+              venue={venue}
+              activitySurface={activitySurface}
+              tone={premiumCard ? 'soft' : 'solid'}
+              style={[styles.compactReserveButton, styles.previewReserveButton]}
+            />
+          </>
+        ) : (
+          <>
+            <Text
+              numberOfLines={compact ? 2 : undefined}
+              ellipsizeMode="tail"
+              style={[
+                styles.name,
+                compact && styles.compactName,
+                editorial && styles.editorialName,
+                { color: premiumBanging || (!editorial && premiumCard) ? colors.primaryForeground : colors.foreground },
+              ]}
+            >
+              {venue.name}
+            </Text>
+            <View style={[styles.metaRow, compact && styles.compactMetaRow]}>
+              {venue.rating ? (
+                <View style={[styles.metaItem, compact && styles.compactMetaItem]}>
+                  <Ionicons name="star" size={compact ? 12 : 14} color={colors.honey} />
+                  <Text
+                    style={[
+                      styles.metaText,
+                      compact && styles.compactMetaText,
+                      { color: premiumCard ? colors.primaryForeground : colors.foreground },
+                    ]}
+                  >
+                    {venue.rating}
+                  </Text>
+                </View>
+              ) : null}
+              {venue.price ? (
+                <>
+                  <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
+                  <Text
+                    style={[
+                      styles.metaText,
+                      compact && styles.compactMetaText,
+                      { color: premiumCard ? colors.mint300 : colors.mutedForeground },
+                    ]}
+                  >
+                    {venue.price}
+                  </Text>
+                </>
+              ) : null}
               <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
               <Text
                 style={[
@@ -168,37 +229,27 @@ export function VenueCard({
                   { color: premiumCard ? colors.mint300 : colors.mutedForeground },
                 ]}
               >
-                {venue.price}
+                {venue.walkingTime}
               </Text>
-            </>
-          ) : null}
-          <Text style={[styles.dot, compact && styles.compactDot, { color: premiumCard ? colors.mint300 : colors.mutedForeground }]}>·</Text>
-          <Text
-            style={[
-              styles.metaText,
-              compact && styles.compactMetaText,
-              { color: premiumCard ? colors.mint300 : colors.mutedForeground },
-            ]}
-          >
-            {venue.walkingTime}
-          </Text>
-        </View>
-        <Text style={[styles.openText, { color: venue.source === 'openstreetmap' || venue.cached ? colors.mutedForeground : premiumCard ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
-          {venue.source === 'openstreetmap'
-            ? 'Hours not listed'
-            : venue.cached ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
-        </Text>
-        {venue.sourceAttribution ? (
-          <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 3 }}>
-            {venue.sourceAttribution}
-          </Text>
-        ) : null}
-        <ReserveButton
-          venue={venue}
-          activitySurface={activitySurface}
-          tone={premiumCard ? 'soft' : 'solid'}
-          style={[styles.reserveButton, compact && styles.compactReserveButton]}
-        />
+            </View>
+            <Text style={[styles.openText, { color: venue.source === 'openstreetmap' || venue.cached ? colors.mutedForeground : premiumCard ? colors.mint300 : venue.openNow ? colors.openForeground : colors.closedForeground }]}>
+              {venue.source === 'openstreetmap'
+                ? 'Hours not listed'
+                : venue.cached ? 'Hours unverified' : venue.openNow ? 'Open now' : 'Closed'}
+            </Text>
+            {venue.sourceAttribution ? (
+              <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_400Regular', fontSize: 10, marginTop: 3 }}>
+                {venue.sourceAttribution}
+              </Text>
+            ) : null}
+            <ReserveButton
+              venue={venue}
+              activitySurface={activitySurface}
+              tone={premiumCard ? 'soft' : 'solid'}
+              style={[styles.reserveButton, compact && styles.compactReserveButton]}
+            />
+          </>
+        )}
       </View>
     </Pressable>
   );
@@ -235,6 +286,9 @@ const styles = StyleSheet.create({
   },
   compactCard: {
     borderRadius: 18,
+  },
+  previewCard: {
+    height: VENUE_PREVIEW_CARD_HEIGHT,
   },
   pressed: {
     opacity: 0.9,
@@ -317,6 +371,32 @@ const styles = StyleSheet.create({
   editorialBody: {
     borderTopColor: 'rgba(181,148,86,0.22)',
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  previewBody: {
+    flex: 1,
+    justifyContent: 'space-between',
+    minHeight: 0,
+    paddingHorizontal: 9,
+    paddingTop: 8,
+    paddingBottom: 8,
+  },
+  previewCopy: {
+    gap: 6,
+    minWidth: 0,
+  },
+  previewName: {
+    flexShrink: 1,
+    minWidth: 0,
+  },
+  previewStatus: {
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+  previewReserveButton: {
+    alignSelf: 'stretch',
+    marginTop: 0,
+    minHeight: 38,
   },
   name: {
     fontFamily: 'serif',
