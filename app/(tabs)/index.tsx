@@ -548,11 +548,9 @@ export default function DiscoverScreen() {
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
   const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
-  const bangingSupplementRef = useRef(bangingSupplement);
-  bangingSupplementRef.current = bangingSupplement;
-  const [bangingStatus, setBangingStatus] = useState('Finding Banging restaurants…');
+  const [bangingStatus, setBangingStatus] = useState('Finding luxury venues…');
   const [bangingRefreshTick, setBangingRefreshTick] = useState(0);
-  const bangingOrigin = useRef<{ key: string; latitude: number; longitude: number } | null>(null);
+  const bangingOrigin = useRef('');
   const [bangingPremiumJourneys, setBangingPremiumJourneys] = useState<Record<string, {
     bangingTransitMinutes: number; bangingVerifiedAt: number;
   }>>({});
@@ -1009,6 +1007,7 @@ export default function DiscoverScreen() {
     const timer = setInterval(() => {
       const clock = bangingClock();
       setRotationWindow(`${clock.day}:${clock.slot}`);
+      setBangingRefreshTick(value => value + 1);
     }, 60_000);
     return () => clearInterval(timer);
   }, []);
@@ -1034,24 +1033,13 @@ export default function DiscoverScreen() {
     let active = true;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
-    const previousOrigin = bangingOrigin.current;
-    if (previousOrigin?.key !== originKey) {
-      const canReuseNearbyDeck = previousOrigin !== null
-        && distanceInMeters(previousOrigin, coordinates) <= CACHE_REUSE_DISTANCE_METERS;
-      bangingOrigin.current = { key: originKey, ...coordinates };
-      if (!canReuseNearbyDeck) setBangingSupplement(bangingFallbackCandidates);
-      else if (!bangingSupplementRef.current.length && bangingFallbackCandidates.length) {
-        setBangingSupplement(bangingFallbackCandidates);
-      }
-      setBangingPremiumJourneys({});
-      setBangingStatus(canReuseNearbyDeck || bangingFallbackCandidates.length
-        ? ''
-        : 'Finding Banging restaurants…');
-    } else if (!bangingSupplementRef.current.length && bangingFallbackCandidates.length) {
-      // Restore the already-loaded nearby cache immediately while the
-      // Google-backed two-hour selection refreshes in the background.
+    if (bangingOrigin.current !== originKey) {
+      bangingOrigin.current = originKey;
       setBangingSupplement(bangingFallbackCandidates);
-      setBangingStatus('');
+      setBangingPremiumJourneys({});
+      setBangingStatus(bangingFallbackCandidates.length
+        ? 'Showing nearby picks while the full selection refreshes'
+        : 'Finding luxury venues…');
     }
     const premiumIds = partners.venues
       .filter(venue => venue.banging && venue.premium)
@@ -1069,47 +1057,29 @@ export default function DiscoverScreen() {
           luxurySource: result.luxurySource,
           bangingTransitMinutes: result.bangingTransitMinutes,
           bangingVerifiedAt: result.bangingVerifiedAt,
-          bangingFallback: result.bangingFallback === true,
-          ...(result.bangingFallbackSource === 'storage'
-            ? { bangingFallbackSource: 'storage' as const }
-            : {}),
-          bangingTransitEstimated: result.bangingTransitEstimated === true,
           distanceMeters: meters,
           distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
-          walkingTime: result.bangingTransitEstimated
-            ? `~${result.bangingTransitMinutes} min estimated reach`
-            : `${result.bangingTransitMinutes} min by public transport`,
+          walkingTime: `${result.bangingTransitMinutes} min by public transport`,
           promoted: false,
           premium: false,
           banging: true,
         }];
-      }).filter(venue => !partners.tiers[venue.id]
-        && (isOrganicBangingVenue(venue) || venue.bangingFallback === true)
+      }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
         && Number.isFinite(venue.distanceMeters));
-      const organicTarget = premiumIds.length ? 40 : 50;
-      const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, organicTarget);
+      const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, 40);
       setBangingSupplement(combined);
-      const estimated = combined.some(venue => venue.bangingTransitEstimated === true);
-      setBangingStatus(combined.length >= organicTarget
-        ? estimated ? 'Stored Banging picks · travel estimates' : ''
+      setBangingStatus(combined.length >= 40 || body.complete
+        ? ''
         : combined.length
-          ? `Showing ${combined.length} high-end picks${estimated ? ' · estimated reach' : ''}`
-          : body.fallbackReason?.startsWith('google_unavailable')
-            ? 'Google unavailable · no stored high-end restaurants in reach'
-            : 'No high-end restaurants found in reach');
-      if (body.travelMode === 'estimated' && body.results.length) {
-        retryTimer = setTimeout(
-          () => setBangingRefreshTick(tick => tick + 1),
-          5 * 60 * 1000 + 250,
-        );
-      }
+          ? `Showing ${combined.length} nearby picks while the full selection refreshes`
+          : 'Limited verified luxury choices in this area');
     }).catch((error: unknown) => {
       if (!active) return;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);
       setBangingSupplement(bangingFallbackCandidates);
       setBangingStatus(bangingFallbackCandidates.length
-        ? `Google data unavailable · showing ${bangingFallbackCandidates.length} local picks`
-        : 'Google data unavailable · no cached local high-end restaurants');
+        ? `Showing ${bangingFallbackCandidates.length} nearby picks while refreshing`
+        : 'Banging selection is refreshing · try again shortly');
       retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
     });
     return () => {
