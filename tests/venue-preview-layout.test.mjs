@@ -4,9 +4,10 @@ import test from 'node:test';
 
 const source = (path) => readFileSync(new URL(`../${path}`, import.meta.url), 'utf8');
 
-test('Banging and discovery share fixed preview geometry', () => {
+test('Banging keeps compact cards while Discovery uses its original vertical results', () => {
   const layout = source('constants/venue-preview-layout.ts');
   const banging = source('components/BangingDrawer.tsx');
+  const card = source('components/VenueCard.tsx');
   const discovery = source('app/(tabs)/index.tsx');
 
   assert.match(layout, /VENUE_PREVIEW_CARD_HEIGHT\s*=\s*250/);
@@ -14,10 +15,13 @@ test('Banging and discovery share fixed preview geometry', () => {
   assert.match(layout, /VENUE_PREVIEW_CARD_MAX_WIDTH\s*=\s*194/);
   assert.match(banging, /bangingDrawerLayout\(measuredHeader,\s*VENUE_PREVIEW_CARD_HEIGHT,\s*48\)/);
   assert.match(banging, /keyExtractor=\{\(venue\)\s*=>\s*venue\.id\}/);
-  assert.match(discovery, /testID="discovery-venue-carousel"/);
-  assert.match(discovery, /horizontal/);
-  assert.match(discovery, /keyExtractor=\{\(item\)\s*=>\s*item\.id\}/);
-  assert.match(discovery, /presentation="banging"/);
+  assert.match(discovery, /data=\{filteredVenues\}/);
+  assert.match(discovery, /keyExtractor=\{\(item\) => item\.id\}/);
+  assert.match(discovery, /<SuggestionRow/);
+  assert.doesNotMatch(discovery, /testID="discovery-venue-carousel"/);
+  assert.doesNotMatch(discovery, /presentation="banging"/);
+  assert.match(card, /activitySurface === 'banging'/);
+  assert.match(card, /styles\.previewRating/);
 });
 
 test('compact previews reserve one-line names and stable status content', () => {

@@ -42,8 +42,8 @@ test('venue card animations contain no Reanimated layout transitions', () => {
   assert.doesNotMatch(readFileSync(new URL('../components/VenueCard.tsx', import.meta.url), 'utf8'), /\b(?:layout|entering|exiting)\s*=/);
 });
 
-test('APK 103 uses one branch-specific Android preview build', () => {
-  assert.equal(appConfig.expo.android.versionCode, 103);
+test('APK 104 uses one branch-specific Android preview build', () => {
+  assert.equal(appConfig.expo.android.versionCode, 104);
   assert.match(releaseWorkflow, /branches:\s*\n\s+- panda-apk-100-venue-detail-restoration/);
   assert.match(releaseWorkflow, /platform: android/);
   assert.match(releaseWorkflow, /profile: preview/);

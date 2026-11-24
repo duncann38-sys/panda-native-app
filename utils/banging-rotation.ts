@@ -45,22 +45,36 @@ export function rotateBanging(source: Venue[], now = new Date(), identity = 'pan
   const premium = unique.filter(venue => venue.banging && venue.premium);
   const eligible = unique.filter(venue =>
     isOrganicBangingVenue(venue, now.getTime()) || isBangingFallbackVenue(venue));
-  const stable = eligible.sort((a, b) => hash(`${identity}:${a.id}`) - hash(`${identity}:${b.id}`));
-  const start = stable.length ? Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) % stable.length : 0;
-  const daily = [...stable.slice(start), ...stable.slice(0, start)];
+  const ratingValue = (venue: Venue) => {
+    const rating = Number.parseFloat(venue.rating);
+    return Number.isFinite(rating) ? rating : Number.NEGATIVE_INFINITY;
+  };
+  const stableSort = (pool: Venue[]) => [...pool].sort((a, b) =>
+    ratingValue(b) - ratingValue(a) || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
+  const preferred = stableSort(eligible.filter(venue => ratingValue(venue) >= 4.5));
+  const broader = stableSort(eligible.filter(venue => ratingValue(venue) < 4.5));
+  const dayNumber = Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000);
+  const rotateDaily = (pool: Venue[], offset: number) => {
+    const start = pool.length ? offset % pool.length : 0;
+    return [...pool.slice(start), ...pool.slice(0, start)];
+  };
+  const dailyPreferred = rotateDaily(preferred, dayNumber);
+  const dailyBroader = rotateDaily(broader, dayNumber + preferred.length);
+  const daily = [...dailyPreferred, ...dailyBroader];
   const targetCount = premium.length ? 40 : 50;
   const hasLocalFallback = daily.some(venue => venue.bangingFallback === true);
   const count = daily.length >= targetCount ? targetCount
     : hasLocalFallback || premium.length ? daily.length
       : Math.min(daily.length, Math.max(2, Math.floor(daily.length * 0.75)));
-  const organic = daily.slice(0, count);
+  const preferredOrganic = dailyPreferred.slice(0, Math.min(count, dailyPreferred.length));
+  const broaderOrganic = dailyBroader.slice(0, Math.max(0, count - preferredOrganic.length));
   const rotate = (pool: Venue[]) => {
     const shift = pool.length ? slot % pool.length : 0;
     return [...pool.slice(shift), ...pool.slice(0, shift)];
   };
-  const paidStart = premium.length ? (Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) * 6 + slot) % premium.length : 0;
+  const paidStart = premium.length ? (Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000) * 6 + slot) % premium.length : 0;
   const paid = [...premium.slice(paidStart), ...premium.slice(0, paidStart)];
-  const free = rotate(organic);
+  const free = [...rotate(preferredOrganic), ...rotate(broaderOrganic)];
   // Never bunch Premium cards together to fill missing organic slots. When
   // there are no organic cards at all, retain a Premium-only fallback; with
   // one to three organic cards, show those honestly rather than misplacing

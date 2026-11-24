@@ -44,6 +44,7 @@ export function VenueCard({
     ? (editorial ? (venue.banging ? 'Premium' : 'Promoted') : 'PANDA PREMIUM')
     : null;
   const premiumBanging = editorial && !!venue.premium;
+  const previewRating = Number.parseFloat(venue.rating);
 
   return (
     <Pressable
@@ -153,6 +154,12 @@ export function VenueCard({
               >
                 {venue.name}
               </Text>
+              {activitySurface === 'banging' && Number.isFinite(previewRating) ? (
+                <View style={styles.previewRating} accessibilityLabel={'Rated ' + previewRating.toFixed(1) + ' out of 5'}>
+                  <Feather name="star" size={11} color={premiumBanging ? colors.goldLine : colors.goldDeep} />
+                  <Text style={[styles.previewRatingText, { color: premiumBanging ? colors.goldLine : colors.goldDeep }]}>{previewRating.toFixed(1)}</Text>
+                </View>
+              ) : null}
               <Text
                 numberOfLines={1}
                 ellipsizeMode="tail"
@@ -388,6 +395,8 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     minWidth: 0,
   },
+  previewRating: { alignItems: 'center', flexDirection: 'row', gap: 4, minHeight: 13 },
+  previewRatingText: { fontFamily: 'Inter_700Bold', fontSize: 10, lineHeight: 13 },
   previewStatus: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 11,

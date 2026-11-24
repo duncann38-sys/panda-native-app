@@ -337,7 +337,12 @@ export default function VenueDetailScreen() {
   const displayedRating =
     googleProfile?.rating != null ? googleProfile.rating.toFixed(1) : String(venue.rating ?? '');
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;
+  const ratingCountLabel = displayedRatingCount > 0
+    ? `${displayedRating} (${displayedRatingCount.toLocaleString()})`
+    : displayedRating;
   const displayedType = googleProfile?.primaryType || venue.type;
+  const displayedPrice = googleProfile?.price?.trim() || venue.price?.trim() || '';
+  const displayedDescription = venue.description?.trim() || googleProfile?.editorialSummary?.trim() || '';
   const displayedOpenNow = fullCardOpenStatus(venue, googleProfile);
   const venueAddress = (venue as Venue & { address?: unknown }).address;
   const displayedAddress =
@@ -650,9 +655,9 @@ export default function VenueDetailScreen() {
               <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
               {paidPremium ? <View style={[styles.paidPremiumUnderline, { backgroundColor: colors.gold }]} /> : null}
             </View>
-            {!isNonHospitalityVenue(venue) && venue.price ? (
+            {!isNonHospitalityVenue(venue) && displayedPrice ? (
               <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
-                <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.price}</Text>
+                <Text style={[styles.editorialPriceText, { color: cardColors.ink, fontFamily: fonts.bold }]}>{displayedPrice}</Text>
               </View>
             ) : null}
           </View>
@@ -663,7 +668,7 @@ export default function VenueDetailScreen() {
                 refined
                 fontFamily={fonts.medium}
                 icon="star"
-                label={`${displayedRating} (${displayedRatingCount})`}
+                label={ratingCountLabel}
                 background={cardColors.goldSoft}
                 foreground={cardColors.goldInk}
               />
@@ -718,13 +723,13 @@ export default function VenueDetailScreen() {
                 styles.contextPanel,
                 styles.editorialContext,
                 {
-                  backgroundColor: venueSurface,
-                  borderColor: 'transparent',
+                  backgroundColor: cardColors.soft,
+                  borderColor: cardColors.border,
                 },
               ]}
             >
-              {venue.description ? (
-                <Text style={[styles.description, styles.editorialDescription, { color: cardColors.muted, fontFamily: fonts.display }]}>{venue.description}</Text>
+              {displayedDescription ? (
+                <Text style={[styles.description, styles.editorialDescription, { color: cardColors.muted, fontFamily: fonts.medium }]}>{displayedDescription}</Text>
               ) : null}
 
               <View style={styles.addressRow}>
@@ -735,16 +740,17 @@ export default function VenueDetailScreen() {
                   <Text style={[styles.address, styles.editorialAddress, { color: cardColors.ink, fontFamily: fonts.bold }]}>{displayedAddress}</Text>
                 </View>
               </View>
-              {venue.sourceAttribution ? (
-                <Text
-                  accessibilityRole="link"
-                  onPress={() => void Linking.openURL('https://www.openstreetmap.org/copyright')}
-                  style={[styles.description, { color: colors.mutedForeground, marginTop: 10 }]}
-                >
-                  {venue.sourceAttribution}
-                </Text>
-              ) : null}
             </View>
+
+            {hasDisplayedRating ? (
+              <View style={[styles.pandaRatingCard, { backgroundColor: cardColors.goldSoft, borderColor: cardColors.gold }]}>
+                <View style={styles.pandaRatingCopy}>
+                  <Text style={[styles.pandaRatingTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>Panda Rating</Text>
+                  <Text style={[styles.pandaRatingCaption, { color: cardColors.muted, fontFamily: fonts.medium }]}>Curated by Panda</Text>
+                </View>
+                <PandaRatingBadge colors={colors} rating={displayedRating} />
+              </View>
+            ) : null}
 
             {isNonHospitalityVenue(venue) ? <NonHospitalityActions venue={venue} /> : <View style={styles.editorialActions}>
               <ActionButton
@@ -1924,6 +1930,20 @@ const styles = StyleSheet.create({
     fontSize: 9,
     letterSpacing: 1.05,
   },
+  pandaRatingCard: {
+    alignItems: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+    marginBottom: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  pandaRatingCopy: { flex: 1, minWidth: 0 },
+  pandaRatingTitle: { fontSize: 13, lineHeight: 18, fontWeight: '700' },
+  pandaRatingCaption: { fontSize: 10, lineHeight: 15 },
   pandaRatingBadge: {
     alignItems: 'center',
     borderRadius: 999,
@@ -2217,8 +2237,8 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(23,59,48,0.09)',
   },
   editorialChipText: { fontSize: 11, lineHeight: 16 },
-  editorialContext: { borderWidth: 0, paddingHorizontal: 0, paddingVertical: 12, shadowOpacity: 0, elevation: 0 },
-  editorialDescription: { fontSize: 19, lineHeight: 27, marginBottom: 16 },
+  editorialContext: { borderWidth: 1, paddingHorizontal: 14, paddingVertical: 14, shadowOpacity: 0, elevation: 0, marginBottom: 12 },
+  editorialDescription: { fontSize: 14, lineHeight: 21, marginBottom: 13 },
   editorialAddressIcon: { width: 38, height: 38, borderRadius: 13 },
   editorialAddress: { fontSize: 12.5, lineHeight: 19, fontWeight: '400' },
   editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6, marginBottom: 18 },

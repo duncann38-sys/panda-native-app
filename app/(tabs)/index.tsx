@@ -20,7 +20,6 @@ import {
   StyleSheet,
   Text,
   TextInput,
-  useWindowDimensions,
   View,
 } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
@@ -28,16 +27,10 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BangingDrawer } from '@/components/BangingDrawer';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
-import { VenueCard } from '@/components/VenueCard';
 import { FilterDropdown } from '@/components/FilterDropdown';
 import { PandaPlannerSheet, type PlannerMode, venueFromSearchResult } from '@/components/PandaPlannerSheet';
 import { PandaWordmark } from '@/components/PandaWordmark';
-import {
-  VENUE_PREVIEW_CARD_GAP,
-  VENUE_PREVIEW_CARD_HEIGHT,
-  VENUE_PREVIEW_SIDE_PADDING,
-  venuePreviewCardWidth,
-} from '@/constants/venue-preview-layout';
+import { SuggestionRow } from '@/components/SuggestionRow';
 import { getPandaTimeEmoji, getPandaTimeLabel, getPandaTimeMode } from '@/constants/panda-time';
 import { PANDA_DISCOVERY_API } from '@/constants/services';
 import { useLiveVenues } from '@/context/live-venues';
@@ -511,7 +504,6 @@ export default function DiscoverScreen() {
   const discoveryImpressions = useVenueImpressions('discovery', !bangingIsOpen);
   const discoveryViewabilityPairs = useRef([discoveryImpressions.presentationPair, discoveryImpressions]).current;
   const colors = useColors();
-  const { width: viewportWidth } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { openPlanner, plannerRequest, plannerIds, plannerVenues, plannerLocation, plannerPrice } = useLocalSearchParams<{
@@ -1266,8 +1258,16 @@ export default function DiscoverScreen() {
         </ScrollView>
       </View>
       <FlatList
+        viewabilityConfigCallbackPairs={discoveryViewabilityPairs}
         style={styles.feed}
-        data={[]}
+        data={filteredVenues}
+        keyExtractor={(item) => item.id}
+        numColumns={1}
+        initialNumToRender={8}
+        maxToRenderPerBatch={10}
+        windowSize={7}
+        onEndReached={() => void loadMoreFeed()}
+        onEndReachedThreshold={0.8}
         showsVerticalScrollIndicator={false}
         refreshControl={
           <RefreshControl
@@ -1350,63 +1350,29 @@ export default function DiscoverScreen() {
                 />
               </View>
             </View>
-            {filteredVenues.length ? (
-              <FlatList
-                testID="discovery-venue-carousel"
-                viewabilityConfigCallbackPairs={discoveryViewabilityPairs}
-                style={styles.discoveryCarousel}
-                contentContainerStyle={styles.discoveryCards}
-                data={filteredVenues}
-                horizontal
-                nestedScrollEnabled
-                decelerationRate="fast"
-                keyExtractor={(item) => item.id}
-                snapToInterval={venuePreviewCardWidth(viewportWidth) + VENUE_PREVIEW_CARD_GAP}
-                snapToAlignment="start"
-                showsHorizontalScrollIndicator={false}
-                onEndReached={() => void loadMoreFeed()}
-                onEndReachedThreshold={0.8}
-                scrollEventThrottle={16}
-                initialNumToRender={4}
-                maxToRenderPerBatch={5}
-                windowSize={5}
-                renderItem={({ item }) => (
-                  <View
-                    style={[
-                      styles.discoveryCardSlot,
-                      {
-                        width: venuePreviewCardWidth(viewportWidth),
-                        height: VENUE_PREVIEW_CARD_HEIGHT,
-                        marginRight: VENUE_PREVIEW_CARD_GAP,
-                      },
-                    ]}
-                  >
-                    <VenueCard
-                      activitySurface="discovery"
-                      venue={item}
-                      saved={isSaved(item.id)}
-                      onToggleSaved={() => toggleSaved(item)}
-                      onPress={() => {
-                        router.push({
-                          pathname: '/venue/[id]',
-                          params: {
-                            id: item.id,
-                            venueData: JSON.stringify(withVenueActivityContext(item, 'discovery')),
-                            plannerLocation: liveArea,
-                          },
-                        });
-                      }}
-                      compact
-                      presentation="banging"
-                    />
-                  </View>
-                )}
-              />
-            ) : null}
           </View>
         }
+        renderItem={({ item }) => (
+          <View style={styles.listItem}>
+            <SuggestionRow
+              venue={item}
+              saved={isSaved(item.id)}
+              onToggleSaved={() => toggleSaved(item)}
+              onPress={() => {
+                router.push({
+                  pathname: '/venue/[id]',
+                  params: {
+                    id: item.id,
+                    venueData: JSON.stringify(withVenueActivityContext(item, 'discovery')),
+                    plannerLocation: liveArea,
+                  },
+                });
+              }}
+            />
+          </View>
+        )}
         ListEmptyComponent={
-          filteredVenues.length ? null : <View style={[styles.empty, { backgroundColor: colors.card }]}>
+          <View style={[styles.empty, { backgroundColor: colors.card }]}>
             {liveDiscoveryState === 'loading' || categoryLoading === category ? (
               <>
                 <ActivityIndicator color={colors.green700} size="small" />
@@ -1622,19 +1588,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingBottom: 410,
   },
-  discoveryCarousel: {
-    flexGrow: 0,
-    height: VENUE_PREVIEW_CARD_HEIGHT + 4,
-    marginHorizontal: -18,
-    marginTop: 10,
-  },
-  discoveryCards: {
-    paddingHorizontal: VENUE_PREVIEW_SIDE_PADDING,
-    paddingVertical: 2,
-  },
-  discoveryCardSlot: {
-    alignSelf: 'flex-start',
-  },
   suggestionsHeader: {
     zIndex: 10,
   },
@@ -1811,6 +1764,16 @@ const styles = StyleSheet.create({
     minHeight: 52,
     paddingHorizontal: 12,
     paddingVertical: 14,
+  },
+  listItem: {
+    marginBottom: 0,
+    width: '100%',
+  },
+  listItemLeft: {
+    paddingRight: 0,
+  },
+  listItemRight: {
+    paddingLeft: 0,
   },
   empty: {
     alignItems: 'center',
