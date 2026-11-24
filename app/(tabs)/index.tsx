@@ -60,7 +60,6 @@ import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
 import { bangingClock, isOrganicBangingVenue, rotateBanging } from '@/utils/banging-rotation';
 import { getBangingAreaResults } from '@/utils/banging-area-search';
 import {
-  BANGING_LOCAL_RADIUS_METRES,
   buildBangingFallbackCandidates,
   mergeBangingOrganicResults,
 } from '@/utils/banging-fallback';
@@ -549,7 +548,7 @@ export default function DiscoverScreen() {
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
   const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
-  const [bangingStatus, setBangingStatus] = useState('Finding luxury venues…');
+  const [bangingStatus, setBangingStatus] = useState('Finding flagship restaurants…');
   const [bangingRefreshTick, setBangingRefreshTick] = useState(0);
   const bangingOrigin = useRef('');
   const [bangingPremiumJourneys, setBangingPremiumJourneys] = useState<Record<string, {
@@ -1035,11 +1034,9 @@ export default function DiscoverScreen() {
     const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
     if (bangingOrigin.current !== originKey) {
       bangingOrigin.current = originKey;
-      setBangingSupplement(bangingFallbackCandidates);
+      setBangingSupplement([]);
       setBangingPremiumJourneys({});
-      setBangingStatus(bangingFallbackCandidates.length
-        ? 'Showing nearby picks while the full selection refreshes'
-        : 'Finding luxury venues…');
+      setBangingStatus('Finding flagship restaurants within two hours…');
     }
     const premiumIds = partners.venues
       .filter(venue => venue.banging && venue.premium)
@@ -1050,7 +1047,7 @@ export default function DiscoverScreen() {
       const additional = body.results.flatMap(result => {
         const venue = venueFromSearchResult(result, 'Nearby');
         const meters = distanceBetween(coordinates, venue);
-        if (meters === null || meters > BANGING_LOCAL_RADIUS_METRES) return [];
+        if (meters === null) return [];
         return [{
           ...venue,
           neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
@@ -1066,20 +1063,20 @@ export default function DiscoverScreen() {
         }];
       }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
         && Number.isFinite(venue.distanceMeters));
-      const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, 40);
+      const combined = mergeBangingOrganicResults(additional, [], 40);
       setBangingSupplement(combined);
       setBangingStatus(combined.length >= 40
         ? ''
         : combined.length
-          ? `Showing ${combined.length} local high-end picks`
-          : 'Limited verified local high-end choices');
+          ? `Showing ${combined.length} verified restaurants within two hours`
+          : 'No verified 4.5+ restaurants within two hours');
     }).catch((error: unknown) => {
       if (!active) return;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);
       setBangingSupplement(bangingFallbackCandidates);
       setBangingStatus(bangingFallbackCandidates.length
-        ? `Showing ${bangingFallbackCandidates.length} nearby picks while refreshing`
-        : 'Banging selection is refreshing · try again shortly');
+        ? `Google data unavailable · showing ${bangingFallbackCandidates.length} local picks`
+        : 'Google data unavailable · no cached local high-end restaurants');
       retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
     });
     return () => {
@@ -1131,6 +1128,7 @@ export default function DiscoverScreen() {
   }, [category, safeLiveVenues, safePartnerVenues, priceFilter, sortBy, hasDeferredListings]);
 
   const bangingRotationIdentity = `${coordinates?.latitude.toFixed(4) ?? 'unlocated'}:${coordinates?.longitude.toFixed(4) ?? 'unlocated'}:${bangingOpenCycle}`;
+  const bangingExpansionStage = Math.min(3, Math.max(0, bangingOpenCycle - 1));
   const bangingVenues = useMemo(() => rotateBanging([
     ...partners.venues.filter(venue => venue.banging).map(venue => ({
       ...venue,
@@ -1142,13 +1140,14 @@ export default function DiscoverScreen() {
       premium: false,
       banging: true,
     })),
-  ], new Date(), bangingRotationIdentity), [
+  ], new Date(), bangingRotationIdentity, bangingExpansionStage), [
     partners,
     bangingSupplement,
     bangingPremiumJourneys,
     rotationWindow,
     bangingRefreshTick,
     bangingRotationIdentity,
+    bangingExpansionStage,
   ]);
   useVenueResultAppearances(filteredVenues, 'discovery', !bangingIsOpen,
     `${discoveryGeneration.current}:${category}:${priceFilter}:${sortBy}`);

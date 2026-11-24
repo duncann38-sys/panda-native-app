@@ -5,7 +5,7 @@ export type BangingFallbackOrigin = {
   longitude: number;
 };
 
-export const BANGING_LOCAL_RADIUS_METRES = 25_000;
+const BANGING_OFFLINE_RADIUS_METRES = 25_000;
 const BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant']);
 const HIGH_END_TERMS = /\b(fine dining|michelin|luxury|hotel|rooftop|cocktail|wine bar|tasting menu|destination|upscale)\b/i;
 
@@ -43,7 +43,7 @@ function isLiveFallbackCandidate(venue: Venue, origin: BangingFallbackOrigin) {
   if (!venue.id || !venue.name || venue.source === 'openstreetmap' || venue.id.startsWith('osm:')) return false;
   if (!BANGING_CATEGORIES.has(venue.category) || Number(venue.rating) < 4.5 || !hasHighEndSignal(venue)) return false;
   if (!validCoordinate(venue.latitude, 90) || !validCoordinate(venue.longitude, 180)) return false;
-  return metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) <= BANGING_LOCAL_RADIUS_METRES;
+  return metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) <= BANGING_OFFLINE_RADIUS_METRES;
 }
 
 export function isBangingFallbackVenue(venue: Venue) {
@@ -92,10 +92,9 @@ function safeCuratedSeed(venue: Venue, origin: BangingFallbackOrigin): Venue {
 }
 
 /**
- * Keep real nearby high-end discovery results visible when the separate Banging
- * directory is unavailable. APK 78's approved curated London IDs are the
- * last-resort name list; their synthetic distances, hours and photos are not
- * carried into the fallback cards.
+ * Keep only already-loaded, geolocated local restaurants when the Google-backed
+ * Banging directory is unavailable. Never trust coordinate-less seeds or their
+ * synthetic distances, hours and photos as evidence of a local venue.
  */
 export function buildBangingFallbackCandidates(
   discovery: Venue[],
@@ -126,7 +125,7 @@ export function buildBangingFallbackCandidates(
     if (Number(venue.rating) < 4.5
       || !validCoordinate(venue.latitude, 90)
       || !validCoordinate(venue.longitude, 180)) continue;
-    if (metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) > BANGING_LOCAL_RADIUS_METRES) continue;
+    if (metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) > BANGING_OFFLINE_RADIUS_METRES) continue;
     candidates.set(venue.id, safeCuratedSeed(venue, origin));
   }
   return [...candidates.values()];
