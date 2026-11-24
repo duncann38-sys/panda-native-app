@@ -58,11 +58,45 @@ import { recordVenueActivity, withVenueActivityContext } from '@/utils/record-ve
 import { loadPartnerVenues } from '@/utils/partner-venues';
 import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
 import { bangingClock, isOrganicBangingVenue, rotateBanging } from '@/utils/banging-rotation';
-import { getBangingAreaResults } from '@/utils/banging-area-search';
+import { getBangingAreaResults, readBangingDeviceCache, type BangingResult } from '@/utils/banging-area-search';
 import {
   buildBangingFallbackCandidates,
+  buildBangingCuratedNameFallback,
   mergeBangingOrganicResults,
 } from '@/utils/banging-fallback';
+
+function bangingVenuesFromAreaResults(
+  results: BangingResult[],
+  origin: { latitude: number; longitude: number },
+  excludedIds: ReadonlySet<string>,
+): Venue[] {
+  return results.flatMap(result => {
+    const venue = venueFromSearchResult(result, 'Nearby');
+    const meters = distanceBetween(origin, venue);
+    if (meters === null) return [];
+    return [{
+      ...venue,
+      neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
+      luxurySource: result.luxurySource,
+      bangingTransitMinutes: result.bangingTransitMinutes,
+      bangingVerifiedAt: result.bangingVerifiedAt,
+      bangingFallback: result.bangingFallback === true,
+      cached: result.bangingFallbackSource === 'storage' || venue.cached,
+      ...(result.bangingFallbackSource ? { bangingFallbackSource: result.bangingFallbackSource } : {}),
+      bangingTransitEstimated: result.bangingTransitEstimated === true,
+      distanceMeters: meters,
+      distance: meters < 1000 ? Math.round(meters) + ' m' : (meters / 1000).toFixed(1) + ' km',
+      walkingTime: result.bangingTransitEstimated
+        ? '~' + result.bangingTransitMinutes + ' min estimated reach'
+        : result.bangingTransitMinutes + ' min by public transport',
+      promoted: false,
+      premium: false,
+      banging: true,
+    }];
+  }).filter(venue => !excludedIds.has(venue.id)
+    && (isOrganicBangingVenue(venue) || venue.bangingFallback === true)
+    && Number.isFinite(venue.distanceMeters));
+}
 
 type TopCategory = 'All' | DiscoveryCategory;
 
@@ -548,9 +582,11 @@ export default function DiscoverScreen() {
   const [liveDiscoveryState, setLiveDiscoveryState] = useState<LiveDiscoveryState>('loading');
   const [partners, setPartners] = useState<{ tiers: Record<string, string>; venues: Venue[] }>({ tiers: {}, venues: [] });
   const [bangingSupplement, setBangingSupplement] = useState<Venue[]>([]);
-  const [bangingStatus, setBangingStatus] = useState('Finding luxury venues…');
+  const bangingSupplementRef = useRef(bangingSupplement);
+  bangingSupplementRef.current = bangingSupplement;
+  const [bangingStatus, setBangingStatus] = useState('Finding Banging restaurants…');
   const [bangingRefreshTick, setBangingRefreshTick] = useState(0);
-  const bangingOrigin = useRef('');
+  const bangingOrigin = useRef<{ key: string; latitude: number; longitude: number } | null>(null);
   const [bangingPremiumJourneys, setBangingPremiumJourneys] = useState<Record<string, {
     bangingTransitMinutes: number; bangingVerifiedAt: number;
   }>>({});
@@ -588,10 +624,14 @@ export default function DiscoverScreen() {
   }, []);
   const bangingFallbackCandidates = useMemo(() => buildBangingFallbackCandidates(
     liveVenues,
-    venues.filter(venue => venue.banging && !venue.premium && !venue.promoted),
     coordinates,
     new Set(Object.keys(partners.tiers)),
   ), [liveVenues, coordinates?.latitude, coordinates?.longitude, partners.tiers]);
+  const bangingCuratedFallbackCandidates = useMemo(() => buildBangingCuratedNameFallback(
+    venues.filter(venue => venue.banging && !venue.premium && !venue.promoted),
+    coordinates,
+    new Set(Object.keys(partners.tiers)),
+  ), [coordinates?.latitude, coordinates?.longitude, partners.tiers]);
 
   useEffect(() => {
     if (locationStatus === 'permission-denied' || locationStatus === 'unavailable') return;
@@ -1007,7 +1047,6 @@ export default function DiscoverScreen() {
     const timer = setInterval(() => {
       const clock = bangingClock();
       setRotationWindow(`${clock.day}:${clock.slot}`);
-      setBangingRefreshTick(value => value + 1);
     }, 60_000);
     return () => clearInterval(timer);
   }, []);
@@ -1033,60 +1072,105 @@ export default function DiscoverScreen() {
     let active = true;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
-    if (bangingOrigin.current !== originKey) {
-      bangingOrigin.current = originKey;
-      setBangingSupplement(bangingFallbackCandidates);
+    const previousOrigin = bangingOrigin.current;
+    if (previousOrigin?.key !== originKey) {
+      const canReuseNearbyDeck = previousOrigin !== null
+        && distanceInMeters(previousOrigin, coordinates) <= CACHE_REUSE_DISTANCE_METERS;
+      bangingOrigin.current = { key: originKey, ...coordinates };
+      if (!canReuseNearbyDeck) setBangingSupplement(bangingFallbackCandidates);
+      else if (!bangingSupplementRef.current.length && bangingFallbackCandidates.length) {
+        setBangingSupplement(bangingFallbackCandidates);
+      }
       setBangingPremiumJourneys({});
-      setBangingStatus(bangingFallbackCandidates.length
-        ? 'Showing nearby picks while the full selection refreshes'
-        : 'Finding luxury venues…');
+      setBangingStatus(canReuseNearbyDeck || bangingFallbackCandidates.length
+        ? ''
+        : 'Finding Banging restaurants…');
+    } else if (!bangingSupplementRef.current.length && bangingFallbackCandidates.length) {
+      // Restore the already-loaded nearby cache immediately while the
+      // Google-backed two-hour selection refreshes in the background.
+      setBangingSupplement(bangingFallbackCandidates);
+      setBangingStatus('');
     }
     const premiumIds = partners.venues
       .filter(venue => venue.banging && venue.premium)
       .map(venue => venue.id);
+    const targetCount = premiumIds.length ? 40 : 50;
+    let freshFeedApplied = false;
+    void readBangingDeviceCache(coordinates, premiumIds.length).then(saved => {
+      if (!active || freshFeedApplied || !saved?.results.length) return;
+      const cached = bangingVenuesFromAreaResults(
+        saved.results,
+        coordinates,
+        new Set(Object.keys(partners.tiers)),
+      );
+      const cachedFirst = mergeBangingOrganicResults(cached, bangingFallbackCandidates, targetCount);
+      if (!cachedFirst.length) return;
+      setBangingSupplement(cachedFirst);
+      setBangingStatus('Stored Banging picks · estimated travel');
+    }).catch(() => {});
     void getBangingAreaResults(coordinates, premiumIds).then(body => {
       if (!active) return;
+      freshFeedApplied = true;
       setBangingPremiumJourneys(body.premiumJourneys);
-      const additional = body.results.flatMap(result => {
-        const venue = venueFromSearchResult(result, 'Nearby');
-        const meters = distanceBetween(coordinates, venue);
-        if (meters === null) return [];
-        return [{
-          ...venue,
-          neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
-          luxurySource: result.luxurySource,
-          bangingTransitMinutes: result.bangingTransitMinutes,
-          bangingVerifiedAt: result.bangingVerifiedAt,
-          distanceMeters: meters,
-          distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
-          walkingTime: `${result.bangingTransitMinutes} min by public transport`,
-          promoted: false,
-          premium: false,
-          banging: true,
-        }];
-      }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
-        && Number.isFinite(venue.distanceMeters));
-      const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, 40);
+      const additional = bangingVenuesFromAreaResults(
+        body.results,
+        coordinates,
+        new Set(Object.keys(partners.tiers)),
+      );
+      const organicTarget = premiumIds.length ? 40 : 50;
+      const hasFreshGoogleResults = body.results.some(result =>
+        result.bangingFallback !== true && result.bangingFallbackSource !== 'storage');
+      const canUseCuratedFallback = !hasFreshGoogleResults && (body.travelMode === 'estimated'
+        || body.fallbackReason?.startsWith('google_unavailable')
+        || body.fallbackReason?.startsWith('google_error'));
+      const primaryAndNearby = mergeBangingOrganicResults(additional, bangingFallbackCandidates, organicTarget);
+      const combined = mergeBangingOrganicResults(
+        primaryAndNearby,
+        canUseCuratedFallback ? bangingCuratedFallbackCandidates : [],
+        organicTarget,
+      );
       setBangingSupplement(combined);
-      setBangingStatus(combined.length >= 40 || body.complete
-        ? ''
-        : combined.length
-          ? `Showing ${combined.length} nearby picks while the full selection refreshes`
-          : 'Limited verified luxury choices in this area');
-    }).catch((error: unknown) => {
+      const estimated = combined.some(venue => venue.bangingTransitEstimated === true);
+      const curatedShown = combined.some(venue => venue.bangingFallbackSource === 'curated');
+      setBangingStatus(curatedShown
+        ? 'Curated fallback · live details unavailable'
+        : combined.length >= organicTarget
+          ? estimated ? 'Stored Banging picks · travel estimates' : ''
+          : combined.length
+            ? 'Showing ' + combined.length + ' high-end picks' + (estimated ? ' · estimated reach' : '')
+            : (body.fallbackReason?.startsWith('google_unavailable') || body.fallbackReason?.startsWith('google_error'))
+              ? 'Google unavailable · no stored high-end restaurants in reach'
+              : 'No high-end restaurants found in reach');
+      if (body.travelMode === 'estimated' && body.results.length) {
+        retryTimer = setTimeout(
+          () => setBangingRefreshTick(tick => tick + 1),
+          5 * 60 * 1000 + 250,
+        );
+      }
+    }).catch(async (error: unknown) => {
       if (!active) return;
+      freshFeedApplied = true;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);
-      setBangingSupplement(bangingFallbackCandidates);
-      setBangingStatus(bangingFallbackCandidates.length
-        ? `Showing ${bangingFallbackCandidates.length} nearby picks while refreshing`
-        : 'Banging selection is refreshing · try again shortly');
+      const saved = await readBangingDeviceCache(coordinates, premiumIds.length);
+      const cached = saved
+        ? bangingVenuesFromAreaResults(saved.results, coordinates, new Set(Object.keys(partners.tiers)))
+        : [];
+      const firstFill = mergeBangingOrganicResults(cached, bangingFallbackCandidates, targetCount);
+      const combined = mergeBangingOrganicResults(firstFill, bangingCuratedFallbackCandidates, targetCount);
+      setBangingSupplement(combined);
+      const curatedShown = combined.some(venue => venue.bangingFallbackSource === 'curated');
+      setBangingStatus(curatedShown
+        ? 'Curated fallback · live details unavailable'
+        : combined.length
+          ? 'Google unavailable · showing ' + combined.length + ' local or saved picks'
+          : 'Google unavailable · no cached Banging picks');
       retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
     });
     return () => {
       active = false;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, partners.tiers, rotationWindow, bangingRefreshTick, bangingFallbackCandidates]);
+  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, partners.tiers, rotationWindow, bangingRefreshTick, bangingFallbackCandidates, bangingCuratedFallbackCandidates]);
 
   const orderedCategories = useMemo(() => {
     return orderDiscoveryCategories(categories, categoryDayPart);

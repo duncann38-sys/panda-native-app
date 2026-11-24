@@ -24,8 +24,9 @@ function loadTypeScript(relativePath) {
 
 const { rotateBanging } = loadTypeScript('utils/banging-rotation.ts');
 const { normalizeBangingVenueList } = loadTypeScript('utils/discovery-data-safety.ts');
+const { venues } = loadTypeScript('data/venues.ts');
 const { minimalPartnerVenue } = loadTypeScript('utils/partner-venue-fallback.ts');
-const { buildBangingFallbackCandidates, mergeBangingOrganicResults } = loadTypeScript('utils/banging-fallback.ts');
+const { buildBangingFallbackCandidates, buildBangingCuratedNameFallback, mergeBangingOrganicResults } = loadTypeScript('utils/banging-fallback.ts');
 const now = new Date('2026-10-10T00:00:00Z');
 
 function venue(id, extra = {}) {
@@ -102,46 +103,70 @@ test('organic Banging results do not require photos or display copy', () => {
   assert.ok(rotateBanging([organic], now).some(item => item.id === 'organic-no-photo'));
 });
 
-test('organic Banging keeps APK 102 rating and hospitality-category eligibility', () => {
+test('organic Banging cards require 4.5+ restaurant results', () => {
   const belowFloor = venue('below-floor', { rating: '4.4' });
   const bar = venue('bar', { category: 'Bar' });
-  const ids = rotateBanging([belowFloor, bar], now).map(item => item.id).sort();
-  assert.deepEqual(ids, ['bar', 'below-floor']);
+  assert.deepEqual(rotateBanging([belowFloor, bar], now), []);
 });
 
-test('nearby and APK 78 curated fallbacks create forty organic slots without photos', () => {
-  const seeds = Array.from({ length: 31 }, (_, index) => venue(`seed-${index}`, {
-    latitude: undefined,
-    longitude: undefined,
-    bangingTransitMinutes: undefined,
-    bangingVerifiedAt: undefined,
-    photoNames: [{ name: `old-photo-${index}`, attribution: 'Old photo' }],
+test('APK102 name-only curated cards survive only as a clean last-resort fallback', () => {
+  const seeds = Array.from({ length: 31 }, (_, index) => venue('seed-' + index, {
+    latitude: undefined, longitude: undefined, rating: '4.8', ratingCount: 520,
+    price: '£££', bangingTransitMinutes: undefined, bangingVerifiedAt: undefined,
+    photoNames: [{ name: 'stale-photo-' + index, attribution: 'Old photo' }],
   }));
-  const live = Array.from({ length: 9 }, (_, index) => venue(`live-${index}`, {
-    latitude: 51.5,
-    longitude: -0.1,
-    price: '£££',
-    photoNames: [],
-    bangingTransitMinutes: 20,
-    bangingVerifiedAt: now.getTime(),
+  const live = Array.from({ length: 9 }, (_, index) => venue('nearby-' + index, {
+    latitude: 51.5, longitude: -0.1, rating: '4.6', price: '£££', photoNames: [],
   }));
-  const fallback = buildBangingFallbackCandidates(
-    live,
-    seeds,
-    { latitude: 51.50, longitude: -0.10 },
-  );
-  assert.equal(fallback.length, 40);
-  assert.ok(fallback.every(item => item.bangingFallback && item.banging && !item.premium));
-  assert.equal(fallback.find(item => item.id === 'seed-0').photoNames.length, 0);
-  assert.equal(fallback.find(item => item.id === 'seed-0').walkingTime, 'Travel details unavailable');
-  assert.equal(fallback.find(item => item.id === 'seed-0').bangingTransitMinutes, undefined);
+  const origin = { latitude: 51.50, longitude: -0.10 };
+  const bundledSeeds = venues.filter(item => item.banging && !item.premium && !item.promoted);
+  const bundledOfflinePool = buildBangingCuratedNameFallback(bundledSeeds, origin);
+  assert.equal(bundledSeeds.length, 31);
+  assert.equal(bundledOfflinePool.length, 30);
+  assert.ok(!bundledOfflinePool.some(item => /prezzo/i.test(item.name)));
+  const nearby = buildBangingFallbackCandidates(live, origin);
+  const curated = buildBangingCuratedNameFallback(seeds, origin);
+  const otherCityCurated = buildBangingCuratedNameFallback(seeds, { latitude: 53.48, longitude: -2.24 });
 
-  const premium = Array.from({ length: 10 }, (_, index) => venue(`paid-${index}`, {
+  assert.equal(nearby.length, 9);
+  assert.equal(curated.length, 31);
+  assert.equal(otherCityCurated.length, 0);
+  assert.ok(curated.every(item => item.bangingFallbackSource === 'curated'));
+  assert.ok(curated.every(item => item.latitude === undefined && item.longitude === undefined));
+  assert.ok(curated.every(item => item.rating === '' && item.ratingCount === 0 && item.price === ''));
+  assert.ok(curated.every(item => item.photoNames.length === 0 && item.photoUris.length === 0));
+  assert.ok(curated.every(item => item.walkingTime === 'Travel details unavailable'));
+
+  const premium = Array.from({ length: 10 }, (_, index) => venue('paid-' + index, {
     premium: true, promoted: true, bangingTransitMinutes: undefined, bangingVerifiedAt: undefined,
   }));
-  const combined = mergeBangingOrganicResults([], fallback);
-  const deck = rotateBanging([...combined, ...premium], now);
+  const organic = mergeBangingOrganicResults(nearby, curated, 40);
+  const deck = rotateBanging([...organic, ...premium], now, 'offline-fallback');
+  assert.equal(organic.length, 40);
   assert.equal(deck.length, 50);
+  assert.ok(deck.findIndex(item => item.bangingFallbackSource === 'curated')
+    > deck.findIndex(item => item.bangingFallbackSource === 'nearby'));
+  deck.forEach((item, index) => assert.equal(item.premium, (index + 1) % 5 === 0));
+});
+
+test('cached local Banging picks fill the mixed 50-card deck after verified results', () => {
+  const verified = Array.from({ length: 12 }, (_, index) =>
+    venue(`verified-${index}`, { rating: '4.8', ratingCount: 400, price: '£££' }));
+  const fallback = Array.from({ length: 28 }, (_, index) =>
+    venue(`cached-${index}`, {
+      bangingFallback: true,
+      bangingTransitMinutes: undefined,
+      bangingVerifiedAt: undefined,
+      price: '£££',
+    }));
+  const premium = Array.from({ length: 10 }, (_, index) =>
+    venue(`paid-fill-${index}`, { premium: true, promoted: true }));
+  const organic = mergeBangingOrganicResults(verified, fallback, 40);
+  const deck = rotateBanging([...organic, ...premium], now, 'cached-fill');
+
+  assert.equal(organic.length, 40);
+  assert.equal(deck.length, 50);
+  assert.ok(deck.slice(0, 4).every(item => !item.bangingFallback));
   deck.forEach((item, index) => {
     assert.equal(item.premium, (index + 1) % 5 === 0);
   });
@@ -156,14 +181,12 @@ test('live fallback requires a high-end nearby hospitality result and excludes a
   ];
   const fallback = buildBangingFallbackCandidates(
     live,
-    [],
     { latitude: 51.5, longitude: -0.1 },
     new Set(['high-end-no-photo']),
   );
   assert.deepEqual(fallback, []);
   const visible = buildBangingFallbackCandidates(
     live,
-    [],
     { latitude: 51.5, longitude: -0.1 },
   );
   assert.deepEqual(visible.map(item => item.id), ['high-end-no-photo']);

@@ -1,5 +1,11 @@
 import type { Venue } from '@/data/venues';
 
+const UPSCALE_CLUSTER_RADIUS_METRES = 1_800;
+const MIN_UPSCALE_CLUSTER_VENUES = 3;
+const HIGH_END_DINING_SIGNAL = /\b(fine dining|tasting menu|michelin|chef'?s table|omakase|upscale|luxury hotel|destination dining|private dining)\b/i;
+const FAST_CASUAL_OR_TAKEAWAY = /\b(fast[- ]?food|quick service|take[- ]?away|meal takeaway|drive[- ]?thru|food court)\b/i;
+const KNOWN_CHAINS = /\b(mcdonald'?s|kfc|burger king|subway|domino'?s|pizza hut|pizza ?express|zizzi|prezzo|ask italian|bella italia|frankie and benny'?s|tgi fridays|wagamama|nando'?s|five guys|taco bell|leon|itsu|greggs|pret a manger|costa coffee|starbucks|caffe nero|shake shack|papa john'?s|yo!? sushi)\b/i;
+
 export function bangingClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -15,6 +21,35 @@ function hash(value: string) {
   return result >>> 0;
 }
 
+function priceLevel(venue: Venue) {
+  return (String(venue.price || '').match(/[£$]/g) || []).length;
+}
+
+function isChainOrCasualVenue(venue: Venue) {
+  const identity = `${venue.name} ${venue.type} ${venue.feature}`;
+  return FAST_CASUAL_OR_TAKEAWAY.test(identity) || KNOWN_CHAINS.test(venue.name);
+}
+
+function hasHighEndDiningSignal(venue: Venue) {
+  return Boolean(venue.luxurySource) ||
+    (priceLevel(venue) >= 3 && HIGH_END_DINING_SIGNAL.test(`${venue.name} ${venue.type} ${venue.feature}`));
+}
+
+function validLocation(venue: Venue) {
+  return Number.isFinite(venue.latitude) && Number.isFinite(venue.longitude)
+    && Math.abs(venue.latitude!) <= 90 && Math.abs(venue.longitude!) <= 180;
+}
+
+function distanceBetweenMetres(first: Venue, second: Venue) {
+  const radians = (value: number) => value * Math.PI / 180;
+  const latitudeDelta = radians(second.latitude! - first.latitude!);
+  const longitudeDelta = radians(second.longitude! - first.longitude!);
+  const arc = Math.sin(latitudeDelta / 2) ** 2
+    + Math.cos(radians(first.latitude!)) * Math.cos(radians(second.latitude!))
+      * Math.sin(longitudeDelta / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(arc), Math.sqrt(1 - arc));
+}
+
 export function hasBangingJourney(venue: Venue, now = Date.now()) {
   return Number.isFinite(venue.bangingTransitMinutes) && venue.bangingTransitMinutes! > 0 &&
     venue.bangingTransitMinutes! <= 120 && Number.isFinite(venue.bangingVerifiedAt) &&
@@ -23,18 +58,48 @@ export function hasBangingJourney(venue: Venue, now = Date.now()) {
 
 export function isOrganicBangingVenue(venue: Venue, now = Date.now()) {
   return !venue.promoted && !venue.premium &&
-    Number(venue.rating) >= 4.3 && Boolean(venue.luxurySource) &&
+    Number(venue.rating) >= 4.5 && Number(venue.rating) <= 5 &&
+    hasHighEndDiningSignal(venue) && !isChainOrCasualVenue(venue) &&
     hasBangingJourney(venue, now) &&
-    ['Restaurant', 'Bar', 'Pub'].includes(venue.category);
+    venue.category === 'Restaurant';
 }
 
 function isBangingFallbackVenue(venue: Venue) {
+  const curatedNameOnly = venue.bangingFallback === true
+    && venue.bangingFallbackSource === 'curated'
+    && venue.banging === true
+    && venue.premium !== true
+    && venue.promoted !== true
+    && Boolean(venue.id && venue.name)
+    && venue.detailsDeferred === true
+    && venue.rating === ''
+    && venue.price === ''
+    && !Number.isFinite(venue.latitude)
+    && !Number.isFinite(venue.longitude)
+    && (venue.category === 'Restaurant' || venue.category === 'Bar' || venue.category === 'Pub');
+  if (curatedNameOnly) return true;
   return venue.bangingFallback === true
     && venue.banging === true
     && venue.premium !== true
     && venue.promoted !== true
     && Boolean(venue.id && venue.name)
-    && ['Restaurant', 'Bar', 'Pub'].includes(venue.category);
+    && Number(venue.rating) >= 4.5
+    && Number(venue.rating) <= 5
+    && validLocation(venue)
+    && hasHighEndDiningSignal(venue)
+    && !isChainOrCasualVenue(venue)
+    && venue.category === 'Restaurant';
+}
+
+export function isBangingUpscaleClusterVenue(venue: Venue, pool: Venue[]) {
+  if (!validLocation(venue) || priceLevel(venue) < 3 || isChainOrCasualVenue(venue)) return false;
+  let upscaleNeighbours = 0;
+  for (const candidate of pool) {
+    if (candidate.id === venue.id || !validLocation(candidate)
+      || priceLevel(candidate) < 3 || isChainOrCasualVenue(candidate)) continue;
+    if (distanceBetweenMetres(venue, candidate) <= UPSCALE_CLUSTER_RADIUS_METRES) upscaleNeighbours += 1;
+  }
+  return upscaleNeighbours + 1 >= MIN_UPSCALE_CLUSTER_VENUES;
 }
 
 export function rotateBanging(
@@ -49,26 +114,49 @@ export function rotateBanging(
   const premium = unique.filter(venue => venue.banging && venue.premium);
   const eligible = unique.filter(venue =>
     isOrganicBangingVenue(venue, now.getTime()) || isBangingFallbackVenue(venue));
-  const stable = eligible.sort((a, b) => hash(`${identity}:${a.id}`) - hash(`${identity}:${b.id}`));
-  const start = stable.length ? Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) % stable.length : 0;
-  const daily = [...stable.slice(start), ...stable.slice(0, start)];
-  const targetCount = premium.length ? 40 : 50;
-  const hasLocalFallback = daily.some(venue => venue.bangingFallback === true);
-  const count = daily.length >= targetCount ? targetCount
-    : hasLocalFallback || premium.length ? daily.length
-      : Math.min(daily.length, Math.max(2, Math.floor(daily.length * 0.75)));
-  const organic = daily.slice(0, count);
-  const rotate = (pool: Venue[]) => {
-    const shift = pool.length ? slot % pool.length : 0;
-    return [...pool.slice(shift), ...pool.slice(0, shift)];
+  const rankable = eligible.filter(venue =>
+    venue.bangingFallback !== true || venue.bangingFallbackSource === 'storage');
+  const localFallback = eligible.filter(venue =>
+    venue.bangingFallback === true && venue.bangingFallbackSource !== 'storage');
+  const ratingValue = (venue: Venue) => {
+    const rating = Number.parseFloat(venue.rating);
+    return Number.isFinite(rating) ? rating : Number.NEGATIVE_INFINITY;
   };
-  const paidStart = premium.length ? (Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) * 6 + slot) % premium.length : 0;
+  const reviewVolume = (venue: Venue) => Number.isFinite(venue.ratingCount) ? venue.ratingCount : 0;
+  const stableSort = (pool: Venue[]) => [...pool].sort((a, b) =>
+    ratingValue(b) - ratingValue(a) || reviewVolume(b) - reviewVolume(a)
+      || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
+  const expensiveCluster = new Set(rankable
+    .filter(venue => isBangingUpscaleClusterVenue(venue, eligible))
+    .map(venue => venue.id));
+  const flagship = stableSort(rankable.filter(venue =>
+    ratingValue(venue) >= 4.8 && ratingValue(venue) <= 5
+      && reviewVolume(venue) >= 200 && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
+  const otherFlagshipRated = stableSort(rankable.filter(venue =>
+    ratingValue(venue) >= 4.8 && !flagship.some(item => item.id === venue.id)));
+  const clusteredUpscale = stableSort(rankable.filter(venue =>
+    ratingValue(venue) >= 4.5 && ratingValue(venue) < 4.8
+      && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
+  const widerUpscale = stableSort(rankable.filter(venue =>
+    ratingValue(venue) >= 4.5 && !flagship.some(item => item.id === venue.id)
+      && !otherFlagshipRated.some(item => item.id === venue.id)
+      && !clusteredUpscale.some(item => item.id === venue.id)));
+  const localFallbackRanked = stableSort(localFallback);
+  const dayNumber = Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000);
+  const tiers = [flagship, otherFlagshipRated, clusteredUpscale, widerUpscale, localFallbackRanked];
+  // Keep the complete 50-card deck available on the first open. The tiers
+  // determine ranking, not whether lower-ranked quality results are hidden.
+  const selected = tiers.flat();
+  const targetCount = premium.length ? 40 : 50;
+  const free = selected.slice(0, targetCount);
+  const paidStart = premium.length
+    ? (dayNumber * 6 + slot + hash(identity)) % premium.length
+    : 0;
   const paid = [...premium.slice(paidStart), ...premium.slice(0, paidStart)];
   // Never bunch Premium cards together to fill missing organic slots. When
   // there are no organic cards at all, retain a Premium-only fallback; with
   // one to three organic cards, show those honestly rather than misplacing
   // Premium cards before their fifth slot.
-  const free = rotate(organic);
   if (paid.length && free.length > 0 && free.length < 4) return free;
   if (paid.length && free.length === 0) return paid;
   const result: Venue[] = [];
