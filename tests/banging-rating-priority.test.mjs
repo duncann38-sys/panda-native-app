@@ -9,16 +9,15 @@ const banging = await import('data:text/javascript;base64,' + Buffer.from(javasc
 const venue = (id, rating, premium = false) => ({
   id, name: id, category: 'Restaurant', rating: String(rating), premium,
   promoted: false, banging: true, bangingFallback: !premium,
+  latitude: 51.5, longitude: -0.1,
 });
 const now = new Date(2026, 10, 24, 12, 0);
 
-test('Banging prefers 4.5-plus venues and broadens with lower ratings when needed', () => {
+test('Banging excludes venues below 4.5 and keeps the highest rating bands first', () => {
   const results = banging.rotateBanging([
     venue('lower-44', 4.4), venue('high-46', 4.6), venue('lower-43', 4.3), venue('high-48', 4.8),
   ], now, 'rating-test');
-  assert.equal(results.length, 4);
-  assert.ok(results.slice(0, 2).every((item) => Number(item.rating) >= 4.5));
-  assert.ok(results.slice(2).some((item) => Number(item.rating) < 4.5));
+  assert.deepEqual(results.map(item => item.id), ['high-48', 'high-46']);
 });
 
 test('Premium cards still appear at the fifth slot', () => {

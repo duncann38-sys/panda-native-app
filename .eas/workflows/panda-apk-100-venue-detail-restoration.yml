@@ -1,11 +1,11 @@
-name: Panda 104 - Discovery restoration and venue details
+name: Panda 105 - Local high-end Banging refresh
 on:
   push:
     branches:
       - panda-apk-100-venue-detail-restoration
 jobs:
   build_android_preview:
-    name: Panda 104 Venue Preview Android APK
+    name: Panda 105 Banging Preview Android APK
     type: build
     params:
       platform: android

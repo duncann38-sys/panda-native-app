@@ -23,9 +23,9 @@ export function hasBangingJourney(venue: Venue, now = Date.now()) {
 
 export function isOrganicBangingVenue(venue: Venue, now = Date.now()) {
   return !venue.promoted && !venue.premium &&
-    Number(venue.rating) >= 4.3 && Boolean(venue.luxurySource) &&
+    Number(venue.rating) >= 4.5 && Boolean(venue.luxurySource) &&
     hasBangingJourney(venue, now) &&
-    ['Restaurant', 'Bar', 'Pub'].includes(venue.category);
+    venue.category === 'Restaurant';
 }
 
 function isBangingFallbackVenue(venue: Venue) {
@@ -34,7 +34,10 @@ function isBangingFallbackVenue(venue: Venue) {
     && venue.premium !== true
     && venue.promoted !== true
     && Boolean(venue.id && venue.name)
-    && ['Restaurant', 'Bar', 'Pub'].includes(venue.category);
+    && Number(venue.rating) >= 4.5
+    && Number.isFinite(venue.latitude)
+    && Number.isFinite(venue.longitude)
+    && venue.category === 'Restaurant';
 }
 
 export function rotateBanging(source: Venue[], now = new Date(), identity = 'panda') {
@@ -49,17 +52,17 @@ export function rotateBanging(source: Venue[], now = new Date(), identity = 'pan
     const rating = Number.parseFloat(venue.rating);
     return Number.isFinite(rating) ? rating : Number.NEGATIVE_INFINITY;
   };
+  const ratingBand = (venue: Venue) => {
+    const rating = ratingValue(venue);
+    return rating >= 4.8 ? 0 : rating >= 4.6 ? 1 : rating >= 4.5 ? 2 : 3;
+  };
   const stableSort = (pool: Venue[]) => [...pool].sort((a, b) =>
-    ratingValue(b) - ratingValue(a) || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
+    ratingBand(a) - ratingBand(b) || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
   const preferred = stableSort(eligible.filter(venue => ratingValue(venue) >= 4.5));
   const broader = stableSort(eligible.filter(venue => ratingValue(venue) < 4.5));
   const dayNumber = Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000);
-  const rotateDaily = (pool: Venue[], offset: number) => {
-    const start = pool.length ? offset % pool.length : 0;
-    return [...pool.slice(start), ...pool.slice(0, start)];
-  };
-  const dailyPreferred = rotateDaily(preferred, dayNumber);
-  const dailyBroader = rotateDaily(broader, dayNumber + preferred.length);
+  const dailyPreferred = preferred;
+  const dailyBroader = broader;
   const daily = [...dailyPreferred, ...dailyBroader];
   const targetCount = premium.length ? 40 : 50;
   const hasLocalFallback = daily.some(venue => venue.bangingFallback === true);
@@ -69,10 +72,20 @@ export function rotateBanging(source: Venue[], now = new Date(), identity = 'pan
   const preferredOrganic = dailyPreferred.slice(0, Math.min(count, dailyPreferred.length));
   const broaderOrganic = dailyBroader.slice(0, Math.max(0, count - preferredOrganic.length));
   const rotate = (pool: Venue[]) => {
-    const shift = pool.length ? slot % pool.length : 0;
-    return [...pool.slice(shift), ...pool.slice(0, shift)];
+    const tiers = [
+      pool.filter(venue => ratingValue(venue) >= 4.8),
+      pool.filter(venue => ratingValue(venue) >= 4.6 && ratingValue(venue) < 4.8),
+      pool.filter(venue => ratingValue(venue) >= 4.5 && ratingValue(venue) < 4.6),
+      pool.filter(venue => ratingValue(venue) < 4.5),
+    ];
+    return tiers.flatMap((tier, index) => {
+      const shift = tier.length ? (hash(identity) + slot + index) % tier.length : 0;
+      return [...tier.slice(shift), ...tier.slice(0, shift)];
+    });
   };
-  const paidStart = premium.length ? (Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000) * 6 + slot) % premium.length : 0;
+  const paidStart = premium.length
+    ? (dayNumber * 6 + slot + hash(identity)) % premium.length
+    : 0;
   const paid = [...premium.slice(paidStart), ...premium.slice(0, paidStart)];
   const free = [...rotate(preferredOrganic), ...rotate(broaderOrganic)];
   // Never bunch Premium cards together to fill missing organic slots. When
