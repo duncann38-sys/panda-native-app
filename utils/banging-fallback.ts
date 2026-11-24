@@ -5,7 +5,7 @@ export type BangingFallbackOrigin = {
   longitude: number;
 };
 
-const BANGING_OFFLINE_RADIUS_METRES = 25_000;
+const BANGING_OFFLINE_RADIUS_METRES = 50_000;
 const BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant']);
 const HIGH_END_TERMS = /\b(fine dining|michelin|luxury|hotel|rooftop|cocktail|wine bar|tasting menu|destination|upscale)\b/i;
 
@@ -24,6 +24,11 @@ function metresBetween(
     + Math.cos(radians(first.latitude)) * Math.cos(radians(second.latitude))
       * Math.sin(longitude / 2) ** 2;
   return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function estimatedTransitMinutes(distanceMeters: number) {
+  const estimate = Math.ceil(15 + (distanceMeters / 1_000) * 2.1);
+  return estimate > 0 && estimate < 120 ? estimate : null;
 }
 
 function validOrigin(origin: BangingFallbackOrigin | null | undefined): origin is BangingFallbackOrigin {
@@ -60,11 +65,12 @@ function safeCuratedSeed(venue: Venue, origin: BangingFallbackOrigin): Venue {
     latitude: venue.latitude!,
     longitude: venue.longitude!,
   });
+  const estimatedMinutes = estimatedTransitMinutes(distanceMeters);
   return {
     ...venue,
     neighborhood: '',
     distance: distanceMeters < 1000 ? `${Math.round(distanceMeters)} m` : `${(distanceMeters / 1000).toFixed(1)} km`,
-    walkingTime: 'Travel details unavailable',
+    walkingTime: estimatedMinutes === null ? 'Travel estimate unavailable' : `~${estimatedMinutes} min estimated reach`,
     distanceMeters,
     description: '',
     hours: '',
@@ -79,8 +85,9 @@ function safeCuratedSeed(venue: Venue, origin: BangingFallbackOrigin): Venue {
     banging: true,
     promoted: false,
     luxurySource: undefined,
-    bangingTransitMinutes: undefined,
+    bangingTransitMinutes: estimatedMinutes ?? undefined,
     bangingVerifiedAt: undefined,
+    bangingTransitEstimated: estimatedMinutes !== null,
     photoAttributions: [],
     photoName: undefined,
     photoCount: 0,
@@ -107,14 +114,18 @@ export function buildBangingFallbackCandidates(
   for (const venue of discovery) {
     if (excludedIds.has(venue.id) || venue.premium || venue.promoted) continue;
     if (!isLiveFallbackCandidate(venue, origin)) continue;
+    const distanceMeters = metresBetween(origin, { latitude: venue.latitude!, longitude: venue.longitude! });
+    const estimatedMinutes = estimatedTransitMinutes(distanceMeters);
+    if (estimatedMinutes === null) continue;
     candidates.set(venue.id, {
       ...venue,
       premium: false,
       banging: true,
       promoted: false,
-      bangingTransitMinutes: undefined,
+      bangingTransitMinutes: estimatedMinutes,
       bangingVerifiedAt: undefined,
-      walkingTime: 'Travel details unavailable',
+      bangingTransitEstimated: true,
+      walkingTime: `~${estimatedMinutes} min estimated reach`,
       bangingFallback: true,
     });
   }
@@ -126,6 +137,8 @@ export function buildBangingFallbackCandidates(
       || !validCoordinate(venue.latitude, 90)
       || !validCoordinate(venue.longitude, 180)) continue;
     if (metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) > BANGING_OFFLINE_RADIUS_METRES) continue;
+    const distanceMeters = metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude });
+    if (estimatedTransitMinutes(distanceMeters) === null) continue;
     candidates.set(venue.id, safeCuratedSeed(venue, origin));
   }
   return [...candidates.values()];

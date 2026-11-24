@@ -133,8 +133,9 @@ test('fallback keeps only rated, geolocated local venues and never trusts coordi
   assert.ok(fallback.every(item => item.bangingFallback && item.banging && !item.premium));
   assert.equal(fallback.some(item => item.id.startsWith('seed-')), false);
   assert.equal(fallback.find(item => item.id === 'live-0').photoNames.length, 0);
-  assert.equal(fallback.find(item => item.id === 'live-0').walkingTime, 'Travel details unavailable');
-  assert.equal(fallback.find(item => item.id === 'live-0').bangingTransitMinutes, undefined);
+  assert.equal(fallback.find(item => item.id === 'live-0').walkingTime, '~15 min estimated reach');
+  assert.equal(fallback.find(item => item.id === 'live-0').bangingTransitMinutes, 15);
+  assert.equal(fallback.find(item => item.id === 'live-0').bangingTransitEstimated, true);
 
   const premium = Array.from({ length: 10 }, (_, index) => venue(`paid-${index}`, {
     premium: true, promoted: true, bangingTransitMinutes: undefined, bangingVerifiedAt: undefined,

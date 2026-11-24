@@ -1069,23 +1069,40 @@ export default function DiscoverScreen() {
           luxurySource: result.luxurySource,
           bangingTransitMinutes: result.bangingTransitMinutes,
           bangingVerifiedAt: result.bangingVerifiedAt,
+          bangingFallback: result.bangingFallback === true,
+          ...(result.bangingFallbackSource === 'storage'
+            ? { bangingFallbackSource: 'storage' as const }
+            : {}),
+          bangingTransitEstimated: result.bangingTransitEstimated === true,
           distanceMeters: meters,
           distance: meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(1)} km`,
-          walkingTime: `${result.bangingTransitMinutes} min by public transport`,
+          walkingTime: result.bangingTransitEstimated
+            ? `~${result.bangingTransitMinutes} min estimated reach`
+            : `${result.bangingTransitMinutes} min by public transport`,
           promoted: false,
           premium: false,
           banging: true,
         }];
-      }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
+      }).filter(venue => !partners.tiers[venue.id]
+        && (isOrganicBangingVenue(venue) || venue.bangingFallback === true)
         && Number.isFinite(venue.distanceMeters));
       const organicTarget = premiumIds.length ? 40 : 50;
       const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, organicTarget);
       setBangingSupplement(combined);
+      const estimated = combined.some(venue => venue.bangingTransitEstimated === true);
       setBangingStatus(combined.length >= organicTarget
-        ? ''
+        ? estimated ? 'Stored Banging picks · travel estimates' : ''
         : combined.length
-          ? `Showing ${combined.length} Banging restaurants`
-          : 'No verified high-end restaurants found yet');
+          ? `Showing ${combined.length} high-end picks${estimated ? ' · estimated reach' : ''}`
+          : body.fallbackReason?.startsWith('google_unavailable')
+            ? 'Google unavailable · no stored high-end restaurants in reach'
+            : 'No high-end restaurants found in reach');
+      if (body.travelMode === 'estimated' && body.results.length) {
+        retryTimer = setTimeout(
+          () => setBangingRefreshTick(tick => tick + 1),
+          5 * 60 * 1000 + 250,
+        );
+      }
     }).catch((error: unknown) => {
       if (!active) return;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);

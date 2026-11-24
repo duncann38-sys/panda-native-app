@@ -69,3 +69,26 @@ test('Banging produces a full 50-card deck with 40 organic and Premium every fif
     assert.equal(item.premium, (index + 1) % 5 === 0);
   });
 });
+
+test('stored estimated venues keep flagship ranking and still fill Premium fifth slots', () => {
+  const stored = Array.from({ length: 40 }, (_, index) =>
+    venue(`stored-${index}`, index < 3 ? 4.9 - index / 10 : 4.6, false, {
+      bangingFallback: true,
+      bangingFallbackSource: 'storage',
+      bangingTransitEstimated: true,
+      bangingTransitMinutes: 25 + index,
+      bangingVerifiedAt: undefined,
+      latitude: 51.5 + (index % 3) / 1000,
+      longitude: -0.1 + (index % 3) / 1000,
+    }));
+  const premium = Array.from({ length: 10 }, (_, index) =>
+    venue(`stored-premium-${index}`, 4.7, true, { promoted: true }));
+
+  const deck = banging.rotateBanging([...stored, ...premium], now, 'stored-fallback');
+
+  assert.equal(deck.length, 50);
+  assert.equal(deck[0].id, 'stored-0');
+  deck.forEach((item, index) => {
+    assert.equal(item.premium, (index + 1) % 5 === 0);
+  });
+});

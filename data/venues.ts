@@ -44,6 +44,8 @@ export type Venue = {
   bangingTransitMinutes?: number;
   bangingVerifiedAt?: number;
   bangingFallback?: boolean;
+  bangingFallbackSource?: 'storage';
+  bangingTransitEstimated?: boolean;
   photoAttributions: string[];
   photoName?: string;
   photoCount?: number;

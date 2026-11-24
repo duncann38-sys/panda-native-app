@@ -4,7 +4,7 @@ const UPSCALE_CLUSTER_RADIUS_METRES = 1_800;
 const MIN_UPSCALE_CLUSTER_VENUES = 3;
 const HIGH_END_DINING_SIGNAL = /\b(fine dining|tasting menu|michelin|chef'?s table|omakase|upscale|luxury hotel|destination dining|private dining)\b/i;
 const FAST_CASUAL_OR_TAKEAWAY = /\b(fast[- ]?food|quick service|take[- ]?away|meal takeaway|drive[- ]?thru|food court)\b/i;
-const KNOWN_CHAINS = /\b(mcdonald'?s|kfc|burger king|subway|domino'?s|pizza hut|pizza ?express|zizzi|prezzo|ask italian|bella italia|frankie and benny'?s|tgi fridays|wagamama|nando'?s|five guys|taco bell|leon|itsu|greggs|pret a manger|costa coffee|starbucks|caffe nero|shake shack|papa john'?s|yo!? sushi|dishoom|flat iron|hawksmoor|the ivy)\b/i;
+const KNOWN_CHAINS = /\b(mcdonald'?s|kfc|burger king|subway|domino'?s|pizza hut|pizza ?express|zizzi|prezzo|ask italian|bella italia|frankie and benny'?s|tgi fridays|wagamama|nando'?s|five guys|taco bell|leon|itsu|greggs|pret a manger|costa coffee|starbucks|caffe nero|shake shack|papa john'?s|yo!? sushi)\b/i;
 
 export function bangingClock(now = new Date()) {
   const parts = new Intl.DateTimeFormat('en-GB', {
@@ -101,8 +101,10 @@ export function rotateBanging(
   const premium = unique.filter(venue => venue.banging && venue.premium);
   const eligible = unique.filter(venue =>
     isOrganicBangingVenue(venue, now.getTime()) || isBangingFallbackVenue(venue));
-  const verified = eligible.filter(venue => venue.bangingFallback !== true);
-  const cachedFallback = eligible.filter(venue => venue.bangingFallback === true);
+  const rankable = eligible.filter(venue =>
+    venue.bangingFallback !== true || venue.bangingFallbackSource === 'storage');
+  const localFallback = eligible.filter(venue =>
+    venue.bangingFallback === true && venue.bangingFallbackSource !== 'storage');
   const ratingValue = (venue: Venue) => {
     const rating = Number.parseFloat(venue.rating);
     return Number.isFinite(rating) ? rating : Number.NEGATIVE_INFINITY;
@@ -111,24 +113,24 @@ export function rotateBanging(
   const stableSort = (pool: Venue[]) => [...pool].sort((a, b) =>
     ratingValue(b) - ratingValue(a) || reviewVolume(b) - reviewVolume(a)
       || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
-  const expensiveCluster = new Set(verified
+  const expensiveCluster = new Set(rankable
     .filter(venue => isBangingUpscaleClusterVenue(venue, eligible))
     .map(venue => venue.id));
-  const flagship = stableSort(verified.filter(venue =>
+  const flagship = stableSort(rankable.filter(venue =>
     ratingValue(venue) >= 4.8 && ratingValue(venue) <= 5
       && reviewVolume(venue) >= 200 && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
-  const otherFlagshipRated = stableSort(verified.filter(venue =>
+  const otherFlagshipRated = stableSort(rankable.filter(venue =>
     ratingValue(venue) >= 4.8 && !flagship.some(item => item.id === venue.id)));
-  const clusteredUpscale = stableSort(verified.filter(venue =>
+  const clusteredUpscale = stableSort(rankable.filter(venue =>
     ratingValue(venue) >= 4.5 && ratingValue(venue) < 4.8
       && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
-  const widerUpscale = stableSort(verified.filter(venue =>
+  const widerUpscale = stableSort(rankable.filter(venue =>
     ratingValue(venue) >= 4.5 && !flagship.some(item => item.id === venue.id)
       && !otherFlagshipRated.some(item => item.id === venue.id)
       && !clusteredUpscale.some(item => item.id === venue.id)));
-  const localFallback = stableSort(cachedFallback);
+  const localFallbackRanked = stableSort(localFallback);
   const dayNumber = Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000);
-  const tiers = [flagship, otherFlagshipRated, clusteredUpscale, widerUpscale, localFallback];
+  const tiers = [flagship, otherFlagshipRated, clusteredUpscale, widerUpscale, localFallbackRanked];
   // Keep the complete 50-card deck available on the first open. The tiers
   // determine ranking, not whether lower-ranked quality results are hidden.
   const selected = tiers.flat();
