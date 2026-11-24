@@ -7,6 +7,7 @@ import { VenuePhoto } from '@/components/VenuePhoto';
 import { ReserveButton } from '@/components/ReserveButton';
 import { NonHospitalityCard } from '@/components/NonHospitalityCard';
 import { isNonHospitalityVenue } from '@/utils/non-hospitality-actions';
+import { venueCardPalette } from '@/constants/venue-card-design';
 
 type VenueCardProps = {
   venue: Venue;
@@ -46,8 +47,8 @@ export function VenueCard({
       style={({ pressed }) => [
         styles.card,
         {
-          backgroundColor: premiumBanging ? colors.green900 : premiumCard ? colors.green800 : colors.card,
-          borderColor: editorial ? premiumBanging ? colors.goldLine : colors.border : premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
+          backgroundColor: premiumBanging ? colors.green900 : editorial ? venueCardPalette.row : premiumCard ? colors.green800 : colors.card,
+          borderColor: premiumBanging ? venueCardPalette.gold : editorial ? venueCardPalette.border : premiumCard ? colors.goldLine : featured ? colors.goldLine : colors.border,
         },
         pressed && styles.pressed,
         editorial && styles.editorialCard,
@@ -64,9 +65,20 @@ export function VenueCard({
           height={compact ? 100 : premiumFeatured ? 148 : 136}
         />
         {tierLabel ? (
-          <View style={[styles.premiumBadge, { backgroundColor: colors.goldSoft, borderColor: colors.goldLine }]}>
-            <Text style={[styles.premiumStar, { color: colors.goldDeep }]}>✦</Text>
-            <Text style={[styles.premiumText, { color: colors.honeyInk }]}>{tierLabel}</Text>
+          <View style={[
+            styles.premiumBadge,
+            premiumBanging && styles.premiumBadgeStrong,
+            {
+              backgroundColor: premiumBanging ? colors.honey : colors.goldSoft,
+              borderColor: premiumBanging ? colors.green950 : colors.goldLine,
+            },
+          ]}>
+            <Text style={[styles.premiumStar, { color: premiumBanging ? colors.green950 : colors.goldDeep }]}>✦</Text>
+            <Text style={[
+              styles.premiumText,
+              premiumBanging && styles.premiumTextStrong,
+              { color: premiumBanging ? colors.green950 : colors.honeyInk },
+            ]}>{tierLabel}</Text>
           </View>
         ) : null}
         <View style={styles.topRow}>
@@ -252,6 +264,16 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 10,
     zIndex: 12,
+  },
+  premiumBadgeStrong: {
+    borderWidth: 1,
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 3.5,
+  },
+  premiumTextStrong: {
+    fontSize: 9,
+    letterSpacing: 0.9,
   },
   premiumStar: {
     fontSize: 10,

@@ -43,6 +43,7 @@ export type Venue = {
   luxurySource?: string;
   bangingTransitMinutes?: number;
   bangingVerifiedAt?: number;
+  bangingFallback?: boolean;
   photoAttributions: string[];
   photoName?: string;
   photoCount?: number;

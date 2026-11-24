@@ -59,6 +59,7 @@ import { loadPartnerVenues } from '@/utils/partner-venues';
 import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
 import { bangingClock, isOrganicBangingVenue, rotateBanging } from '@/utils/banging-rotation';
 import { getBangingAreaResults } from '@/utils/banging-area-search';
+import { buildBangingFallbackCandidates, mergeBangingOrganicResults } from '@/utils/banging-fallback';
 
 type TopCategory = 'All' | DiscoveryCategory;
 
@@ -573,6 +574,13 @@ export default function DiscoverScreen() {
     discoveryRequestTimes.current.push(now);
     return true;
   }, []);
+  const bangingFallbackCandidates = useMemo(() => buildBangingFallbackCandidates(
+    liveVenues,
+    venues.filter(venue => venue.banging && !venue.premium && !venue.promoted),
+    coordinates,
+    new Set(Object.keys(partners.tiers)),
+  ), [liveVenues, coordinates?.latitude, coordinates?.longitude, partners.tiers]);
+
   useEffect(() => {
     if (locationStatus === 'permission-denied' || locationStatus === 'unavailable') return;
     let mounted = true;
@@ -1015,9 +1023,11 @@ export default function DiscoverScreen() {
     const originKey = `${coordinates.latitude.toFixed(4)}:${coordinates.longitude.toFixed(4)}`;
     if (bangingOrigin.current !== originKey) {
       bangingOrigin.current = originKey;
-      setBangingSupplement([]);
+      setBangingSupplement(bangingFallbackCandidates);
       setBangingPremiumJourneys({});
-      setBangingStatus('Finding luxury venues…');
+      setBangingStatus(bangingFallbackCandidates.length
+        ? 'Showing nearby picks while the full selection refreshes'
+        : 'Finding luxury venues…');
     }
     const premiumIds = partners.venues
       .filter(venue => venue.banging && venue.premium)
@@ -1044,19 +1054,27 @@ export default function DiscoverScreen() {
         }];
       }).filter(venue => !partners.tiers[venue.id] && isOrganicBangingVenue(venue)
         && Number.isFinite(venue.distanceMeters));
-      setBangingSupplement(additional);
-      setBangingStatus(body.complete ? '' : 'Limited verified luxury choices in this area');
+      const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, 40);
+      setBangingSupplement(combined);
+      setBangingStatus(combined.length >= 40 || body.complete
+        ? ''
+        : combined.length
+          ? `Showing ${combined.length} nearby picks while the full selection refreshes`
+          : 'Limited verified luxury choices in this area');
     }).catch((error: unknown) => {
       if (!active) return;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);
-      setBangingStatus('Luxury selection temporarily unavailable · retrying shortly');
+      setBangingSupplement(bangingFallbackCandidates);
+      setBangingStatus(bangingFallbackCandidates.length
+        ? `Showing ${bangingFallbackCandidates.length} nearby picks while refreshing`
+        : 'Banging selection is refreshing · try again shortly');
       retryTimer = setTimeout(() => setBangingRefreshTick(tick => tick + 1), 65_000);
     });
     return () => {
       active = false;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, partners.tiers, rotationWindow, bangingRefreshTick]);
+  }, [coordinates?.latitude, coordinates?.longitude, partners.venues, partners.tiers, rotationWindow, bangingRefreshTick, bangingFallbackCandidates]);
 
   const orderedCategories = useMemo(() => {
     return orderDiscoveryCategories(categories, categoryDayPart);

@@ -1,0 +1,12 @@
+name: Panda 99 - Banging Organic Cards and Premium Styling
+on:
+  push:
+    branches:
+      - panda-apk-99-banging-restore
+jobs:
+  build_android_preview:
+    name: Panda 99 Banging Restoration Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview

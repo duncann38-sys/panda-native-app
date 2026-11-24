@@ -192,6 +192,7 @@ function normalizeVenue(value: unknown, allowMissingLocation: boolean): Venue | 
     luxurySource: text(item.luxurySource) || undefined,
     ...(bangingTransitMinutes !== undefined ? { bangingTransitMinutes } : {}),
     ...(bangingVerifiedAt !== undefined ? { bangingVerifiedAt } : {}),
+    bangingFallback: item.bangingFallback === true,
     photoAttributions,
     photoName: text(item.photoName) || undefined,
     photoCount: photoCount === undefined ? undefined : Math.max(0, Math.min(10, photoCount)),
