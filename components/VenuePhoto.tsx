@@ -52,11 +52,15 @@ export function VenuePhoto({
   venueName,
   venue,
   height,
+  transition = 250,
+  placeholderMode = 'initial',
 }: {
   venueId: string;
   venueName: string;
   venue?: Venue;
   height: number;
+  transition?: number;
+  placeholderMode?: 'initial' | 'clean';
 }) {
   const colors = useColors();
   const photo = venuePhotosFor(venue ?? venueId)[0];
@@ -79,7 +83,7 @@ export function VenuePhoto({
           onError={() => setFailed(true)}
           source={{ uri: photo.uri }}
           contentFit="cover"
-          transition={250}
+          transition={transition}
           accessibilityLabel={`${venueName} venue photo`}
           style={StyleSheet.absoluteFillObject}
         />
@@ -87,9 +91,29 @@ export function VenuePhoto({
           disabled={!retryReady}
           onPress={() => { setFailed(false); setRetryKey(value => value + 1); }}
           style={[StyleSheet.absoluteFillObject, { justifyContent: 'center', alignItems: 'center', backgroundColor: colors.secondary }]}>
-          <Text style={{ color: colors.foreground, fontSize: height < 100 ? 10 : 14, textAlign: 'center' }}>{height < 100 ? 'Photo unavailable' : 'Photo temporarily unavailable'}</Text>
-          {height >= 100 ? <Text style={{ color: colors.mutedForeground, marginTop: 6 }}>{retryReady ? 'Tap to retry' : 'Please try again shortly'}</Text> : null}
+          <Text
+            style={[
+              placeholderMode === 'clean' ? styles.unavailable : undefined,
+              { color: placeholderMode === 'clean' ? colors.mutedForeground : colors.foreground },
+              placeholderMode !== 'clean' && { fontSize: height < 100 ? 10 : 14, textAlign: 'center' },
+            ]}
+          >
+            {placeholderMode === 'clean' ? 'Photo unavailable' : height < 100 ? 'Photo unavailable' : 'Photo temporarily unavailable'}
+          </Text>
+          {placeholderMode !== 'clean' && height >= 100 ? (
+            <Text style={{ color: colors.mutedForeground, marginTop: 6 }}>
+              {retryReady ? 'Tap to retry' : 'Please try again shortly'}
+            </Text>
+          ) : null}
         </Pressable> : null}
+      </View>
+    );
+  }
+
+  if (placeholderMode === 'clean') {
+    return (
+      <View style={[styles.fallback, styles.cleanFallback, { height, backgroundColor: colors.secondary }]}>
+        <Text style={[styles.unavailable, { color: colors.mutedForeground }]}>Photo unavailable</Text>
       </View>
     );
   }
@@ -110,6 +134,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     width: '100%',
+  },
+  cleanFallback: {
+    paddingHorizontal: 8,
+  },
+  unavailable: {
+    fontFamily: 'Inter_500Medium',
+    fontSize: 10,
+    lineHeight: 13,
+    textAlign: 'center',
   },
   initial: {
     fontFamily: 'Inter_700Bold',

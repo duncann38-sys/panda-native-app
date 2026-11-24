@@ -102,7 +102,13 @@ test('organic Banging results do not require photos or display copy', () => {
   assert.ok(rotateBanging([organic], now).some(item => item.id === 'organic-no-photo'));
 });
 
-test('nearby and APK 78 curated fallbacks create forty honest organic slots without photos', () => {
+test('organic Banging cards require 4.5+ restaurant results', () => {
+  const belowFloor = venue('below-floor', { rating: '4.4' });
+  const bar = venue('bar', { category: 'Bar' });
+  assert.deepEqual(rotateBanging([belowFloor, bar], now), []);
+});
+
+test('fallback keeps only rated, geolocated local venues and never trusts coordinate-less London seeds', () => {
   const seeds = Array.from({ length: 31 }, (_, index) => venue(`seed-${index}`, {
     latitude: undefined,
     longitude: undefined,
@@ -123,24 +129,29 @@ test('nearby and APK 78 curated fallbacks create forty honest organic slots with
     seeds,
     { latitude: 51.50, longitude: -0.10 },
   );
-  assert.equal(fallback.length, 40);
+  assert.equal(fallback.length, 9);
   assert.ok(fallback.every(item => item.bangingFallback && item.banging && !item.premium));
-  assert.equal(fallback.find(item => item.id === 'seed-0').photoNames.length, 0);
-  assert.equal(fallback.find(item => item.id === 'seed-0').walkingTime, 'Travel details unavailable');
-  assert.equal(fallback.find(item => item.id === 'seed-0').bangingTransitMinutes, undefined);
+  assert.equal(fallback.some(item => item.id.startsWith('seed-')), false);
+  assert.equal(fallback.find(item => item.id === 'live-0').photoNames.length, 0);
+  assert.equal(fallback.find(item => item.id === 'live-0').walkingTime, 'Travel details unavailable');
+  assert.equal(fallback.find(item => item.id === 'live-0').bangingTransitMinutes, undefined);
 
   const premium = Array.from({ length: 10 }, (_, index) => venue(`paid-${index}`, {
     premium: true, promoted: true, bangingTransitMinutes: undefined, bangingVerifiedAt: undefined,
   }));
   const combined = mergeBangingOrganicResults([], fallback);
   const deck = rotateBanging([...combined, ...premium], now);
-  assert.equal(deck.length, 50);
-  deck.forEach((item, index) => assert.equal(item.premium, (index + 1) % 5 === 0));
+  assert.equal(deck.length, 11);
+  deck.forEach((item, index) => {
+    if ((index + 1) % 5 === 0) assert.equal(item.premium, true);
+    else assert.equal(item.premium, false);
+  });
 });
 
 test('live fallback requires a high-end nearby hospitality result and excludes active partners', () => {
   const live = [
     venue('high-end-no-photo', { latitude: 51.5, longitude: -0.1, price: '£££', photoNames: [] }),
+    venue('below-rating-floor', { latitude: 51.5, longitude: -0.1, rating: '4.4', price: '£££' }),
     venue('ordinary', { latitude: 51.5, longitude: -0.1, price: '££', luxurySource: '' }),
     venue('far-away', { latitude: 52.5, longitude: -0.1, price: '£££', luxurySource: '' }),
   ];
@@ -157,4 +168,15 @@ test('live fallback requires a high-end nearby hospitality result and excludes a
     { latitude: 51.5, longitude: -0.1 },
   );
   assert.deepEqual(visible.map(item => item.id), ['high-end-no-photo']);
+});
+
+test('opening the drawer changes the order without lowering quality tiers', () => {
+  const venues = Array.from({ length: 12 }, (_, index) => venue(`high-${index}`, {
+    rating: index < 6 ? '4.8' : '4.6',
+  }));
+  const first = rotateBanging(venues, now, 'london-open-1');
+  const second = rotateBanging(venues, now, 'london-open-2');
+  assert.notDeepEqual(first.slice(0, 8).map(item => item.id), second.slice(0, 8).map(item => item.id));
+  assert.ok(Number(first[0].rating) >= 4.6);
+  assert.ok(Number(second[0].rating) >= 4.6);
 });

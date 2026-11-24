@@ -5,10 +5,8 @@ export type BangingFallbackOrigin = {
   longitude: number;
 };
 
-const LONDON_CENTRE = { latitude: 51.5074, longitude: -0.1278 };
-const LONDON_SEED_RADIUS_METRES = 45_000;
-const LIVE_CANDIDATE_RADIUS_METRES = 35_000;
-const BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant', 'Bar', 'Pub']);
+export const BANGING_LOCAL_RADIUS_METRES = 25_000;
+const BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant']);
 const HIGH_END_TERMS = /\b(fine dining|michelin|luxury|hotel|rooftop|cocktail|wine bar|tasting menu|destination|upscale)\b/i;
 
 function validCoordinate(value: unknown, limit: number): value is number {
@@ -43,9 +41,9 @@ function hasHighEndSignal(venue: Venue) {
 
 function isLiveFallbackCandidate(venue: Venue, origin: BangingFallbackOrigin) {
   if (!venue.id || !venue.name || venue.source === 'openstreetmap' || venue.id.startsWith('osm:')) return false;
-  if (!BANGING_CATEGORIES.has(venue.category) || Number(venue.rating) < 4.3 || !hasHighEndSignal(venue)) return false;
+  if (!BANGING_CATEGORIES.has(venue.category) || Number(venue.rating) < 4.5 || !hasHighEndSignal(venue)) return false;
   if (!validCoordinate(venue.latitude, 90) || !validCoordinate(venue.longitude, 180)) return false;
-  return metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) <= LIVE_CANDIDATE_RADIUS_METRES;
+  return metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) <= BANGING_LOCAL_RADIUS_METRES;
 }
 
 export function isBangingFallbackVenue(venue: Venue) {
@@ -57,19 +55,23 @@ export function isBangingFallbackVenue(venue: Venue) {
     && BANGING_CATEGORIES.has(venue.category);
 }
 
-function safeCuratedSeed(venue: Venue): Venue {
+function safeCuratedSeed(venue: Venue, origin: BangingFallbackOrigin): Venue {
+  const distanceMeters = metresBetween(origin, {
+    latitude: venue.latitude!,
+    longitude: venue.longitude!,
+  });
   return {
     ...venue,
     neighborhood: '',
-    distance: '',
+    distance: distanceMeters < 1000 ? `${Math.round(distanceMeters)} m` : `${(distanceMeters / 1000).toFixed(1)} km`,
     walkingTime: 'Travel details unavailable',
-    distanceMeters: 0,
+    distanceMeters,
     description: '',
     hours: '',
     feature: '',
     fullAddress: '',
-    latitude: undefined,
-    longitude: undefined,
+    latitude: venue.latitude,
+    longitude: venue.longitude,
     openNow: false,
     cached: true,
     detailsDeferred: true,
@@ -118,12 +120,14 @@ export function buildBangingFallbackCandidates(
     });
   }
 
-  if (metresBetween(origin, LONDON_CENTRE) <= LONDON_SEED_RADIUS_METRES) {
-    for (const venue of curatedSeeds) {
-      if (!venue.id || excludedIds.has(venue.id) || candidates.has(venue.id)) continue;
-      if (!venue.banging || venue.premium || venue.promoted || !BANGING_CATEGORIES.has(venue.category)) continue;
-      candidates.set(venue.id, safeCuratedSeed(venue));
-    }
+  for (const venue of curatedSeeds) {
+    if (!venue.id || excludedIds.has(venue.id) || candidates.has(venue.id)) continue;
+    if (!venue.banging || venue.premium || venue.promoted || !BANGING_CATEGORIES.has(venue.category)) continue;
+    if (Number(venue.rating) < 4.5
+      || !validCoordinate(venue.latitude, 90)
+      || !validCoordinate(venue.longitude, 180)) continue;
+    if (metresBetween(origin, { latitude: venue.latitude, longitude: venue.longitude }) > BANGING_LOCAL_RADIUS_METRES) continue;
+    candidates.set(venue.id, safeCuratedSeed(venue, origin));
   }
   return [...candidates.values()];
 }

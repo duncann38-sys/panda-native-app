@@ -1,0 +1,12 @@
+name: Panda 105 - Local high-end Banging refresh
+on:
+  push:
+    branches:
+      - panda-apk-100-venue-detail-restoration
+jobs:
+  build_android_preview:
+    name: Panda 105 Banging Preview Android APK
+    type: build
+    params:
+      platform: android
+      profile: preview

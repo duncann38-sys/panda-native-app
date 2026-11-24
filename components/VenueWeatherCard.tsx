@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { PANDA_RUNTIME_API } from "@/constants/services";
 import { useColors } from "@/hooks/useColors";
+import { isVenueWeatherNight, venueWeatherPresentation } from "@/utils/venue-weather-display";
 
 type Weather = {
   observedAt: string;
@@ -14,10 +15,29 @@ type Props = {
   placeId: string;
 };
 
+const NIGHT_PALETTE = {
+  card: "#142B26",
+  border: "#35584C",
+  icon: "#203C33",
+  iconBorder: "#496B5D",
+  eyebrow: "#B5D0C3",
+  foreground: "#FBF5E6",
+  muted: "#C7D7CF",
+  accent: "#E4C978",
+};
+
 export function VenueWeatherCard({ placeId }: Props) {
   const colors = useColors();
   const [weather, setWeather] = useState<Weather | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [localNow, setLocalNow] = useState(() => new Date());
+  const nightMode = isVenueWeatherNight(localNow);
+  const presentation = weather ? venueWeatherPresentation(weather, nightMode) : null;
+
+  useEffect(() => {
+    const timer = setInterval(() => setLocalNow(new Date()), 60_000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -63,14 +83,14 @@ export function VenueWeatherCard({ placeId }: Props) {
     <View
       accessibilityLabel={
         weather
-          ? `Current weather at venue: ${Math.round(weather.temperatureC)} degrees Celsius, ${weather.condition}`
+          ? `${nightMode ? "Current nighttime weather" : "Current weather"} at venue: ${Math.round(weather.temperatureC)} degrees Celsius, ${presentation?.condition ?? weather.condition}`
           : isLoading ? "Loading current venue weather" : "Current venue weather unavailable"
       }
       style={[
         styles.card,
         {
-          backgroundColor: colors.secondary,
-          borderColor: colors.border,
+          backgroundColor: nightMode ? NIGHT_PALETTE.card : colors.secondary,
+          borderColor: nightMode ? NIGHT_PALETTE.border : colors.border,
           borderRadius: colors.radius + 12,
           shadowColor: colors.green950,
         },
@@ -79,28 +99,28 @@ export function VenueWeatherCard({ placeId }: Props) {
       <View
         style={[
           styles.iconWrap,
-          { backgroundColor: colors.card, borderColor: colors.border, borderRadius: colors.radius + 5 },
+          { backgroundColor: nightMode ? NIGHT_PALETTE.icon : colors.card, borderColor: nightMode ? NIGHT_PALETTE.iconBorder : colors.border, borderRadius: colors.radius + 5 },
         ]}
       >
         {isLoading ? (
-          <ActivityIndicator size="small" color={colors.green800} />
+          <ActivityIndicator size="small" color={nightMode ? NIGHT_PALETTE.accent : colors.green800} />
         ) : (
-          <Text style={styles.weatherIcon}>{weather?.emoji ?? "—"}</Text>
+          <Text style={styles.weatherIcon}>{presentation?.emoji ?? "—"}</Text>
         )}
       </View>
       <View style={styles.copy}>
-        <Text style={[styles.eyebrow, { color: colors.green700 }]}>AT THE VENUE · LIVE CONDITIONS</Text>
+        <Text style={[styles.eyebrow, { color: nightMode ? NIGHT_PALETTE.eyebrow : colors.green700 }]}>AT THE VENUE · {nightMode ? "NIGHT" : "LIVE"} CONDITIONS</Text>
         {weather ? (
           <View style={styles.weatherLine}>
-            <Text style={[styles.temperature, { color: colors.foreground }]}>
+            <Text style={[styles.temperature, { color: nightMode ? NIGHT_PALETTE.foreground : colors.foreground }]}>
               {Math.round(weather.temperatureC)}°C
             </Text>
-            <Text style={[styles.condition, { color: colors.mutedForeground }]} numberOfLines={1}>
-              {weather.condition}
+            <Text style={[styles.condition, { color: nightMode ? NIGHT_PALETTE.muted : colors.mutedForeground }]} numberOfLines={1}>
+              {presentation?.condition ?? weather.condition}
             </Text>
           </View>
         ) : (
-          <Text style={[styles.statusText, { color: colors.mutedForeground }]}>
+          <Text style={[styles.statusText, { color: nightMode ? NIGHT_PALETTE.muted : colors.mutedForeground }]}>
             {isLoading ? "Checking the sky…" : "Weather unavailable right now"}
           </Text>
         )}

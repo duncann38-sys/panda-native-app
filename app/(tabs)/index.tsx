@@ -59,7 +59,11 @@ import { loadPartnerVenues } from '@/utils/partner-venues';
 import { interleavePromotions, distanceBetween } from '@/utils/venue-actions';
 import { bangingClock, isOrganicBangingVenue, rotateBanging } from '@/utils/banging-rotation';
 import { getBangingAreaResults } from '@/utils/banging-area-search';
-import { buildBangingFallbackCandidates, mergeBangingOrganicResults } from '@/utils/banging-fallback';
+import {
+  BANGING_LOCAL_RADIUS_METRES,
+  buildBangingFallbackCandidates,
+  mergeBangingOrganicResults,
+} from '@/utils/banging-fallback';
 
 type TopCategory = 'All' | DiscoveryCategory;
 
@@ -501,6 +505,15 @@ export default function DiscoverScreen() {
     return () => listener.remove();
   }, []));
   const [bangingIsOpen, setBangingIsOpen] = useState(false);
+  const [bangingOpenCycle, setBangingOpenCycle] = useState(0);
+  const bangingOpenRef = useRef(false);
+  const handleBangingOpenChange = useCallback((open: boolean) => {
+    setBangingIsOpen(open);
+    if (open && !bangingOpenRef.current) {
+      setBangingOpenCycle(cycle => cycle + 1);
+    }
+    bangingOpenRef.current = open;
+  }, []);
   const discoveryImpressions = useVenueImpressions('discovery', !bangingIsOpen);
   const discoveryViewabilityPairs = useRef([discoveryImpressions.presentationPair, discoveryImpressions]).current;
   const colors = useColors();
@@ -995,7 +1008,6 @@ export default function DiscoverScreen() {
     const timer = setInterval(() => {
       const clock = bangingClock();
       setRotationWindow(`${clock.day}:${clock.slot}`);
-      setBangingRefreshTick(value => value + 1);
     }, 60_000);
     return () => clearInterval(timer);
   }, []);
@@ -1038,7 +1050,7 @@ export default function DiscoverScreen() {
       const additional = body.results.flatMap(result => {
         const venue = venueFromSearchResult(result, 'Nearby');
         const meters = distanceBetween(coordinates, venue);
-        if (meters === null) return [];
+        if (meters === null || meters > BANGING_LOCAL_RADIUS_METRES) return [];
         return [{
           ...venue,
           neighborhood: result.neighborhood || venue.fullAddress.split(',').slice(-2).join(',').trim() || 'Nearby',
@@ -1056,11 +1068,11 @@ export default function DiscoverScreen() {
         && Number.isFinite(venue.distanceMeters));
       const combined = mergeBangingOrganicResults(additional, bangingFallbackCandidates, 40);
       setBangingSupplement(combined);
-      setBangingStatus(combined.length >= 40 || body.complete
+      setBangingStatus(combined.length >= 40
         ? ''
         : combined.length
-          ? `Showing ${combined.length} nearby picks while the full selection refreshes`
-          : 'Limited verified luxury choices in this area');
+          ? `Showing ${combined.length} local high-end picks`
+          : 'Limited verified local high-end choices');
     }).catch((error: unknown) => {
       if (!active) return;
       console.warn('[Panda Banging] Wider lookup unavailable:', error);
@@ -1118,6 +1130,7 @@ export default function DiscoverScreen() {
     ));
   }, [category, safeLiveVenues, safePartnerVenues, priceFilter, sortBy, hasDeferredListings]);
 
+  const bangingRotationIdentity = `${coordinates?.latitude.toFixed(4) ?? 'unlocated'}:${coordinates?.longitude.toFixed(4) ?? 'unlocated'}:${bangingOpenCycle}`;
   const bangingVenues = useMemo(() => rotateBanging([
     ...partners.venues.filter(venue => venue.banging).map(venue => ({
       ...venue,
@@ -1129,7 +1142,14 @@ export default function DiscoverScreen() {
       premium: false,
       banging: true,
     })),
-  ]), [partners, bangingSupplement, bangingPremiumJourneys, rotationWindow, bangingRefreshTick]);
+  ], new Date(), bangingRotationIdentity), [
+    partners,
+    bangingSupplement,
+    bangingPremiumJourneys,
+    rotationWindow,
+    bangingRefreshTick,
+    bangingRotationIdentity,
+  ]);
   useVenueResultAppearances(filteredVenues, 'discovery', !bangingIsOpen,
     `${discoveryGeneration.current}:${category}:${priceFilter}:${sortBy}`);
 
@@ -1261,7 +1281,7 @@ export default function DiscoverScreen() {
         viewabilityConfigCallbackPairs={discoveryViewabilityPairs}
         style={styles.feed}
         data={filteredVenues}
-        keyExtractor={(item, index) => `${item.id}:${index}`}
+        keyExtractor={(item) => item.id}
         numColumns={1}
         initialNumToRender={8}
         maxToRenderPerBatch={10}
@@ -1492,7 +1512,7 @@ export default function DiscoverScreen() {
         }
       />
       <BangingDrawer
-        onOpenChange={setBangingIsOpen}
+        onOpenChange={handleBangingOpenChange}
         venues={bangingVenues}
         status={bangingStatus}
         isSaved={isSaved}
@@ -1551,6 +1571,7 @@ export default function DiscoverScreen() {
             pathname: '/venue/[id]',
             params: {
               id: venue.id,
+              venueData: JSON.stringify(venue),
               fromPlanner: '1',
               plannerIds: context.plan.map((item) => item.id).join(','),
               plannerVenues: JSON.stringify(context.plan),

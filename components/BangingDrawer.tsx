@@ -5,8 +5,6 @@ import { bangingDrawerLayout } from '@/utils/banging-drawer-layout';
 import {
   Animated,
   FlatList,
-  NativeScrollEvent,
-  NativeSyntheticEvent,
   PanResponder,
   Platform,
   Pressable,
@@ -17,6 +15,12 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { VenueCard } from '@/components/VenueCard';
+import {
+  VENUE_PREVIEW_CARD_GAP,
+  VENUE_PREVIEW_CARD_HEIGHT,
+  VENUE_PREVIEW_SIDE_PADDING,
+  venuePreviewCardWidth,
+} from '@/constants/venue-preview-layout';
 import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
@@ -44,9 +48,9 @@ export function BangingDrawer({
   const androidBottomInset = Platform.OS === 'android' ? Math.max(insets.bottom, 24) : 0;
   const { width, fontScale } = useWindowDimensions();
   const measurementKey = `${width}:${fontScale}`;
-  const [measurements, setMeasurements] = useState({ key: measurementKey, card: 0, header: 64 });
-  const measured = measurements.key === measurementKey ? measurements : { card: 0, header: 64 };
-  const geometry = bangingDrawerLayout(measured.header, measured.card, 48);
+  const [measurements, setMeasurements] = useState({ key: measurementKey, header: 64 });
+  const measuredHeader = measurements.key === measurementKey ? measurements.header : 64;
+  const geometry = bangingDrawerLayout(measuredHeader, VENUE_PREVIEW_CARD_HEIGHT, 48);
   const closedOffset = geometry.closedOffset;
   const [open, setOpen] = useState(false);
   const bangingImpressions = useVenueImpressions('banging', open);
@@ -62,22 +66,22 @@ export function BangingDrawer({
     settledOffset.current = target;
     gestureStartOffset.current = target;
   }, [closedOffset, translateY]);
-  const measure = (kind: 'card' | 'header', height: number) => {
+  const measureHeader = (height: number) => {
     const next = Math.ceil(height);
     if (!Number.isFinite(next) || next <= 0) return;
     setMeasurements(previous => {
-      const current = previous.key === measurementKey ? previous : { key: measurementKey, card: 0, header: 64 };
-      const value = kind === 'card' ? Math.max(current.card, next) : next;
-      return current[kind] === value && previous.key === measurementKey ? previous : { ...current, [kind]: value };
+      const current = previous.key === measurementKey ? previous : { key: measurementKey, header: 64 };
+      return current.header === next && previous.key === measurementKey
+        ? previous
+        : { ...current, header: next };
     });
   };
-  const [activeIndex, setActiveIndex] = useState(0);
   // Selection and paid-card spacing are owned by discovery, as in the working APK 90 feed.
-  const bangingVenues = normalizeBangingVenueList(venues);
+  const bangingVenues = useMemo(() => normalizeBangingVenueList(venues), [venues]);
   useVenueResultAppearances(bangingVenues, 'banging', open, 'banging');
-  const cardWidth = Math.min(194, Math.max(174, width - 156));
-  const cardGap = 10;
-  const sidePadding = 16;
+  const cardWidth = venuePreviewCardWidth(width);
+  const cardGap = VENUE_PREVIEW_CARD_GAP;
+  const sidePadding = VENUE_PREVIEW_SIDE_PADDING;
   const drawerSurface = '#FFFBF1';
 
   const settleDrawer = useCallback(
@@ -131,11 +135,6 @@ export function BangingDrawer({
     [settleDrawer, translateY, closedOffset],
   );
 
-  const onMomentumEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    const next = Math.round(event.nativeEvent.contentOffset.x / (cardWidth + cardGap));
-    setActiveIndex(Math.max(0, Math.min(next, bangingVenues.length - 1)));
-  };
-
   return (
     <Animated.View
       style={[
@@ -153,7 +152,7 @@ export function BangingDrawer({
       ]}
     >
       <Pressable
-        onLayout={event => { if (open) measure('header', event.nativeEvent.layout.height); }}
+        onLayout={event => { if (open) measureHeader(event.nativeEvent.layout.height); }}
         accessibilityLabel={open ? 'Collapse Banging venues' : 'Expand Banging venues'}
         accessibilityHint="Swipe up to open or down to close"
         accessibilityRole="button"
@@ -189,19 +188,18 @@ export function BangingDrawer({
           data={bangingVenues}
           horizontal
           decelerationRate="fast"
-          keyExtractor={(venue, index) => `${venue.id}:${index}`}
+          keyExtractor={(venue) => venue.id}
           snapToInterval={cardWidth + cardGap}
           snapToAlignment="start"
           showsHorizontalScrollIndicator={false}
           contentContainerStyle={[styles.cards, { paddingHorizontal: sidePadding }]}
           keyboardShouldPersistTaps="handled"
-          onMomentumScrollEnd={onMomentumEnd}
           scrollEventThrottle={16}
           initialNumToRender={4}
           maxToRenderPerBatch={5}
           windowSize={5}
-          renderItem={({ item: venue, index }) => (
-            <View onLayout={event => measure('card', event.nativeEvent.layout.height)} style={[styles.cardSlot, { alignSelf: 'flex-start', marginRight: cardGap, width: cardWidth }]}>
+          renderItem={({ item: venue }) => (
+            <View style={[styles.cardSlot, { alignSelf: 'flex-start', marginRight: cardGap, width: cardWidth }]}>
               <VenueCard
                 activitySurface="banging"
                 venue={venue}
@@ -210,7 +208,6 @@ export function BangingDrawer({
                 onPress={() => onPress(withVenueActivityContext(venue, 'banging'))}
                 compact
                 presentation="banging"
-                featured={index === activeIndex}
               />
             </View>
           )}
@@ -295,11 +292,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 19,
-    letterSpacing: -0.3,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.65,
   },
   closedTitle: {
-    fontSize: 17,
+    fontSize: 18,
+    lineHeight: 22,
   },
   liveDot: {
     borderRadius: 999,
@@ -309,6 +308,7 @@ const styles = StyleSheet.create({
   spotCount: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
+    lineHeight: 12,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
@@ -316,7 +316,7 @@ const styles = StyleSheet.create({
     fontSize: 8,
   },
   cards: {
-    paddingBottom: 8,
+    paddingBottom: 0,
   },
   carouselViewport: {
     position: 'relative',

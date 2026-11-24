@@ -8,7 +8,7 @@ const bangingDrawer = readFileSync(new URL('../components/BangingDrawer.tsx', im
 const partnerVenues = readFileSync(new URL('../utils/partner-venues.ts', import.meta.url), 'utf8');
 const liveVenues = readFileSync(new URL('../context/live-venues.tsx', import.meta.url), 'utf8');
 const appConfig = JSON.parse(readFileSync(new URL('../app.json', import.meta.url), 'utf8'));
-const releaseWorkflow = readFileSync(new URL('../.eas/workflows/panda-apk-97-complete.yml', import.meta.url), 'utf8');
+const releaseWorkflow = readFileSync(new URL('../.eas/workflows/panda-apk-100-venue-detail-restoration.yml', import.meta.url), 'utf8');
 
 test('native map validates venue, user, and station coordinates before native props', () => {
   assert.match(nativeMap, /normalizeMapCoordinate\(userCoordinates\)/);
@@ -22,13 +22,13 @@ test('native map validates venue, user, and station coordinates before native pr
   assert.doesNotMatch(nativeMap, /coordinate=\{stations\./);
 });
 
-test('category cache and both venue FlatLists reject malformed rows and use indexed keys', () => {
+test('category cache normalizes malformed rows and venue carousels use stable keys', () => {
   assert.match(discovery, /normalizeDiscoveryVenueList\(value\.venues\)/);
   assert.match(discovery, /normalizeDiscoveryVenueList\(liveVenues\)/);
   assert.match(discovery, /normalizeDiscoveryVenueList\(partners\?\.venues\)/);
-  assert.match(discovery, /keyExtractor=\{\(item, index\) => `\$\{item\.id\}:\$\{index\}`\}/);
-  assert.match(bangingDrawer, /normalizeDiscoveryVenueList\(venues\)\.filter/);
-  assert.match(bangingDrawer, /keyExtractor=\{\(venue, index\) => `\$\{venue\.id\}:\$\{index\}`\}/);
+  assert.match(discovery, /keyExtractor=\{\(item\) => item\.id\}/);
+  assert.match(bangingDrawer, /normalizeBangingVenueList\(venues\)/);
+  assert.match(bangingDrawer, /keyExtractor=\{\(venue\) => venue\.id\}/);
   assert.match(partnerVenues, /normalizePlacements\(body\)/);
   assert.match(partnerVenues, /normalizeProfile\(parsed, placement\.place_id\)/);
   assert.match(partnerVenues, /normalizeMapCoordinate\(profile\)/);
@@ -39,11 +39,12 @@ test('category cache and both venue FlatLists reject malformed rows and use inde
 test('venue card animations contain no Reanimated layout transitions', () => {
   const suggestionRow = readFileSync(new URL('../components/SuggestionRow.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(suggestionRow, /\b(?:layout|entering|exiting)\s*=/);
+  assert.doesNotMatch(readFileSync(new URL('../components/VenueCard.tsx', import.meta.url), 'utf8'), /\b(?:layout|entering|exiting)\s*=/);
 });
 
-test('APK 97 uses one branch-specific Android preview build', () => {
-  assert.equal(appConfig.expo.android.versionCode, 97);
-  assert.match(releaseWorkflow, /branches:\s*\n\s+- panda-apk-97-complete/);
+test('APK 104 uses one branch-specific Android preview build', () => {
+  assert.equal(appConfig.expo.android.versionCode, 104);
+  assert.match(releaseWorkflow, /branches:\s*\n\s+- panda-apk-100-venue-detail-restoration/);
   assert.match(releaseWorkflow, /platform: android/);
   assert.match(releaseWorkflow, /profile: preview/);
 });
