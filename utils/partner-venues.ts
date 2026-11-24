@@ -2,6 +2,7 @@ import { PANDA_PARTNER_ACTIVITY_API, PANDA_PRODUCTION_API } from '@/constants/se
 import type { Venue } from '@/data/venues';
 import { distanceBetween } from '@/utils/venue-actions';
 import { bangingClock } from '@/utils/banging-rotation';
+import { finiteNumberOrUndefined, normalizeMapCoordinate } from '@/utils/discovery-data-safety';
 
 type Placement = { name: string; place_id: string; tier: 'banging' | 'discovery' };
 type Profile = {
@@ -15,6 +16,74 @@ type Profile = {
 const profileCache = new Map<string, { expires: number; profile: Profile }>();
 const sessionSeed = Math.floor(Math.random() * 1_000_000);
 
+function record(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function text(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizePlacements(value: unknown): Placement[] {
+  const body = record(value);
+  if (!Array.isArray(body?.venues)) return [];
+  return body.venues.flatMap((candidate) => {
+    const item = record(candidate);
+    const name = text(item?.name);
+    const place_id = text(item?.place_id);
+    const tier = item?.tier;
+    if (
+      !name
+      || !place_id
+      || place_id.startsWith('place-')
+      || (tier !== 'banging' && tier !== 'discovery')
+    ) return [];
+    return [{ name, place_id, tier }];
+  });
+}
+
+function normalizeProfile(value: unknown, expectedId: string): Profile | null {
+  const item = record(value);
+  const id = text(item?.id);
+  const coordinate = normalizeMapCoordinate(item);
+  if (!item || !id || id !== expectedId || !coordinate) return null;
+  const rating = finiteNumberOrUndefined(item.rating);
+  const ratingCount = finiteNumberOrUndefined(item.ratingCount);
+  const highlights = Array.isArray(item.highlights)
+    ? item.highlights.flatMap((candidate) => {
+      const label = text(record(candidate)?.label);
+      return label ? [{ label }] : [];
+    })
+    : [];
+  const photoNames = Array.isArray(item.photoNames)
+    ? item.photoNames.flatMap((candidate) => {
+      const photo = record(candidate);
+      const name = text(photo?.name);
+      return name ? [{ name, attribution: text(photo?.attribution) }] : [];
+    })
+    : [];
+  return {
+    id,
+    name: text(item.name),
+    address: text(item.address),
+    primaryType: text(item.primaryType) || 'Restaurant',
+    latitude: coordinate.latitude,
+    longitude: coordinate.longitude,
+    price: typeof item.price === 'string' ? item.price : null,
+    rating: rating ?? null,
+    ratingCount: ratingCount ?? null,
+    openNow: typeof item.openNow === 'boolean' ? item.openNow : null,
+    todayHours: typeof item.todayHours === 'string' ? item.todayHours : null,
+    phone: typeof item.phone === 'string' ? item.phone : null,
+    website: typeof item.website === 'string' ? item.website : null,
+    googleMapsUrl: text(item.googleMapsUrl),
+    highlights,
+    photoNames,
+  };
+}
+
 function cohort(pool: Placement[]) {
   if (pool.length <= 10) return pool;
   const clock = bangingClock();
@@ -27,18 +96,18 @@ export async function loadPartnerVenues(
   origin: { latitude: number; longitude: number },
   signal: AbortSignal,
 ) {
+  const safeOrigin = normalizeMapCoordinate(origin);
+  if (!safeOrigin) return { tiers: {}, venues: [] as Venue[] };
   const response = await fetch(`${PANDA_PARTNER_ACTIVITY_API}/api/public/sponsored-venues`, { signal });
   if (!response.ok) throw new Error('Current partner placements unavailable');
-  const body = await response.json() as { venues?: Placement[] };
-  const placements = (body.venues ?? []).filter(placement => placement.place_id &&
-    !placement.place_id.startsWith('place-') &&
-    ['banging', 'discovery'].includes(placement.tier));
+  const body: unknown = await response.json();
+  const placements = normalizePlacements(body);
   const tiers = Object.fromEntries(placements.map(placement => [placement.place_id, placement.tier]));
   const locallyRanked = placements.slice().sort((a, b) => {
     const first = profileCache.get(a.place_id)?.profile;
     const second = profileCache.get(b.place_id)?.profile;
-    return (first ? distanceBetween(origin, first) ?? Infinity : Infinity) -
-      (second ? distanceBetween(origin, second) ?? Infinity : Infinity);
+    return (first ? distanceBetween(safeOrigin, first) ?? Infinity : Infinity) -
+      (second ? distanceBetween(safeOrigin, second) ?? Infinity : Infinity);
   });
   const selected = [
     ...cohort(locallyRanked.filter(item => item.tier === 'banging')),
@@ -55,12 +124,14 @@ export async function loadPartnerVenues(
             { signal },
           );
           if (!result.ok) return;
-          profile = await result.json() as Profile;
+           const parsed: unknown = await result.json();
+           profile = normalizeProfile(parsed, placement.place_id) ?? undefined;
+           if (!profile) return;
           profileCache.set(placement.place_id, { expires: Date.now() + 3 * 60 * 60 * 1000, profile });
         }
-        if (profile.id !== placement.place_id || !Number.isFinite(profile.latitude) ||
-          !Number.isFinite(profile.longitude)) return;
-        const distance = distanceBetween(origin, profile);
+        const profileCoordinate = normalizeMapCoordinate(profile);
+        if (profile.id !== placement.place_id || !profileCoordinate) return;
+        const distance = distanceBetween(safeOrigin, profileCoordinate);
         if (distance === null) return;
         const category: Venue['category'] = /pub/i.test(profile.primaryType) ? 'Pub'
           : /bar|nightclub/i.test(profile.primaryType) ? 'Bar'
@@ -86,8 +157,8 @@ export async function loadPartnerVenues(
           website: profile.website || '',
           mapsUri: profile.googleMapsUrl,
           phone: profile.phone || '',
-          latitude: profile.latitude!,
-          longitude: profile.longitude!,
+          latitude: profileCoordinate.latitude,
+          longitude: profileCoordinate.longitude,
           source: 'google_places',
           sourceAttribution: 'Google Places',
           promoted: true,
