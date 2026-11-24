@@ -93,7 +93,6 @@ export function rotateBanging(
   source: Venue[],
   now = new Date(),
   identity = 'panda',
-  expansionStage = 3,
 ) {
   const { day, slot } = bangingClock(now);
   const unique = [...new Map(source.map(venue => [venue.id, venue])).values()];
@@ -102,6 +101,8 @@ export function rotateBanging(
   const premium = unique.filter(venue => venue.banging && venue.premium);
   const eligible = unique.filter(venue =>
     isOrganicBangingVenue(venue, now.getTime()) || isBangingFallbackVenue(venue));
+  const verified = eligible.filter(venue => venue.bangingFallback !== true);
+  const cachedFallback = eligible.filter(venue => venue.bangingFallback === true);
   const ratingValue = (venue: Venue) => {
     const rating = Number.parseFloat(venue.rating);
     return Number.isFinite(rating) ? rating : Number.NEGATIVE_INFINITY;
@@ -110,30 +111,27 @@ export function rotateBanging(
   const stableSort = (pool: Venue[]) => [...pool].sort((a, b) =>
     ratingValue(b) - ratingValue(a) || reviewVolume(b) - reviewVolume(a)
       || hash(identity + ':' + a.id) - hash(identity + ':' + b.id));
-  const expensiveCluster = new Set(eligible
+  const expensiveCluster = new Set(verified
     .filter(venue => isBangingUpscaleClusterVenue(venue, eligible))
     .map(venue => venue.id));
-  const flagship = stableSort(eligible.filter(venue =>
+  const flagship = stableSort(verified.filter(venue =>
     ratingValue(venue) >= 4.8 && ratingValue(venue) <= 5
       && reviewVolume(venue) >= 200 && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
-  const otherFlagshipRated = stableSort(eligible.filter(venue =>
+  const otherFlagshipRated = stableSort(verified.filter(venue =>
     ratingValue(venue) >= 4.8 && !flagship.some(item => item.id === venue.id)));
-  const clusteredUpscale = stableSort(eligible.filter(venue =>
+  const clusteredUpscale = stableSort(verified.filter(venue =>
     ratingValue(venue) >= 4.5 && ratingValue(venue) < 4.8
       && priceLevel(venue) >= 3 && expensiveCluster.has(venue.id)));
-  const widerUpscale = stableSort(eligible.filter(venue =>
+  const widerUpscale = stableSort(verified.filter(venue =>
     ratingValue(venue) >= 4.5 && !flagship.some(item => item.id === venue.id)
       && !otherFlagshipRated.some(item => item.id === venue.id)
       && !clusteredUpscale.some(item => item.id === venue.id)));
+  const localFallback = stableSort(cachedFallback);
   const dayNumber = Math.floor(Date.parse(day + 'T12:00:00Z') / 86400000);
-  const tiers = [flagship, otherFlagshipRated, clusteredUpscale, widerUpscale];
-  const stage = Math.max(0, Math.min(3, Math.floor(expansionStage)));
-  const selected: Venue[] = [];
-  for (let index = 0; index <= stage; index += 1) selected.push(...tiers[index]);
-  const minimumForPremiumSlot = premium.length ? 4 : 1;
-  for (let index = stage + 1; selected.length < minimumForPremiumSlot && index < tiers.length; index += 1) {
-    selected.push(...tiers[index]);
-  }
+  const tiers = [flagship, otherFlagshipRated, clusteredUpscale, widerUpscale, localFallback];
+  // Keep the complete 50-card deck available on the first open. The tiers
+  // determine ranking, not whether lower-ranked quality results are hidden.
+  const selected = tiers.flat();
   const targetCount = premium.length ? 40 : 50;
   const free = selected.slice(0, targetCount);
   const paidStart = premium.length

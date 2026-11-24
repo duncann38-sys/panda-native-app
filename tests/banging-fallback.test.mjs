@@ -148,6 +148,29 @@ test('fallback keeps only rated, geolocated local venues and never trusts coordi
   });
 });
 
+test('cached local Banging picks fill the mixed 50-card deck after verified results', () => {
+  const verified = Array.from({ length: 12 }, (_, index) =>
+    venue(`verified-${index}`, { rating: '4.8', ratingCount: 400, price: '£££' }));
+  const fallback = Array.from({ length: 28 }, (_, index) =>
+    venue(`cached-${index}`, {
+      bangingFallback: true,
+      bangingTransitMinutes: undefined,
+      bangingVerifiedAt: undefined,
+      price: '£££',
+    }));
+  const premium = Array.from({ length: 10 }, (_, index) =>
+    venue(`paid-fill-${index}`, { premium: true, promoted: true }));
+  const organic = mergeBangingOrganicResults(verified, fallback, 40);
+  const deck = rotateBanging([...organic, ...premium], now, 'cached-fill');
+
+  assert.equal(organic.length, 40);
+  assert.equal(deck.length, 50);
+  assert.ok(deck.slice(0, 4).every(item => !item.bangingFallback));
+  deck.forEach((item, index) => {
+    assert.equal(item.premium, (index + 1) % 5 === 0);
+  });
+});
+
 test('live fallback requires a high-end nearby hospitality result and excludes active partners', () => {
   const live = [
     venue('high-end-no-photo', { latitude: 51.5, longitude: -0.1, price: '£££', photoNames: [] }),

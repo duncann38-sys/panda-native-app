@@ -9,9 +9,9 @@ const banging = await import('data:text/javascript;base64,' + Buffer.from(javasc
 const venue = (id, rating, premium = false, extra = {}) => ({
   id, name: id, category: 'Restaurant', type: 'Fine Dining Restaurant',
   rating: String(rating), ratingCount: 300, price: '£££', premium,
-  promoted: false, banging: true, bangingFallback: !premium,
+  promoted: false, banging: true, bangingFallback: false,
   latitude: 51.5, longitude: -0.1, luxurySource: 'google_primary_type:fine_dining_restaurant',
-  bangingTransitMinutes: 45, bangingVerifiedAt: Date.now(),
+  bangingTransitMinutes: 45, bangingVerifiedAt: now.getTime(),
   ...extra,
 });
 const now = new Date(2026, 10, 24, 12, 0);
@@ -30,7 +30,7 @@ test('Premium cards still appear at the fifth slot', () => {
   assert.equal(results[4]?.id, 'premium');
 });
 
-test('Banging opens with dynamic upscale clusters, then expands to the full two-hour quality pool', () => {
+test('Banging shows all quality tiers on the first open, with flagship clusters ranked first', () => {
   const source = [
     venue('flagship-a', 4.9, false, { latitude: 53.4800, longitude: -2.2400 }),
     venue('flagship-b', 4.8, false, { latitude: 53.4804, longitude: -2.2401 }),
@@ -44,15 +44,28 @@ test('Banging opens with dynamic upscale clusters, then expands to the full two-
     }),
   ];
 
-  const firstOpen = banging.rotateBanging(source, now, 'first-open', 0).map(item => item.id);
-  const secondOpen = banging.rotateBanging(source, now, 'second-open', 1).map(item => item.id);
-  const thirdOpen = banging.rotateBanging(source, now, 'third-open', 2).map(item => item.id);
-  const fourthOpen = banging.rotateBanging(source, now, 'fourth-open', 3).map(item => item.id);
+  const firstOpen = banging.rotateBanging(source, now, 'first-open').map(item => item.id);
 
-  assert.deepEqual(new Set(firstOpen), new Set(['flagship-a', 'flagship-b', 'flagship-c']));
-  assert.ok(secondOpen.includes('other-48'));
-  assert.ok(!firstOpen.includes('other-48'));
-  assert.ok(thirdOpen.includes('cluster-47'));
-  assert.ok(fourthOpen.includes('wider-46'));
-  assert.ok(fourthOpen.every(id => id !== 'fast-food-chain'));
+  assert.ok(firstOpen.includes('flagship-a'));
+  assert.ok(firstOpen.includes('flagship-b'));
+  assert.ok(firstOpen.includes('flagship-c'));
+  assert.ok(firstOpen.includes('other-48'));
+  assert.ok(firstOpen.includes('cluster-47'));
+  assert.ok(firstOpen.includes('wider-46'));
+  assert.ok(firstOpen.indexOf('flagship-a') < firstOpen.indexOf('wider-46'));
+  assert.ok(firstOpen.every(id => id !== 'fast-food-chain'));
+});
+
+test('Banging produces a full 50-card deck with 40 organic and Premium every fifth', () => {
+  const organic = Array.from({ length: 40 }, (_, index) =>
+    venue(`organic-${index}`, 4.5 + (index % 6) / 10));
+  const premium = Array.from({ length: 10 }, (_, index) =>
+    venue(`premium-${index}`, 4.7, true, { promoted: true }));
+  const results = banging.rotateBanging([...organic, ...premium], now, 'full-deck');
+
+  assert.equal(results.length, 50);
+  assert.equal(results.filter(item => item.premium).length, 10);
+  results.forEach((item, index) => {
+    assert.equal(item.premium, (index + 1) % 5 === 0);
+  });
 });
