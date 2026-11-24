@@ -1,11 +1,11 @@
-name: Panda 100 - Restore venue detail card styling
+name: Panda 101 - Fix planner venue details and restore Banging cards
 on:
   push:
     branches:
       - panda-apk-100-venue-detail-restoration
 jobs:
   build_android_preview:
-    name: Panda 100 Venue Detail Styling Android APK
+    name: Panda 101 Planner Venue and Banging Android APK
     type: build
     params:
       platform: android

@@ -1551,6 +1551,7 @@ export default function DiscoverScreen() {
             pathname: '/venue/[id]',
             params: {
               id: venue.id,
+              venueData: JSON.stringify(venue),
               fromPlanner: '1',
               plannerIds: context.plan.map((item) => item.id).join(','),
               plannerVenues: JSON.stringify(context.plan),

@@ -1,4 +1,5 @@
 import { Feather, Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import type { Venue } from '@/data/venues';
@@ -64,6 +65,13 @@ export function VenueCard({
           venueName={venue.name}
           height={compact ? 100 : premiumFeatured ? 148 : 136}
         />
+        {editorial ? (
+          <LinearGradient
+            colors={['transparent', 'rgba(20,12,2,0.72)']}
+            pointerEvents="none"
+            style={styles.editorialShade}
+          />
+        ) : null}
         {tierLabel ? (
           <View style={[
             styles.premiumBadge,
@@ -251,6 +259,13 @@ const styles = StyleSheet.create({
   photo: {
     overflow: 'hidden',
     position: 'relative',
+  },
+  editorialShade: {
+    bottom: 0,
+    height: 70,
+    left: 0,
+    position: 'absolute',
+    right: 0,
   },
   premiumBadge: {
     alignItems: 'center',

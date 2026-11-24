@@ -295,11 +295,13 @@ const styles = StyleSheet.create({
   },
   title: {
     fontFamily: 'Inter_700Bold',
-    fontSize: 19,
-    letterSpacing: -0.3,
+    fontSize: 22,
+    lineHeight: 26,
+    letterSpacing: -0.65,
   },
   closedTitle: {
-    fontSize: 17,
+    fontSize: 18,
+    lineHeight: 22,
   },
   liveDot: {
     borderRadius: 999,
@@ -309,6 +311,7 @@ const styles = StyleSheet.create({
   spotCount: {
     fontFamily: 'Inter_600SemiBold',
     fontSize: 9,
+    lineHeight: 12,
     letterSpacing: 0.5,
     textTransform: 'uppercase',
   },
