@@ -2,6 +2,7 @@ import * as Location from 'expo-location';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import type { Venue } from '@/data/venues';
+import { normalizeMapCoordinate } from '@/utils/discovery-data-safety';
 
 export type UserCoordinates = {
   latitude: number;
@@ -101,8 +102,10 @@ export function LiveVenuesProvider({ children }: { children: React.ReactNode }) 
         };
       }
 
-      const ready = { status: 'ready' as const, coordinates: nextCoordinates };
-      setCoordinates(nextCoordinates);
+      const validCoordinates = normalizeMapCoordinate(nextCoordinates);
+      if (!validCoordinates) throw new Error('Device location returned invalid coordinates');
+      const ready = { status: 'ready' as const, coordinates: validCoordinates };
+      setCoordinates(validCoordinates);
       setLocationStatus(ready.status);
       return ready;
     } catch (error) {

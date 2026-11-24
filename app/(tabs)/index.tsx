@@ -39,6 +39,11 @@ import { venues, type Venue } from '@/data/venues';
 import { classifyGooglePlace, type DiscoveryCategory } from '@/data/venue-categories';
 import { useColors } from '@/hooks/useColors';
 import {
+  finiteNumberOrUndefined as finiteNumber,
+  normalizeDiscoveryVenueList,
+  normalizeMapCoordinate,
+} from '@/utils/discovery-data-safety';
+import {
   estimatedWalkingMinutes,
 } from '@/utils/discovery-walking-distance';
 import {
@@ -138,19 +143,13 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-function finiteNumber(value: unknown): number | undefined {
-  const numeric = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(numeric) ? numeric : undefined;
-}
-
 function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult | null {
   if (!raw || typeof raw !== 'object') return null;
   const record = raw as Record<string, unknown>;
   const id = stringValue(record.id);
   const name = stringValue(record.name);
-  const lat = finiteNumber(record.lat);
-  const lng = finiteNumber(record.lng);
-  if (!id || !name || lat === undefined || lng === undefined) return null;
+  const coordinate = normalizeMapCoordinate({ latitude: record.lat, longitude: record.lng });
+  if (!id || !name || !coordinate) return null;
 
   const rating = finiteNumber(record.rating);
   const ratingCount = finiteNumber(record.ratingCount);
@@ -171,8 +170,8 @@ function normalizeLiveVenueResult(raw: unknown, query: string): LiveVenueResult 
     price: stringValue(record.price) || undefined,
     openNow: record.openNow === true,
     openingHours,
-    lat,
-    lng,
+    lat: coordinate.latitude,
+    lng: coordinate.longitude,
     phone: stringValue(record.phone) || undefined,
     website: stringValue(record.website) || undefined,
     menuLink: stringValue(record.menuLink) || undefined,
@@ -233,11 +232,16 @@ async function readNearbyCache(): Promise<NearbyCacheEntry | null> {
   try {
     const raw = await AsyncStorage.getItem(NEARBY_CACHE_KEY);
     if (!raw) return null;
-    const value = JSON.parse(raw) as NearbyCacheEntry;
-    if (!Array.isArray(value.venues) || !value.venues.length || !value.area
-      || !Number.isFinite(value.origin?.latitude) || !Number.isFinite(value.origin?.longitude)
-      || !Number.isFinite(value.savedAt) || Date.now() - value.savedAt > DISCOVERY_CACHE_TTL_MS) return null;
-    return value;
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const value = parsed as Record<string, unknown>;
+    const origin = normalizeMapCoordinate(value.origin);
+    const savedAt = finiteNumber(value.savedAt);
+    const area = stringValue(value.area);
+    const cachedVenues = normalizeDiscoveryVenueList(value.venues);
+    if (!origin || savedAt === undefined || !area || !cachedVenues.length
+      || Date.now() - savedAt > DISCOVERY_CACHE_TTL_MS) return null;
+    return { savedAt, area, origin, venues: cachedVenues };
   } catch {
     return null;
   }
@@ -314,19 +318,18 @@ async function fetchLiveSearchPage(
       };
     }
 
-    const payload = await response.json() as {
-      venues?: unknown;
-      nextPageToken?: unknown;
-    };
-    if (!Array.isArray(payload.venues)) {
+    const payload: unknown = await response.json();
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || !Array.isArray((payload as Record<string, unknown>).venues)) {
       return { venues: [], failure: { code: 'API-RESPONSE', status: response.status } };
     }
+    const body = payload as { venues: unknown[]; nextPageToken?: unknown };
     return {
-      venues: payload.venues.flatMap((venue) => {
+      venues: body.venues.flatMap((venue) => {
         const normalized = normalizeLiveVenueResult(venue, liveDiscoverySearchQuery(category));
         return normalized ? [normalized] : [];
       }),
-      nextPageToken: typeof payload.nextPageToken === 'string' ? payload.nextPageToken : undefined,
+      nextPageToken: typeof body.nextPageToken === 'string' ? body.nextPageToken : undefined,
     };
   } catch (error) {
     return {
@@ -451,8 +454,7 @@ function eligibleSearchPageVenues(
       || !result.name
       || !result.photoName
       || Math.max(result.photoCount ?? 0, result.photoName ? 1 : 0) < 1
-      || !Number.isFinite(result.lat)
-      || !Number.isFinite(result.lng)
+      || !normalizeMapCoordinate({ latitude: result.lat, longitude: result.lng })
     ) {
       return [];
     }
@@ -1060,13 +1062,18 @@ export default function DiscoverScreen() {
     return orderDiscoveryCategories(categories, categoryDayPart);
   }, [categoryDayPart]);
 
-  const hasDeferredListings = liveVenues.some(venue => venue.detailsDeferred === true);
+  const safeLiveVenues = useMemo(() => normalizeDiscoveryVenueList(liveVenues), [liveVenues]);
+  const safePartnerVenues = useMemo(
+    () => normalizeDiscoveryVenueList(partners?.venues),
+    [partners?.venues],
+  );
+  const hasDeferredListings = safeLiveVenues.some(venue => venue.detailsDeferred === true);
   const filteredVenues = useMemo(() => {
     const pageIds = feedVenueIds.current.get(category);
     const livePageVenues = pageIds
-      ? liveVenues.filter((venue) => pageIds.has(venue.id))
-      : liveVenues;
-    const partnerPageVenues = partners.venues.filter(venue => {
+      ? safeLiveVenues.filter((venue) => pageIds.has(venue.id))
+      : safeLiveVenues;
+    const partnerPageVenues = safePartnerVenues.filter(venue => {
       if (!Number.isFinite(venue.distanceMeters)
         || Number(venue.distanceMeters) > MAX_LOCAL_PARTNER_DISTANCE_METERS) return false;
       if (category === 'All') return !['Shop', 'Place of Interest'].includes(venue.category);
@@ -1091,7 +1098,7 @@ export default function DiscoverScreen() {
         ? Number(a.distanceMeters) - Number(b.distanceMeters)
         : Number.parseFloat(b.rating) - Number.parseFloat(a.rating),
     ));
-  }, [category, liveVenues, partners.venues, priceFilter, sortBy, hasDeferredListings]);
+  }, [category, safeLiveVenues, safePartnerVenues, priceFilter, sortBy, hasDeferredListings]);
 
   const bangingVenues = useMemo(() => rotateBanging([
     ...partners.venues.filter(venue => venue.banging).map(venue => ({
@@ -1236,7 +1243,7 @@ export default function DiscoverScreen() {
         viewabilityConfigCallbackPairs={discoveryViewabilityPairs}
         style={styles.feed}
         data={filteredVenues}
-        keyExtractor={(item) => item.id}
+        keyExtractor={(item, index) => `${item.id}:${index}`}
         numColumns={1}
         initialNumToRender={8}
         maxToRenderPerBatch={10}
