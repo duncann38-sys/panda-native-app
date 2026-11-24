@@ -21,7 +21,7 @@ import type { Venue } from '@/data/venues';
 import { useColors } from '@/hooks/useColors';
 import { useVenueImpressions } from '@/hooks/useVenueImpressions';
 import { useVenueResultAppearances } from '@/hooks/useVenueResultAppearances';
-import { normalizeDiscoveryVenueList } from '@/utils/discovery-data-safety';
+import { normalizeBangingVenueList } from '@/utils/discovery-data-safety';
 import { withVenueActivityContext } from '@/utils/record-venue-activity';
 
 export function BangingDrawer({
@@ -73,7 +73,7 @@ export function BangingDrawer({
   };
   const [activeIndex, setActiveIndex] = useState(0);
   // Selection and paid-card spacing are owned by discovery, as in the working APK 90 feed.
-  const bangingVenues = normalizeDiscoveryVenueList(venues).filter((venue) => venue.banging);
+  const bangingVenues = normalizeBangingVenueList(venues);
   useVenueResultAppearances(bangingVenues, 'banging', open, 'banging');
   const cardWidth = Math.min(194, Math.max(174, width - 156));
   const cardGap = 10;

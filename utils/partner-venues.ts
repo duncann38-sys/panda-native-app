@@ -3,6 +3,7 @@ import type { Venue } from '@/data/venues';
 import { distanceBetween } from '@/utils/venue-actions';
 import { bangingClock } from '@/utils/banging-rotation';
 import { finiteNumberOrUndefined, normalizeMapCoordinate } from '@/utils/discovery-data-safety';
+import { minimalPartnerVenue } from '@/utils/partner-venue-fallback';
 
 type Placement = { name: string; place_id: string; tier: 'banging' | 'discovery' };
 type Profile = {
@@ -123,23 +124,33 @@ export async function loadPartnerVenues(
             `${PANDA_PRODUCTION_API}/api/partner/venues/${encodeURIComponent(placement.place_id)}/profile`,
             { signal },
           );
-          if (!result.ok) return;
-           const parsed: unknown = await result.json();
-           profile = normalizeProfile(parsed, placement.place_id) ?? undefined;
-           if (!profile) return;
-          profileCache.set(placement.place_id, { expires: Date.now() + 3 * 60 * 60 * 1000, profile });
+          if (result.ok) {
+            const parsed: unknown = await result.json();
+            const refreshed = normalizeProfile(parsed, placement.place_id);
+            if (refreshed) {
+              profile = refreshed;
+              profileCache.set(placement.place_id, { expires: Date.now() + 3 * 60 * 60 * 1000, profile });
+            }
+          }
         }
+        if (signal.aborted) return;
         const profileCoordinate = normalizeMapCoordinate(profile);
-        if (profile.id !== placement.place_id || !profileCoordinate) return;
+        if (!profile || profile.id !== placement.place_id || !profileCoordinate) {
+          venues.push(minimalPartnerVenue(placement));
+          return;
+        }
         const distance = distanceBetween(safeOrigin, profileCoordinate);
-        if (distance === null) return;
+        if (distance === null) {
+          venues.push(minimalPartnerVenue(placement));
+          return;
+        }
         const category: Venue['category'] = /pub/i.test(profile.primaryType) ? 'Pub'
           : /bar|nightclub/i.test(profile.primaryType) ? 'Bar'
             : /cafe|coffee|bakery/i.test(profile.primaryType) ? 'Coffee' : 'Restaurant';
         const photos = profile.photoNames ?? [];
         venues.push({
           id: profile.id,
-          name: profile.name,
+          name: profile.name || placement.name,
           neighborhood: profile.address,
           category,
           type: profile.primaryType,
@@ -171,6 +182,7 @@ export async function loadPartnerVenues(
         });
       } catch (error) {
         if (signal.aborted) throw error;
+        venues.push(minimalPartnerVenue(placement));
       }
     }));
   }

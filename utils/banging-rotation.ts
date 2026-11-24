@@ -31,14 +31,16 @@ export function isOrganicBangingVenue(venue: Venue, now = Date.now()) {
 export function rotateBanging(source: Venue[], now = new Date(), identity = 'panda') {
   const { day, slot } = bangingClock(now);
   const unique = [...new Map(source.map(venue => [venue.id, venue])).values()];
-  const premium = unique.filter(venue => venue.banging && venue.premium && hasBangingJourney(venue, now.getTime()));
+  // An active Banging partner placement is already verified by the partner
+  // feed. Route estimates enrich the card, but must not decide whether it exists.
+  const premium = unique.filter(venue => venue.banging && venue.premium);
   const eligible = unique.filter(venue => isOrganicBangingVenue(venue, now.getTime()));
   const stable = eligible.sort((a, b) => hash(`${identity}:${a.id}`) - hash(`${identity}:${b.id}`));
   const start = stable.length ? Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) % stable.length : 0;
   const daily = [...stable.slice(start), ...stable.slice(0, start)];
   const targetCount = premium.length ? 40 : 50;
   const count = daily.length >= targetCount ? targetCount
-    : Math.min(daily.length, Math.max(2, Math.floor(daily.length * 0.75)));
+    : Math.min(daily.length, Math.max(premium.length ? 4 : 2, Math.floor(daily.length * 0.75)));
   const organic = daily.slice(0, count);
   const rotate = (pool: Venue[]) => {
     const shift = pool.length ? slot % pool.length : 0;
@@ -47,6 +49,9 @@ export function rotateBanging(source: Venue[], now = new Date(), identity = 'pan
   const paidStart = premium.length ? (Math.floor(Date.parse(`${day}T12:00:00Z`) / 86400000) * 6 + slot) % premium.length : 0;
   const paid = [...premium.slice(paidStart), ...premium.slice(0, paidStart)];
   const free = rotate(organic);
+  // Keep partner cards visible if the organic pool is unavailable or too small
+  // to form the four organic slots before a fifth-position Premium card.
+  if (paid.length && free.length < 4) return [...free, ...paid];
   const result: Venue[] = [];
   let paidIndex = 0;
   while (result.length < 50) {
