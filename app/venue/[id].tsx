@@ -78,6 +78,7 @@ type TransitWalk = {
 
 type TransitStep = {
   mode: 'WALK' | 'TRANSIT';
+  vehicleType?: string;
   instruction: string;
   durationMinutes: number;
   distanceMeters: number;
@@ -94,6 +95,9 @@ type TransitStep = {
 };
 
 type TransitContext = {
+  recommendation?: 'walk' | 'transit';
+  recommendationReason?: string;
+  directWalk?: TransitWalk | null;
   originStation: TransitStation;
   destinationStation: TransitStation;
   originWalk: TransitWalk | null;
@@ -335,7 +339,19 @@ export default function VenueDetailScreen() {
   const displayedRatingCount = googleProfile?.ratingCount ?? venue.ratingCount;
   const displayedType = googleProfile?.primaryType || venue.type;
   const displayedOpenNow = fullCardOpenStatus(venue, googleProfile);
-  const displayedAddress = googleProfile?.address || venue.fullAddress;
+  const venueAddress = (venue as Venue & { address?: unknown }).address;
+  const displayedAddress =
+    [
+      googleProfile?.address,
+      venue.fullAddress,
+      venueAddress,
+      venue.neighborhood,
+    ].find((candidate): candidate is string => typeof candidate === 'string' && candidate.trim().length > 0)?.trim()
+      || 'Address unavailable';
+  const paidPremium = Boolean(venue.premium && venue.banging);
+  const travelDistanceLabel = [venue.distance, venue.walkingTime]
+    .filter((part) => typeof part === 'string' && part.trim().length > 0)
+    .join(' · ');
   const hasDisplayedRating = Boolean(displayedRating.trim());
 
   const retryTransit = () => setTransitRetryKey((current) => current + 1);
@@ -377,27 +393,54 @@ export default function VenueDetailScreen() {
   };
   const openTransitRoute = () => {
     if (!transitContext) return;
+    if (transitContext.recommendation === 'walk') {
+      openWalkingDirections();
+      return;
+    }
+    const originStation = transitContext.originStation;
+    const destinationStation = transitContext.destinationStation;
+    if (
+      !originStation?.name
+      || !destinationStation?.name
+      || !Number.isFinite(originStation.latitude)
+      || !Number.isFinite(originStation.longitude)
+      || !Number.isFinite(destinationStation.latitude)
+      || !Number.isFinite(destinationStation.longitude)
+      || originStation.latitude < -90
+      || originStation.latitude > 90
+      || destinationStation.latitude < -90
+      || destinationStation.latitude > 90
+      || originStation.longitude < -180
+      || originStation.longitude > 180
+      || destinationStation.longitude < -180
+      || destinationStation.longitude > 180
+    ) {
+      retryTransit();
+      return;
+    }
+    const numericParam = (value: unknown) =>
+      typeof value === 'number' && Number.isFinite(value) && value >= 0 ? String(value) : '';
     recordVenueActivity('directions_click', venue);
     router.push({
       pathname: '/map',
       params: {
         directionsVenueId: venue.id,
-        transitOriginName: transitContext.originStation.name,
-        transitDestinationName: transitContext.destinationStation.name,
-        transitOriginCoordinates: `${transitContext.originStation.latitude},${transitContext.originStation.longitude}`,
-        transitDestinationCoordinates: `${transitContext.destinationStation.latitude},${transitContext.destinationStation.longitude}`,
+        transitOriginName: originStation.name,
+        transitDestinationName: destinationStation.name,
+        transitOriginCoordinates: originStation.latitude + ',' + originStation.longitude,
+        transitDestinationCoordinates: destinationStation.latitude + ',' + destinationStation.longitude,
         transitOriginPolyline: transitContext.originWalk?.polyline ?? '',
         transitPolyline: transitContext.transitRoute?.polyline ?? '',
         transitDestinationPolyline: transitContext.venueWalk?.polyline ?? '',
-        transitOriginWalkMinutes: transitContext.originWalk?.durationMinutes.toString() ?? '',
-        transitOriginWalkDistance: transitContext.originWalk?.distanceMeters.toString() ?? '',
-        transitDurationMinutes: transitContext.transitRoute?.durationMinutes.toString() ?? '',
-        transitDistanceMeters: transitContext.transitRoute?.distanceMeters.toString() ?? '',
-        transitSteps: transitContext.transitRoute?.steps.length
+        transitOriginWalkMinutes: numericParam(transitContext.originWalk?.durationMinutes),
+        transitOriginWalkDistance: numericParam(transitContext.originWalk?.distanceMeters),
+        transitDurationMinutes: numericParam(transitContext.transitRoute?.durationMinutes),
+        transitDistanceMeters: numericParam(transitContext.transitRoute?.distanceMeters),
+        transitSteps: Array.isArray(transitContext.transitRoute?.steps) && transitContext.transitRoute.steps.length
           ? JSON.stringify(transitContext.transitRoute.steps)
           : '',
-        transitWalkMinutes: transitContext.venueWalk?.durationMinutes.toString() ?? '',
-        transitWalkDistance: transitContext.venueWalk?.distanceMeters.toString() ?? '',
+        transitWalkMinutes: numericParam(transitContext.venueWalk?.durationMinutes),
+        transitWalkDistance: numericParam(transitContext.venueWalk?.distanceMeters),
         transitUpdatedAt: transitContext.transitRoute?.updatedAt ?? transitContext.updatedAt ?? '',
         directionsVenueData: JSON.stringify({
           ...venue,
@@ -558,6 +601,7 @@ export default function VenueDetailScreen() {
           {
             backgroundColor: venueSurface,
           },
+          paidPremium && { borderWidth: 1, borderColor: cardColors.gold },
         ]}
       >
         {/* This header stays pinned while the detail content scrolls behind it. */}
@@ -575,20 +619,26 @@ export default function VenueDetailScreen() {
             <View style={[styles.grip, { backgroundColor: cardColors.border }]} />
           </View>
 
-          {venue.premium && (
+          {paidPremium ? (
+            <View pointerEvents="none" style={[styles.paidPremiumRule, { backgroundColor: colors.gold }]} />
+          ) : null}
+          {(venue.premium || venue.promoted) && (
             <View
               style={[
                 styles.premiumLabel,
                 styles.editorialPremium,
                 {
-                  backgroundColor: cardColors.goldSoft,
-                  borderColor: cardColors.gold,
+                  backgroundColor: colors.honeySoft,
+                  borderColor: colors.honey,
                   shadowColor: colors.goldDeep,
                 },
+                paidPremium ? [styles.paidPremiumLabel, { backgroundColor: colors.green900, borderColor: colors.gold }] : null,
               ]}
             >
-              <PandaIcon name="award" size={13} color={colors.goldDeep} />
-              <Text style={[styles.premiumLabelText, { color: colors.honeyInk }]}>PANDA PREMIUM</Text>
+              <PandaIcon name="award" size={13} color={paidPremium ? colors.honey : colors.goldDeep} />
+              <Text style={[styles.premiumLabelText, { color: paidPremium ? colors.goldLine : colors.honeyInk }]}>
+                {paidPremium ? 'Premium' : 'Promoted'}
+              </Text>
             </View>
           )}
 
@@ -598,6 +648,7 @@ export default function VenueDetailScreen() {
                 THE LOCAL EDIT{venue.neighborhood ? ` · ${venue.neighborhood.toUpperCase()}` : ''}
               </Text>
               <Text style={[styles.title, styles.venueTitle, styles.editorialTitle, { color: cardColors.ink, fontFamily: fonts.bold }]}>{venue.name}</Text>
+              {paidPremium ? <View style={[styles.paidPremiumUnderline, { backgroundColor: colors.gold }]} /> : null}
             </View>
             {!isNonHospitalityVenue(venue) && venue.price ? (
               <View style={[styles.editorialPrice, { backgroundColor: cardColors.soft }]}>
@@ -628,14 +679,16 @@ export default function VenueDetailScreen() {
                 foreground={displayedOpenNow === null ? colors.mutedForeground : displayedOpenNow ? colors.openForeground : colors.closedForeground}
               />
             ) : null}
-            <MetaChip
-              refined
-              fontFamily={fonts.medium}
-              icon="walk"
-              label={venue.walkingTime}
-              background={colors.muted}
-              foreground={colors.green800}
-            />
+            {travelDistanceLabel ? (
+              <MetaChip
+                refined
+                fontFamily={fonts.medium}
+                icon="map"
+                label={travelDistanceLabel}
+                background={colors.muted}
+                foreground={colors.green800}
+              />
+            ) : null}
           </View>
         </View>
 
@@ -1109,33 +1162,89 @@ function ConciergeTransitCard({
 }) {
   if (status === 'idle') return null;
 
-  const venueWalkLabel = context?.venueWalk
-    ? `${context.venueWalk.durationMinutes} min walk · ${
-        context.venueWalk.distanceMeters < 1000
-          ? `${Math.round(context.venueWalk.distanceMeters)} m`
-          : `${(context.venueWalk.distanceMeters / 1000).toFixed(1)} km`
-      }`
-    : 'Nearest rail or Underground station';
+  const rawTransitSteps = context?.transitRoute?.steps;
+  const transitSteps = Array.isArray(rawTransitSteps)
+    ? rawTransitSteps.filter((step) => step?.mode === 'TRANSIT')
+    : [];
+  const vehicleType = transitSteps[0]?.vehicleType;
+  const vehicle = typeof vehicleType === 'string' ? vehicleType : '';
+  const vehicleSymbol = vehicle === 'BUS' ? '🚌' : vehicle === 'FERRY' ? '⛴' : '🚆';
+  const vehicleLabel = vehicle === 'BUS' ? 'Bus' : vehicle === 'FERRY' ? 'Boat' : 'Public transport';
   const timingSource = context?.transitRoute?.timingSource ?? context?.timingSource;
-  const liveRouteLabel = context?.transitRoute
-    ? `${context.transitRoute.durationMinutes} min by public transport · ${
-        timingSource === 'tfl_live' ? 'live TfL departure' : 'Google route estimate'
-      }`
+  const hasFreshLive = timingSource === 'tfl_live' || transitSteps.some((step) => {
+    if (typeof step.liveDepartureTime !== 'string' || typeof step.liveUpdatedAt !== 'string') return false;
+    const age = Date.now() - Date.parse(step.liveUpdatedAt);
+    return Number.isFinite(age) && age >= 0 && age < 60_000;
+  });
+  const hasWalkRecommendation = context?.recommendation === 'walk';
+  const originNameValue = context?.originStation?.name;
+  const destinationNameValue = context?.destinationStation?.name;
+  const originName = typeof originNameValue === 'string' ? originNameValue.trim() : '';
+  const destinationName = typeof destinationNameValue === 'string' ? destinationNameValue.trim() : '';
+  const hasStationRoute = Boolean(originName && destinationName);
+  const walkDistance = context?.venueWalk?.distanceMeters;
+  const walkMinutes = context?.venueWalk?.durationMinutes;
+  const venueWalkLabel = typeof walkDistance === 'number' && Number.isFinite(walkDistance) && walkDistance >= 0
+    && typeof walkMinutes === 'number' && Number.isFinite(walkMinutes) && walkMinutes >= 0
+    ? Math.round(walkMinutes) + ' min walk · ' + (walkDistance < 1000
+      ? Math.round(walkDistance) + ' m'
+      : (walkDistance / 1000).toFixed(1) + ' km')
+    : 'Nearest rail or Underground station';
+  const routeMinutes = context?.transitRoute?.durationMinutes;
+  const liveSourceLabel = timingSource === 'tfl_live'
+    ? 'Live TfL departure'
+    : hasFreshLive ? 'Live departure' : 'Google estimate';
+  const liveRouteLabel = context?.transitRoute && typeof routeMinutes === 'number' && Number.isFinite(routeMinutes) && routeMinutes >= 0
+    ? vehicleSymbol + ' ' + vehicleLabel + ' · ' + Math.round(routeMinutes) + ' min · ' + liveSourceLabel
     : null;
 
-  const actionable = Boolean(context) || status === 'permission-denied' || status === 'unavailable';
-  const actionLabel = context
-    ? `Open transit directions from ${context.originStation.name} to ${context.destinationStation.name}`
+  const actionable = hasStationRoute || hasWalkRecommendation || status === 'permission-denied' || status === 'unavailable' || status === 'ready';
+  const actionLabel = hasWalkRecommendation
+    ? 'Open walking directions in Panda'
+    : hasStationRoute
+      ? 'Open transit directions from ' + originName + ' to ' + destinationName
     : status === 'permission-denied'
       ? 'Allow location to find live transit information'
       : 'Retry live transit information';
+  const recommendationReason = typeof context?.recommendationReason === 'string' && context.recommendationReason.trim()
+    ? context.recommendationReason.trim()
+    : 'This venue is close enough to walk.';
+  const directWalkMinutes = context?.directWalk?.durationMinutes;
+
+  if (hasWalkRecommendation) {
+    return (
+      <Pressable
+        accessibilityLabel={actionLabel}
+        accessibilityRole="button"
+        onPress={onOpenRoute}
+        style={({ pressed }) => [
+          styles.transitCard,
+          { backgroundColor: colors.secondary, borderColor: colors.border },
+          pressed && styles.pressed,
+        ]}
+      >
+        <View style={styles.transitTitleRow}>
+          <PandaIcon name="walk" size={20} color={colors.green700} />
+          <Text style={[styles.transitTitle, { color: colors.foreground }]}>
+            {context?.directWalk ? 'Walking is the better option' : 'You’re very close'}
+          </Text>
+        </View>
+        <Text style={[styles.transitStatusText, { color: colors.foreground }]}>
+          {recommendationReason}{typeof directWalkMinutes === 'number' && Number.isFinite(directWalkMinutes) && directWalkMinutes >= 0
+            ? ' · ' + Math.round(directWalkMinutes) + ' min walk'
+            : ''}
+        </Text>
+        <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Start walking in Panda →</Text>
+      </Pressable>
+    );
+  }
 
   return (
     <Pressable
       accessibilityLabel={actionLabel}
       accessibilityRole={actionable ? 'button' : undefined}
       disabled={!actionable}
-      onPress={context ? onOpenRoute : onRetry}
+      onPress={hasStationRoute ? onOpenRoute : onRetry}
       style={({ pressed }) => [
         styles.transitCard,
         compact && styles.transitCardCompact,
@@ -1146,7 +1255,9 @@ function ConciergeTransitCard({
     >
       <View style={styles.transitTitleRow}>
         <PandaIcon name="map" size={15} color={colors.green700} />
-        <Text style={[styles.transitTitle, { color: colors.green800 }]}>PUBLIC TRANSPORT ROUTE</Text>
+        <Text style={[styles.transitTitle, { color: colors.green800 }]}>
+          {hasFreshLive ? 'LIVE DEPARTURES' : 'TRANSIT DIRECTIONS'}
+        </Text>
       </View>
 
       {status === 'loading' ? (
@@ -1163,15 +1274,15 @@ function ConciergeTransitCard({
           </Text>
           <Text style={[styles.transitActionText, { color: colors.goldDeep }]}>Tap to allow location</Text>
         </>
-      ) : context ? (
+      ) : hasStationRoute ? (
         <>
           <View style={styles.transitPoint}>
             <View style={[styles.transitPointIcon, { backgroundColor: colors.mint100 }]}>
               <Text style={styles.transitEmoji}>📍</Text>
             </View>
             <View style={styles.transitPointCopy}>
-              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>YOUR NEAREST STATION</Text>
-              <Text style={[styles.transitPointName, { color: colors.foreground }]}>{context.originStation.name}</Text>
+              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>BOARD {vehicleLabel.toUpperCase()}</Text>
+              <Text style={[styles.transitPointName, { color: colors.foreground }]}>{originName}</Text>
             </View>
           </View>
           <View style={[styles.transitConnector, { backgroundColor: colors.goldLine }]} />
@@ -1180,12 +1291,8 @@ function ConciergeTransitCard({
               <Text style={styles.transitEmoji}>🎯</Text>
             </View>
             <View style={styles.transitPointCopy}>
-                <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>
-                  VENUE’S NEAREST STATION
-                </Text>
-              <Text style={[styles.transitPointName, { color: colors.foreground }]}>
-                {context.destinationStation.name}
-              </Text>
+              <Text style={[styles.transitPointLabel, { color: colors.mutedForeground }]}>VENUE’S NEAREST STATION</Text>
+              <Text style={[styles.transitPointName, { color: colors.foreground }]}>{destinationName}</Text>
               <Text style={[styles.transitWalk, { color: colors.green700 }]}>{venueWalkLabel}</Text>
             </View>
           </View>
@@ -2093,6 +2200,9 @@ const styles = StyleSheet.create({
   },
   editorialPriceText: { fontSize: 12, letterSpacing: 0.5 },
   editorialPremium: { marginTop: 0, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  paidPremiumRule: { position: 'absolute', top: 0, left: 30, right: 30, borderBottomLeftRadius: 3, borderBottomRightRadius: 3, height: 3, opacity: 0.9 },
+  paidPremiumLabel: { borderWidth: 1, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.22, shadowRadius: 6, elevation: 3 },
+  paidPremiumUnderline: { width: 34, height: 2, borderRadius: 2, marginTop: 6 },
   editorialHeroOverlay: { left: 17, right: 18, bottom: 42, alignItems: 'flex-end', gap: 12 },
   heroCaptionBlock: { flex: 1, minWidth: 0, gap: 8, alignItems: 'flex-start' },
   heroCredit: { borderRadius: 5, paddingHorizontal: 7, paddingVertical: 4, maxWidth: '100%' },
@@ -2108,15 +2218,15 @@ const styles = StyleSheet.create({
   },
   editorialChipText: { fontSize: 11, lineHeight: 16 },
   editorialContext: { borderWidth: 0, paddingHorizontal: 0, paddingVertical: 12, shadowOpacity: 0, elevation: 0 },
-  editorialDescription: { fontSize: 18, lineHeight: 24, marginBottom: 13 },
-  editorialAddressIcon: { width: 34, height: 34, borderRadius: 17 },
-  editorialAddress: { fontSize: 12, lineHeight: 18, fontWeight: '400' },
-  editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 4, marginBottom: 16 },
-  editorialAction: { borderRadius: 11, minHeight: 46, gap: 7, paddingHorizontal: 8 },
-  editorialActionText: { fontSize: 12, fontWeight: '400' },
+  editorialDescription: { fontSize: 19, lineHeight: 27, marginBottom: 16 },
+  editorialAddressIcon: { width: 38, height: 38, borderRadius: 13 },
+  editorialAddress: { fontSize: 12.5, lineHeight: 19, fontWeight: '400' },
+  editorialActions: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6, marginBottom: 18 },
+  editorialAction: { borderRadius: 15, minHeight: 49, gap: 8, paddingHorizontal: 10, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(104,81,39,0.14)' },
+  editorialActionText: { fontSize: 12.5, fontWeight: '700', letterSpacing: 0.1 },
   editorialClose: { borderRadius: 20, width: 40, height: 40 },
   venueTitle: {
-    flex: 1,
+    flexShrink: 0,
     includeFontPadding: true,
     marginBottom: 0,
   },

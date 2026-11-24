@@ -52,3 +52,35 @@ test('Banging venue names are bold without changing unrelated card presentations
   assert.equal(style(banging, 'editorialName').fontFamily, "'Inter_700Bold'");
   assert.match(banging, /editorial && styles\.editorialName/);
 });
+
+test('detail card restores APK 87 typography and spacing', () => {
+  assert.equal(style(detail, 'editorialTitle').lineHeight, '39');
+  assert.equal(style(detail, 'editorialTitle').fontWeight, "'700'");
+  assert.equal(style(detail, 'editorialDescription').fontSize, '19');
+  assert.equal(style(detail, 'editorialDescription').lineHeight, '27');
+  assert.equal(style(detail, 'editorialAddressIcon').width, '38');
+  assert.equal(style(detail, 'editorialAddressIcon').height, '38');
+  assert.equal(style(detail, 'editorialAddress').fontSize, '12.5');
+  assert.equal(style(detail, 'editorialAction').minHeight, '49');
+  assert.equal(style(detail, 'editorialAction').borderRadius, '15');
+  assert.match(detail, /venueAddress/);
+  assert.match(detail, /venue\.neighborhood/);
+  assert.match(detail, /Address unavailable/);
+  assert.match(detail, /label=\{travelDistanceLabel\}/);
+});
+
+test('transit card restores walk and live states while keeping directions in Panda', () => {
+  assert.match(detail, /recommendation\?: 'walk' \| 'transit'/);
+  assert.match(detail, /LIVE DEPARTURES/);
+  assert.match(detail, /BOARD \{vehicleLabel\.toUpperCase\(\)\}/);
+  assert.match(detail, /Start walking in Panda/);
+  assert.match(detail, /Get directions in Panda/);
+  assert.doesNotMatch(detail, /Start walking in Google Maps/);
+  assert.match(detail, /Number\.isFinite\(originStation\.latitude\)/);
+});
+
+test('detail card restores promoted and paid premium treatments', () => {
+  assert.match(detail, /venue\.premium \|\| venue\.promoted/);
+  assert.match(detail, /paidPremiumRule/);
+  assert.match(detail, /paidPremiumUnderline/);
+});
