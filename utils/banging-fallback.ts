@@ -12,7 +12,7 @@ const BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant']);
 const CURATED_BANGING_CATEGORIES = new Set<Venue['category']>(['Restaurant', 'Bar', 'Pub']);
 const HIGH_END_TERMS = /\b(fine dining|michelin|luxury|hotel|rooftop|cocktail|wine bar|tasting menu|destination|upscale)\b/i;
 const FAST_CASUAL_OR_TAKEAWAY = /\b(fast[- ]?food|quick service|take[- ]?away|meal takeaway|drive[- ]?thru|food court)\b/i;
-const KNOWN_CHAINS = /\b(mcdonald'?s|kfc|burger king|subway|domino'?s|pizza hut|pizza ?express|zizzi|prezzo|ask italian|bella italia|frankie and benny'?s|tgi fridays|wagamama|nando'?s|five guys|taco bell|leon|itsu|greggs|pret a manger|costa coffee|starbucks|shake shack|papa john'?s|yo!? sushi)\b/i;
+const KNOWN_CHAINS = /\b(mcdonald'?s|kfc|burger king|subway|domino'?s|pizza hut|pizza ?express|zizzi|prezzo|ask italian|bella italia|frankie and benny'?s|tgi fridays|wagamama|nando'?s|five guys|taco bell|leon|itsu|greggs|pret a manger|costa coffee|starbucks|shake shack|papa john'?s|yo!? sushi|flat iron)\b/i;
 
 function validCoordinate(value: unknown, limit: number): value is number {
   return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) <= limit;

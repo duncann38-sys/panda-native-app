@@ -122,8 +122,8 @@ test('APK102 name-only curated cards survive only as a clean last-resort fallbac
   const bundledSeeds = venues.filter(item => item.banging && !item.premium && !item.promoted);
   const bundledOfflinePool = buildBangingCuratedNameFallback(bundledSeeds, origin);
   assert.equal(bundledSeeds.length, 31);
-  assert.equal(bundledOfflinePool.length, 30);
-  assert.ok(!bundledOfflinePool.some(item => /prezzo/i.test(item.name)));
+  assert.equal(bundledOfflinePool.length, 29);
+  assert.ok(!bundledOfflinePool.some(item => /prezzo|flat iron/i.test(item.name)));
   const nearby = buildBangingFallbackCandidates(live, origin);
   const curated = buildBangingCuratedNameFallback(seeds, origin);
   const otherCityCurated = buildBangingCuratedNameFallback(seeds, { latitude: 53.48, longitude: -2.24 });
