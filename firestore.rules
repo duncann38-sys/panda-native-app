@@ -50,7 +50,8 @@ service cloud.firestore {
       }
 
       match /saved_venues/{venueId} {
-        allow read: if isOwner(uid);
+        // Circle Pulse exposes saved-place activity only to the owner's accepted friends.
+        allow read: if isOwner(uid) || isFriend(uid);
         allow create, update: if isOwner(uid)
           && request.resource.data.keys().hasOnly(['placeId', 'name', 'category', 'neighborhood', 'formattedAddress', 'latitude', 'longitude', 'photoUri', 'venueData', 'status', 'savedAt', 'updatedAt'])
           && request.resource.data.placeId == venueId
