@@ -1,242 +1,41 @@
 # Panda Native
 
-## What this project is for
+## What this project is
 
-Panda Native is the customer-facing mobile app for Panda.
+Panda Native is the customer-facing Expo mobile app. It helps people find places, see venue details, ask Panda AI, plan a morning, lunch or night out, and follow venue routes inside Panda. It is separate from the Partner Portal and Panda Industry website.
 
-It helps people find somewhere good to eat, drink or spend time in London.
-People can:
+## Source and release baseline
 
-- browse places;
-- see useful venue information;
-- ask Panda for suggestions;
-- make a simple Morning, Lunch or Night plan;
-- see which station is closest to them;
-- see which station is closest to a venue;
-- see the final walk to the venue;
-- get directions without leaving Panda.
+This guide was checked on 25 November 2026. The latest completed Android preview build found was APK 109, EAS build aea9fef8-bb7f-42e3-abcc-242d7cf7d423, built from commit 89f8d987e6079beaedfa73e989fe371b431e9ec2. The branch fix/apk-108-banging-storage-fallback is at 4e38155a80958d297aa4f0905dd7b79b62bc915f and contains two later commits; this guide describes that source, not the APK 109 binary. GitHub main was 110 commits behind the APK 109 source commit when checked. Confirm the branch, commit and app.json Android versionCode before every build.
 
-This project is **not** the business dashboard for venues and it is **not**
-the Panda Industry website. Those are separate products.
+## Where the pieces live
 
-## Where the app lives
+The app source is at the repository root: app, components, constants, context, data and utils. The Native App always uses the external Panda AI Proxy URL in constants/services.ts for runtime and discovery calls, including Expo preview. Replit is development and Expo preview tooling, not a production API.
 
-The official GitHub repository is:
+The separate Panda Partners API supplies sponsored venue placements and partner activity. Google Places, Routes, Weather and Gemini requests are made server-side by the Panda AI Proxy; provider credentials do not belong in the app bundle or Git.
 
-```text
-https://github.com/duncann38-sys/panda-native-app
-```
+## Banging at a glance
 
-The working Native App is here:
+The Banging drawer displays the ordered list supplied by the home screen; it does not choose or rank results itself. The app combines current partner placements, eligible live Google-backed results, nearby cached results and the London-only curated name fallback. The full source and fallback rules are in docs/panda-native/BANGING_AND_LIVE_DATA.md.
 
-```text
-artifacts/panda-mobile
-```
+Key rules to preserve:
 
-It is an Expo app, which means the same project can be previewed on the web
-and built for mobile devices.
+- Rank established 4.8–5.0 flagship restaurants with at least 200 reviews and a nearby upscale cluster first, then other qualifying 4.8+, clustered 4.5–4.8, and wider 4.5+ upscale restaurants.
+- Exclude chains and fast-casual/takeaway venues from organic Banging results. Organic live results need a recent journey within two hours.
+- Use a 50-card deck when the eligible pool supports it. Premium placements are interleaved in every fifth slot when enough organic cards exist; do not invent unrelated fillers to reach 50.
+- Banging Google results must not be read from or written to a shared cross-user Google-results cache. The emergency Google-result cache is on the individual device only.
+- On a live failure or exhausted budget, use a clearly labelled device estimate or the London curated name-only placeholder. Never invent a rating, address, hours, photo or route.
 
-The live supporting API is here:
+## Live versus local information
 
-```text
-artifacts/api-server
-```
+The proxy supplies current search, profile, photo, route and AI data. The app still owns editorial venue seeds, display order, category metadata and local Banging fallback entries. Google-backed Banging records may be cached only on the same device for a short period; another user’s Google result is not a Banging fallback.
 
-The live venue/profile/photo/transit API now runs on the external Panda service.
-The production Native App does not need the Replit API. This workspace may
-still use its local API during development and preview, but that is not a
-production dependency.
+A new city does not automatically have an offline Banging catalogue. If that city has no device cache and no approved first-party or partner-owned seed data, a Google outage or exhausted budget can leave Banging empty. Do not solve this by reusing another user’s Google results.
 
-The detailed technical handover is here:
+## Future checks and builds
 
-```text
-docs/panda-native-app-handover.md
-```
-
-## How the main pieces connect
-
-```text
-Customer
-  |
-  v
-Panda Native mobile app
-  |
-  |-- asks Panda AI for a helpful answer
-  |       |
-  |       `--> external Panda AI service
-  |
-  |-- asks for live venue or station information
-  |       |
-  |       `--> Panda API Server
-  |               |
-  |               `--> Google Places and Google Routes
-  |
-  `-- displays the result in Panda’s own screens
-          |
-          `--> embedded map and Panda route panel
-```
-
-In simple terms:
-
-- Panda AI helps understand what the customer is asking.
-- The API Server checks facts that must be current.
-- Google supplies venue, station and walking information.
-- Panda displays the answer without sending the customer to another app.
-
-## What is working now
-
-### Finding and viewing places
-
-The app has a curated list of London venues with Panda’s visual style and
-editorial information. Venue pages can add current information from Google,
-including:
-
-- venue name and address;
-- category;
-- rating and number of ratings;
-- whether the venue is open now;
-- today’s opening information;
-- supported venue highlights;
-- photos with the required photo credit.
-
-### Asking Panda AI
-
-Customers can ask for recommendations, opening information and transport help.
-Panda can understand questions such as:
-
-- “What’s open now?”
-- “What’s my nearest station?”
-- “Which station is closest to this restaurant?”
-- “How do I get to Fatt Pundit?”
-
-For a transport question, the app asks for the customer’s location. It does
-not make up a station name or route when live information is unavailable.
-
-If a customer names a venue, Panda resolves that venue before building the
-answer. This means the app can show a real destination rather than asking the
-customer to repeat it.
-
-### Directions
-
-For a venue route, Panda can show:
-
-- the customer’s nearest station;
-- the venue’s nearest station;
-- the final walking distance;
-- the final walking time;
-- a button to open the route inside Panda.
-
-The current route does not yet show every train, Tube or bus step between the
-two stations.
-
-### Planning
-
-The app has Morning, Lunch and Night planning modes. The shortcut changes with
-the current time so the app feels relevant when it opens.
-
-Planner screens keep the approved Panda cards and styling. Live venue
-information can be added to the planner when available.
-
-## What is live and what is still local
-
-This is important for anyone continuing the project.
-
-### Information checked live
-
-- AI answers.
-- Venue search used by AI.
-- Venue address, rating and current opening state.
-- Venue photos and photo credit.
-- Customer’s nearest station.
-- Venue’s nearest station.
-- Final walking distance and time.
-
-### Information currently kept in the app
-
-- The starting list of venues.
-- Home screen card order.
-- Map markers.
-- Planner venue order.
-- Some descriptions, labels and visual choices.
-- Panda-specific labels such as Premium, Banging and promoted.
-
-This makes the app a **combination of live information and a curated Panda
-list**. Do not remove the local venue file until the replacement plan is agreed.
-
-## What happens when a feature is finished
-
-Every completed Native App feature should be connected to the next build in this
-order:
-
-1. **Build it** in the Native App or its supporting API.
-2. **Check the customer journey**, not only the code.
-3. **Check the no-permission and no-data cases**.
-4. **Run the Native App and API checks**.
-5. **Record what changed** in the project documentation.
-6. **Mark the next Native App build item** so the next developer knows where to
-   continue.
-
-The documentation should be updated while the project grows, not recreated
-from memory at the end.
-
-## Current next build items
-
-### 1. Make the venue list easier to keep current
-
-The app currently has a local curated venue list while some facts come from
-Google. The next decision is whether the venue list should be:
-
-- stored and managed by the API;
-- regularly refreshed from a source;
-- or deliberately kept as Panda’s editorial list.
-
-The choice must preserve Panda’s Premium, Banging and editorial labels.
-
-### 2. Check the complete directions journey
-
-Test these questions from the app:
-
-- “What’s my nearest station?”
-- “What’s the nearest station to Fatt Pundit?”
-- “How do I get to Fatt Pundit?”
-
-Check that the answer is consistent, the right venue is selected and the
-directions button opens the correct in-app map route.
-
-### 3. Decide whether full public transport steps are needed
-
-The current feature gives the nearest stations and final walking leg. A later
-version can add full Tube, train or bus steps if that experience is required.
-
-## Words future developers may see
-
-These are technical names for ordinary things:
-
-- **Native App** — the mobile app customers use.
-- **Expo** — the toolchain used to run Panda on mobile and web preview.
-- **API Server** — the service that supplies current information to the app.
-- **Google Places** — the source for venue and station facts.
-- **Google Routes** — the source for walking distance and time.
-- **Panda AI proxy** — the external service that generates Panda’s answers.
-- **Local catalogue** — the curated venue list stored with the app.
-- **Transit context** — the station and walking information shown for a route.
-- **Fallback state** — the honest message shown when permission or live data is
-  unavailable.
-
-Use the plain-language meaning first when writing future documentation. Add the
-technical name in brackets only when it helps someone find the right code.
-
-## Useful checks
-
-From the repository root:
-
-```bash
-pnpm --filter @workspace/panda-mobile run typecheck
-pnpm --filter @workspace/api-server run typecheck
-```
-
-For the full technical API contract and file-by-file guidance, read:
-
-```text
-docs/panda-native-app-handover.md
-```
+- Read docs/panda-native/BANGING_AND_LIVE_DATA.md before changing Banging filters, cache behavior, budgets or venue rotation.
+- Run pnpm run typecheck from the repository root and the relevant discovery/Banging tests in the project environment.
+- Android preview APKs are built through Expo EAS with the preview profile; the profile produces an internal APK. The production profile produces an app bundle.
+- There is no GitHub Actions Android build workflow. Do not add one or look for it as the APK path. Check app.json versionCode and the Git commit attached to the EAS build.
+- The Build 73 architecture review and the old engineering handover are historical snapshots; use the current-data note and PANDA_NATIVE_STATUS.md for current behavior.

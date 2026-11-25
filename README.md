@@ -1,35 +1,24 @@
 # PANDA NATIVE APP
 
-This repository contains the customer-facing Panda Native App. It is separate from the Panda Partner Portal and Panda Industry website.
+The customer-facing Panda Native mobile app is maintained in this repository. It is separate from the Panda Partner Portal and Panda Industry website.
 
-## What this app does
+## Current source and release baseline
 
-Panda helps people discover London restaurants, bars, pubs and coffee spots, ask Panda AI for suggestions, plan an outing and get directions inside Panda.
+Checked 25 November 2026. The latest completed Android preview build found was APK 109, built by EAS from commit 89f8d987e6079beaedfa73e989fe371b431e9ec2. The branch fix/apk-108-banging-storage-fallback is at 4e38155a80958d297aa4f0905dd7b79b62bc915f, two commits beyond that APK source. The default main branch was 110 commits behind the APK 109 commit when checked. Do not assume main is the release source; verify the EAS commit and branch before another build.
 
-## Backend independence
+## Runtime services
 
-- The Native App source is stored here as a separate GitHub project.
-- Panda AI uses the external Panda service.
-- Live venue search, profiles, photos, nearest-station lookup and venue transit now run on the external Panda service.
-- The Native App always uses https://panda-ai-proxy.vercel.app for these services.
-- The production app has no Replit API dependency.
-- Replit can still be used as development and preview tooling.
+The Native App uses https://panda-ai-proxy.vercel.app for runtime and discovery calls, including Expo preview. The separate https://panda-partners-api.vercel.app service supplies partner placements and activity events. Google and Gemini credentials remain server-side. Replit is development/Expo preview tooling, not a production API dependency.
 
 ## Start here
 
-- Plain-language project guide: docs/panda-native/README.md
-- Current Build 73 architecture (APIs, data handling, Google review): docs/panda-native/ARCHITECTURE.md
-- Build plan: docs/panda-native/BUILD_PLAN.md
-- Technical handover: docs/panda-native-app-handover.md
+- Plain-language guide: docs/panda-native/README.md
+- Current live data and Banging handover: docs/panda-native/BANGING_AND_LIVE_DATA.md
 - Current status: PANDA_NATIVE_STATUS.md
+- Build plan: docs/panda-native/BUILD_PLAN.md
+- Historical Build 73 architecture review: docs/panda-native/ARCHITECTURE.md
+- Historical Build 73 engineering handover: docs/panda-native-app-handover.md
 
-## Run locally
+## Run and check
 
-    pnpm install
-    pnpm run dev
-
-Check the Native App with:
-
-    pnpm run typecheck
-
-The app uses Expo Router. The source tree is kept at the repository root so future developers can work on the Native App without understanding the original multi-product workspace.
+Install with pnpm install, start the Expo app with pnpm run dev, and typecheck with pnpm run typecheck. Android preview APKs are built through Expo EAS using the preview profile; the production profile produces an app bundle. There is no GitHub Actions Android build workflow. Check the source branch, commit and app.json Android versionCode before building.
