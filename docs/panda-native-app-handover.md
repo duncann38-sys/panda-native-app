@@ -1,9 +1,12 @@
-# Panda Native App — Engineering Handover
+# Panda Native App — Build 73 Engineering Handover (Historical)
 
-**Status:** Current baseline  
-**Last updated:** 2 September 2026  
+**Status:** Historical Build 73 snapshot; superseded for current data-flow behavior  
+**Originally updated:** 2 September 2026  
 **Product:** Panda consumer mobile app  
-**Package:** `@workspace/panda-mobile`
+**Package:** panda-native-app
+
+
+> **Current-source warning:** This document records Build 73 and is retained for historical context. Its old artifact paths, preview API selection and cache timings are not the current contract. Use docs/panda-native/README.md and docs/panda-native/BANGING_AND_LIVE_DATA.md for current app behavior, source branch and cache/budget rules.
 
 ## 1. What Panda is
 
