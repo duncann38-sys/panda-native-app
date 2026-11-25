@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { initializeTestEnvironment, assertFails, assertSucceeds } from '@firebase/rules-unit-testing';
-import { arrayUnion, collection, doc, getDoc, getDocs, limit, query, serverTimestamp, setDoc, updateDoc, where, writeBatch, Timestamp } from 'firebase/firestore';
+import { arrayUnion, collection, doc, getDoc, getDocs, limit, orderBy, query, serverTimestamp, setDoc, updateDoc, where, writeBatch, Timestamp } from 'firebase/firestore';
 
 test('Panda Me rules protect profile data and allow only accepted-friend features', async () => {
   const env = await initializeTestEnvironment({
@@ -76,8 +76,19 @@ test('Panda Me rules protect profile data and allow only accepted-friend feature
       status: 'want-to-try', savedAt: serverTimestamp(), updatedAt: serverTimestamp(),
       venueData: { id: 'place-1', name: 'Panda Bistro', category: 'Restaurant', neighborhood: 'Soho' },
     }));
-    await assertFails(getDoc(doc(bob, 'users', 'alice', 'saved_venues', 'place-1')));
     await assertSucceeds(getDoc(doc(alice, 'users', 'alice', 'saved_venues', 'place-1')));
+    await assertFails(getDoc(doc(bob, 'users', 'alice')));
+    const bobCirclePulse = await assertSucceeds(getDocs(query(
+      collection(bob, 'users', 'alice', 'saved_venues'),
+      orderBy('savedAt', 'desc'),
+      limit(3),
+    )));
+    assert.deepEqual(bobCirclePulse.docs.map(item => item.id), ['place-1']);
+    await assertFails(getDocs(query(
+      collection(mallory, 'users', 'alice', 'saved_venues'),
+      orderBy('savedAt', 'desc'),
+      limit(3),
+    )));
     await assertFails(getDoc(doc(mallory, 'users', 'alice', 'saved_venues', 'place-1')));
 
     const thread = doc(alice, 'threads', 'table-chat');
